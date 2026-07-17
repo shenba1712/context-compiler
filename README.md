@@ -1,6 +1,6 @@
 # Context Compiler
 
-![tests](https://github.com/OWNER/context-compiler/actions/workflows/test.yml/badge.svg)
+![tests](https://github.com/shenba1712/context-compiler/actions/workflows/test.yml/badge.svg)
 
 Task-aware, token-budgeted file-to-markdown for AI agents. Plug it into any
 MCP client — or use the hosted demo — and your agent stops paying for pages
