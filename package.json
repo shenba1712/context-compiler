@@ -3,14 +3,18 @@
   "version": "0.1.0",
   "description": "Task-aware, token-budgeted file-to-markdown compiler for AI agents (MCP server + web demo)",
   "type": "module",
-  "bin": { "context-compiler": "dist/server.js" },
+  "bin": {
+    "context-compiler": "dist/server.js"
+  },
   "scripts": {
     "build": "tsc && tsc -p tsconfig.client.json",
     "test": "npm run build && node dist/tests/test.js",
     "mcp": "node dist/server.js",
     "web": "node dist/web.js"
   },
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
     "@modelcontextprotocol/sdk": "^1.11.0",

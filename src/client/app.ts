@@ -33,6 +33,25 @@ async function loadSamples(): Promise<void> {
   }
 }
 
+// Known up front (not just after a failed click, or worse, left fully
+// enabled on the keyless default deploy this project's headline is built
+// around) so "Prove answer parity" is correctly disabled + explained from
+// the moment the page loads, not only after the first compile.
+async function loadConfig(): Promise<void> {
+  const proveBtn = $<HTMLButtonElement>("prove");
+  try {
+    const resp = await fetch("/api/config");
+    const cfg: { llm_available: boolean } = await resp.json();
+    proveBtn.disabled = !cfg.llm_available;
+    proveBtn.title = cfg.llm_available
+      ? "Answer the question from the full file vs the compiled context"
+      : "The server has no LLM API key configured. Everything else works without one.";
+  } catch (e) {
+    console.warn("Could not load server config:", e);
+    // Leave the button enabled — worst case a click surfaces the real error.
+  }
+}
+
 // Hindi text uses Devanagari; tag such strings with lang="hi" so assistive
 // tech doesn't mispronounce them under the page's declared lang="en".
 const DEVANAGARI_RE = /[ऀ-ॿ]/;
@@ -120,8 +139,9 @@ async function selectSample(s: Sample, card: HTMLButtonElement): Promise<void> {
     return;
   }
   renderQChips(s.q);
-  $<HTMLInputElement>("task").value = s.q[0];
+  $<HTMLTextAreaElement>("task").value = s.q[0];
   syncQChips();
+  autoGrowTask();
   // The sample's real size is already known (measured ahead of time), so the
   // budget picker can be scaled to it immediately — before the user even
   // presses Compile, unlike an arbitrary upload where size is unknown until
@@ -145,9 +165,10 @@ function renderQChips(questions: string[]): void {
     b.appendChild(langSpan(q));
     b.dataset.q = q;
     b.onclick = () => {
-      $<HTMLInputElement>("task").value = q;
+      $<HTMLTextAreaElement>("task").value = q;
       syncQChips();
-      $<HTMLInputElement>("task").focus();
+      autoGrowTask();
+      $<HTMLTextAreaElement>("task").focus();
     };
     box.appendChild(b);
   });
@@ -157,10 +178,32 @@ function renderQChips(questions: string[]): void {
 
 // Highlight whichever chip matches the current text (if any).
 function syncQChips(): void {
-  const v = $<HTMLInputElement>("task").value.trim();
+  const v = $<HTMLTextAreaElement>("task").value.trim();
   document.querySelectorAll<HTMLButtonElement>(".qchip").forEach((c) => c.classList.toggle("active", c.dataset.q === v));
 }
-$<HTMLInputElement>("task").addEventListener("input", syncQChips);
+$<HTMLTextAreaElement>("task").addEventListener("input", syncQChips);
+
+// #task replaced a single-line <input> so multi-question tasks (which the
+// copy right below it actively encourages — "separate with ? or new lines")
+// are actually comfortable to type and read, not squeezed into one line.
+// Grow with content instead of scrolling internally; call after every value
+// change, including the programmatic ones (sample select, chip click).
+function autoGrowTask(): void {
+  const el = $<HTMLTextAreaElement>("task");
+  el.style.height = "auto";
+  el.style.height = el.scrollHeight + "px";
+}
+$<HTMLTextAreaElement>("task").addEventListener("input", autoGrowTask);
+
+// Enter submits (matching the old single-line input's behavior and every
+// user's expectation of a "question box"); Shift+Enter inserts a newline,
+// which is exactly the "new lines" separator the hint text tells them to use.
+$<HTMLTextAreaElement>("task").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    $<HTMLFormElement>("compileForm").requestSubmit();
+  }
+});
 
 // Keep the big number, the slider, and the active preset in lockstep so the
 // selected budget is never something you have to hunt for.
@@ -311,7 +354,19 @@ $<HTMLInputElement>("file").addEventListener("change", () => {
     $<HTMLInputElement>("file").value = "";
     return;
   }
-  if (f) estimateUploadSize(f);
+  if (f) {
+    // A manually picked file replaces whatever the form is currently set to
+    // compile — including a sample. Without this, a sample card kept showing
+    // "✓ selected" after the user picked their own file, claiming the sample
+    // was still the source when it no longer was (this handler doesn't fire
+    // for selectSample()'s own programmatic file assignment, so it can't
+    // undo a sample pick — only a genuine manual one reaches here).
+    document.querySelectorAll<HTMLButtonElement>(".scard").forEach((x) => {
+      x.classList.remove("active");
+      x.setAttribute("aria-pressed", "false");
+    });
+    estimateUploadSize(f);
+  }
 });
 
 // The GitHub links are placeholders until this repo is public — warn in
@@ -348,7 +403,7 @@ function bumpSavings(d: CompileApiResult): void {
 
 function formData(): FormData | null {
   const f = $<HTMLInputElement>("file").files?.[0];
-  const task = $<HTMLInputElement>("task").value.trim();
+  const task = $<HTMLTextAreaElement>("task").value.trim();
   if (!f || !task) return null;
   const fd = new FormData();
   fd.append("file", f);
@@ -358,6 +413,31 @@ function formData(): FormData | null {
 }
 
 let compileAbort: AbortController | null = null;
+// Whether any compile has ever succeeded this session — decides whether a
+// failed/cancelled attempt should hide the (empty) results panel again or
+// leave a previous successful result visible underneath the error.
+let hasCompiledOnce = false;
+
+// The only feedback during a compile used to be the button reading
+// "Compiling…" — nothing near where the answer lands, on an operation that
+// can legitimately take many seconds (first-time conversion of a large file
+// has up to a 120s server-side ceiling). Reveal the results area immediately
+// with a loading note and scroll to it, so the wait happens where the user is
+// already looking, and give them a way out via the new Cancel button.
+function showLoading(): void {
+  $("resultsSec").classList.remove("hidden");
+  const el = $("loadingNote");
+  el.textContent =
+    "Compiling… converting a file for the first time can take a few seconds; cached files are instant.";
+  el.classList.remove("hidden");
+  $<HTMLButtonElement>("cancelGo").classList.remove("hidden");
+  $("resultsSec").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+function hideLoading(): void {
+  $("loadingNote").classList.add("hidden");
+  $<HTMLButtonElement>("cancelGo").classList.add("hidden");
+}
+$<HTMLButtonElement>("cancelGo").onclick = () => compileAbort?.abort();
 
 // Wrapping the inputs in a real <form> means pressing Enter in the task
 // field submits — no more silent no-op on the most natural keyboard action.
@@ -373,10 +453,12 @@ $<HTMLFormElement>("compileForm").addEventListener("submit", async (e) => {
   goBtn.disabled = true;
   goBtn.textContent = "Compiling…";
   announce("Compiling, please wait…");
+  showLoading();
   try {
     const resp = await fetch("/api/compile", { method: "POST", body: fd, signal: compileAbort.signal });
     const d: CompileApiResult = await resp.json();
     if (d.error) throw new Error(d.error);
+    hideLoading();
     // Now that the real size is known (for an upload, this is the FIRST time
     // it's known at all), refresh the presets to match — without moving the
     // slider off the value just used for this result.
@@ -426,7 +508,12 @@ $<HTMLFormElement>("compileForm").addEventListener("submit", async (e) => {
     $("resultsSec").scrollIntoView({ behavior: "smooth", block: "start" });
     $("resultsHeading").focus();
     announce(`Compiled: ${d.reduction_pct}% fewer tokens, ${d.omitted_sections.length} sections omitted.`);
+    hasCompiledOnce = true;
   } catch (e) {
+    hideLoading();
+    // No prior successful result to fall back to — don't leave an empty
+    // results panel showing after a failed/cancelled first attempt.
+    if (!hasCompiledOnce) $("resultsSec").classList.add("hidden");
     if (e instanceof DOMException && e.name === "AbortError") return;
     fail(e instanceof Error ? e.message : String(e));
   } finally {
@@ -688,3 +775,4 @@ $<HTMLButtonElement>("prove").onclick = async () => {
 };
 
 loadSamples();
+loadConfig();
