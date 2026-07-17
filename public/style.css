@@ -110,8 +110,11 @@
   .fmt.docx{ background:#e3ecf7; color:#1e4e8c; }
   .fmt.xlsx{ background:#e3f0e8; color:#1f6b47; }
   .fmt.md{ background:#ece7f7; color:#5b3aa8; }
+  .fmt.pptx{ background:#fbe8d3; color:#a85a12; }
 
   /* budget: prominent current value + preset toggles */
+  .docsizenote { font-size:12.5px; color:var(--accent-dark); background:var(--accent-soft);
+    border:1px solid var(--border2); border-radius:8px; padding:7px 12px; margin:4px 0 10px; }
   .budgetbar { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin:2px 0 8px; }
   .budgetnum { font-family:"Fraunces",serif; font-weight:700; font-size:26px; color:var(--accent-dark); line-height:1; }
   .budgetnum .u { font-family:"Inter",sans-serif; font-weight:500; font-size:13px; color:var(--muted); }
@@ -120,6 +123,7 @@
     border:1px solid var(--border2); border-radius:20px; padding:4px 13px; font-size:12.5px; transition:all .12s; }
   .bpre:hover,.bpre:focus-visible { border-color:var(--accent); background:var(--accent-soft); }
   .bpre.active { background:var(--accent); color:#fff; border-color:var(--accent); font-weight:600; }
+  .bpre small { display:block; font-size:10.5px; font-weight:600; opacity:.8; margin-top:1px; }
 
   /* suggested-question chips: click to fill the task field */
   .qchips { display:flex; flex-wrap:wrap; gap:8px; margin:8px 0 0; }

@@ -5,26 +5,17 @@
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { statSync } from "node:fs";
 import { homedir } from "node:os";
-import { resolve, sep } from "node:path";
+import { resolve } from "node:path";
 import { z } from "zod";
 
 import { ConversionError } from "./convert.js";
+import { checkPathWithin } from "./path-guard.js";
 import { compileContext, expandSection } from "./pipeline.js";
 
 const ROOT = resolve(process.env.CC_ROOT ?? homedir());
 
-function checkPath(filePath: string): string {
-  const p = resolve(filePath.replace(/^~(?=$|\/)/, homedir()));
-  if (p !== ROOT && !p.startsWith(ROOT + sep)) {
-    throw new Error(`Access denied: ${p} is outside allowed root ${ROOT}`);
-  }
-  if (!statSync(p, { throwIfNoEntry: false })?.isFile()) {
-    throw new Error(`Not a file: ${p}`);
-  }
-  return p;
-}
+const checkPath = (filePath: string): string => checkPathWithin(ROOT, filePath);
 
 const clampBudget = (n: number, lo: number) => Math.max(lo, Math.min(Math.trunc(n), 200_000));
 
