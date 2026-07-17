@@ -1,14 +1,20 @@
 /** Test suite. Run: npm test */
 import assert from "node:assert/strict";
-import { writeFileSync, unlinkSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync, unlinkSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
+const FIXTURES_DIR = join(process.cwd(), "src", "tests", "fixtures");
+
 import { chunkMarkdown } from "../chunk.js";
+import { convertToMarkdown, ConversionError } from "../convert.js";
+import { intEnv, numEnv } from "../env.js";
 import { pack } from "../pack.js";
+import { checkPathWithin } from "../path-guard.js";
 import { compileContext, expandSection } from "../pipeline.js";
 import { bm25Scores, queryAttribution, rank, rankMulti, splitQueries } from "../rank.js";
 import { countTokens } from "../tokens.js";
+import { UploadRejected, validateUpload } from "../upload-guard.js";
 
 function makeTestDoc(): string {
   const sections: string[] = ["# Master Services Agreement\n\nThis agreement is made between parties."];
@@ -276,7 +282,156 @@ async function testSmallFilePassthrough() {
   }
 }
 
-for (const fn of [testChunking, testRankAndPack, testEndToEnd, testMultilingualRanking, testRelevanceFloor, testReserveDoesNotEvictFittingContent, testOversizedTopNotice, testMultiQuery, testOpenAICompatClient, testSmallFilePassthrough]) {
+async function testFormatConversion() {
+  // Every other test writes a synthetic .md straight to disk and never
+  // touches convertToMarkdown()/markitdown at all — so no test actually
+  // proved any real-world file format converts correctly. pptx and csv had
+  // zero coverage anywhere (not even a sample in the demo). Lock both in
+  // through the real pipeline, not a stub.
+  const pptx = await compileContext(join(FIXTURES_DIR, "deck.pptx"), "What is planned for Q2?", 4000, false);
+  assert.ok(pptx.markdown.includes("Add billing"), "pptx slide content survives real conversion");
+  assert.ok(pptx.markdown.includes("Risks"), "pptx second slide also converts");
+
+  const csv = await compileContext(join(FIXTURES_DIR, "data.csv"), "Who is in the Platform department?", 4000, false);
+  assert.ok(csv.markdown.includes("Asha Rao") && csv.markdown.includes("Priya Nair"),
+    "csv rows survive as a markdown table");
+
+  console.log("  format conversion ok: pptx + csv verified through the real convert.ts/markitdown path");
+}
+
+async function testImageConversionFailsClearly() {
+  // Discovered while investigating format coverage: markitdown exits 0 with
+  // EMPTY stdout for a plain image when no OCR/captioning backend is
+  // configured (no LLM key in this environment/CI) — there is no stderr, no
+  // thrown error from markitdown itself. Without the empty-output check in
+  // convert.ts, a bare image upload would silently produce a compiled
+  // "context" with nothing in it. Lock in that this fails LOUD and clear
+  // instead, with a message that tells the user why.
+  await assert.rejects(
+    () => compileContext(join(FIXTURES_DIR, "invoice.png"), "What is the total?", 4000, false),
+    (err: unknown) => err instanceof Error && /empty output/i.test(err.message) && /OCR/i.test(err.message),
+    "image with no OCR/captioning configured fails with a clear, actionable error"
+  );
+  console.log("  image-without-ocr ok: fails loudly with an actionable message instead of silently empty");
+}
+
+async function testClientBuildIsPlainScript() {
+  // Regression guard: a single stray `export` (or `import`) anywhere at the
+  // top level of src/client/{app,types}.ts turns that file into an ES
+  // module, which makes tsc emit CommonJS `exports`/`require(...)` even
+  // under tsconfig.client.json's module:"none" — code that throws instantly
+  // in a browser (no `exports` object exists there). This exact bug slipped
+  // through once already (an `export` accidentally left on one interface in
+  // types.ts broke every type reference in app.ts). `npm run build` must run
+  // before this test for public/app.js and public/types.js to exist.
+  for (const f of ["public/app.js", "public/types.js"]) {
+    const path = join(process.cwd(), f);
+    assert.ok(existsSync(path), `${f} must exist — run npm run build first`);
+    const src = readFileSync(path, "utf-8");
+    assert.ok(!/\bexports\./.test(src), `${f} must not contain CommonJS "exports." (module leaked into a plain <script>)`);
+    assert.ok(!/\brequire\(/.test(src), `${f} must not contain "require(" (module leaked into a plain <script>)`);
+  }
+  console.log("  client build ok: app.js/types.js are plain scripts, no CommonJS leakage");
+}
+
+async function testPathGuardBlocksSymlinkEscape() {
+  // Security regression (audit #3): a symlink inside CC_ROOT pointing OUTSIDE
+  // it must not be readable through the MCP path check. Before the realpath
+  // fix, checkPath did a string-only comparison and happily read /etc/passwd
+  // via such a symlink.
+  const root = mkdtempSync(join(tmpdir(), "cc-root-"));
+  const secretDir = mkdtempSync(join(tmpdir(), "cc-secret-"));
+  const secret = join(secretDir, "secret.txt");
+  writeFileSync(secret, "TOP SECRET");
+  try {
+    // A legitimate file inside the root resolves fine.
+    const legit = join(root, "ok.txt");
+    writeFileSync(legit, "hello");
+    assert.equal(checkPathWithin(root, legit), realpathSync(legit), "a real file inside root is allowed");
+
+    // A symlink inside the root pointing outside must be rejected.
+    const escape = join(root, "innocent.txt");
+    symlinkSync(secret, escape);
+    assert.throws(
+      () => checkPathWithin(root, escape),
+      /outside allowed root/,
+      "symlink escaping CC_ROOT must be denied"
+    );
+
+    // A plain path traversal is also denied.
+    assert.throws(() => checkPathWithin(root, join(root, "..", "..", "etc", "passwd")), /outside allowed root|Not a file/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(secretDir, { recursive: true, force: true });
+  }
+  console.log("  path guard ok: symlink escape + traversal denied, real in-root file allowed");
+}
+
+async function testUploadGuardRejectsBombAndMismatch() {
+  // Security regression (audit #1/#8): a zip bomb renamed to an allowed
+  // extension must be rejected by declared uncompressed size, and content must
+  // match the claimed extension.
+  const bomb = readFileSync(join(FIXTURES_DIR, "bomb.xlsx")); // ~250KB on disk, ~250MB uncompressed
+  assert.throws(
+    () => validateUpload("bomb.xlsx", bomb),
+    (e: unknown) => e instanceof UploadRejected && /decompression bomb|expands/i.test((e as Error).message),
+    "decompression bomb must be rejected before conversion"
+  );
+
+  // A real zip renamed .pdf fails the PDF magic-byte check.
+  assert.throws(
+    () => validateUpload("evil.pdf", bomb),
+    (e: unknown) => e instanceof UploadRejected && /valid PDF/i.test((e as Error).message),
+    "content/extension mismatch must be rejected"
+  );
+
+  // A binary blob renamed .txt is caught by the NUL-byte heuristic.
+  assert.throws(
+    () => validateUpload("sneaky.txt", Buffer.from([0x00, 0x01, 0x02, 0x00])),
+    (e: unknown) => e instanceof UploadRejected,
+    "binary content in a .txt must be rejected"
+  );
+
+  // A genuine small docx passes untouched.
+  const goodPptx = readFileSync(join(FIXTURES_DIR, "deck.pptx"));
+  assert.doesNotThrow(() => validateUpload("deck.pptx", goodPptx), "a real pptx must pass validation");
+  console.log("  upload guard ok: bomb + type-mismatch + binary-as-text rejected, real file allowed");
+}
+
+async function testConversionErrorIsSanitized() {
+  // Security regression (audit #4): a converter failure must not leak the raw
+  // Python traceback or absolute server paths to the caller.
+  await assert.rejects(
+    () => convertToMarkdown(join(FIXTURES_DIR, "malformed.pdf")),
+    (e: unknown) => {
+      assert.ok(e instanceof ConversionError, "should be a ConversionError");
+      const m = (e as Error).message;
+      assert.ok(!/Traceback/i.test(m), "must not contain a Python traceback");
+      assert.ok(!/\/usr\/|\/app\/|site-packages|dist-packages/.test(m), "must not contain server paths");
+      return true;
+    }
+  );
+  console.log("  error hygiene ok: conversion failure returns a generic, path-free message");
+}
+
+function testEnvParsingFailsSafe() {
+  // Security regression (audit #6): a non-numeric env var must fall back to the
+  // default instead of becoming NaN (which silently disabled the rate limiter).
+  process.env.CC_TEST_INT = "abc";
+  assert.equal(intEnv("CC_TEST_INT", 30, 1), 30, "non-numeric int env -> default");
+  process.env.CC_TEST_INT = "-5";
+  assert.equal(intEnv("CC_TEST_INT", 30, 1), 1, "negative int env -> clamped to min");
+  process.env.CC_TEST_INT = "999999";
+  assert.equal(intEnv("CC_TEST_INT", 30, 1, 100), 100, "over-max int env -> clamped to max");
+  delete process.env.CC_TEST_INT;
+  assert.equal(intEnv("CC_TEST_INT", 30, 1), 30, "missing env -> default");
+  process.env.CC_TEST_NUM = "not-a-number";
+  assert.equal(numEnv("CC_TEST_NUM", 3.0, 0), 3.0, "non-numeric float env -> default");
+  delete process.env.CC_TEST_NUM;
+  console.log("  env parsing ok: NaN/blank/out-of-range all fall back safely");
+}
+
+for (const fn of [testChunking, testRankAndPack, testEndToEnd, testMultilingualRanking, testRelevanceFloor, testReserveDoesNotEvictFittingContent, testOversizedTopNotice, testMultiQuery, testFormatConversion, testImageConversionFailsClearly, testClientBuildIsPlainScript, testPathGuardBlocksSymlinkEscape, testUploadGuardRejectsBombAndMismatch, testConversionErrorIsSanitized, testEnvParsingFailsSafe, testOpenAICompatClient, testSmallFilePassthrough]) {
   console.log(fn.name);
   await fn();
 }

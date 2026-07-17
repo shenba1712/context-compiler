@@ -55,9 +55,9 @@
   <p class="sub">Upload your own file, or pick a sample below. Then ask a question and set a budget.</p>
 
   <form id="compileForm">
-    <label for="file">Upload your file (pdf, docx, xlsx, pptx, html, csv, images…) — max 50 MB</label>
+    <label for="file">Upload your file (pdf, docx, xlsx, pptx, html, csv, txt, md) — max 50 MB</label>
     <input type="file" id="file" name="file"
-      accept=".pdf,.docx,.doc,.xlsx,.xls,.pptx,.ppt,.html,.htm,.csv,.txt,.md,.png,.jpg,.jpeg,.gif,.bmp">
+      accept=".pdf,.docx,.xlsx,.pptx,.html,.htm,.csv,.txt,.md,.markdown">
     <div id="fileErr" class="err hidden" role="alert"></div>
 
     <details class="samplesbox">
@@ -72,12 +72,13 @@
     <div class="qhint">Asking several things at once? Separate them with <b>?</b> or new lines — each question is ranked on its own and its best sections merged in.</div>
 
     <label for="budget">Token budget <span style="font-weight:400;color:var(--faint)">— a ceiling, not a target</span></label>
+    <div class="docsizenote hidden" id="docSizeNote"></div>
     <div class="budgetbar">
       <div class="budgetnum"><span id="budgetVal">4,000</span> <span class="u">tokens</span></div>
       <div class="bpre-group" role="group" aria-label="Budget presets">
-        <button type="button" class="bpre" data-v="1000" aria-pressed="false">quick fact</button>
-        <button type="button" class="bpre" data-v="4000" aria-pressed="false">standard</button>
-        <button type="button" class="bpre" data-v="8000" aria-pressed="false">deep dive</button>
+        <button type="button" class="bpre" data-v="1000" data-tier="quick" aria-pressed="false">quick fact <small>~1,000</small></button>
+        <button type="button" class="bpre" data-v="4000" data-tier="standard" aria-pressed="false">standard <small>~4,000</small></button>
+        <button type="button" class="bpre" data-v="8000" data-tier="deep" aria-pressed="false">deep dive <small>~8,000</small></button>
       </div>
     </div>
     <input type="range" id="budget" name="budget" min="200" max="20000" step="100" value="4000"

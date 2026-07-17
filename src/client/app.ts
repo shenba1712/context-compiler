@@ -14,24 +14,24 @@ function $<T extends HTMLElement = HTMLElement>(id: string): T {
   return el as T;
 }
 
-const SAMPLES: Sample[] = [
-  { key: "pp", file: "pride-and-prejudice.docx", fmt: "docx", nm: "Pride and Prejudice", mt: "Jane Austen · novel",
-    q: ["What is Mr. Darcy's first impression at the ball?", "How does Mr. Collins propose to Elizabeth?", "What does Mr. Bingley think of Jane?", "Why does Elizabeth dislike Mr. Darcy at first?", "How does Mr. Collins propose to Elizabeth, and how does Darcy propose?"] },
-  { key: "sh", file: "sherlock-holmes.docx", fmt: "docx", nm: "The Adventures of Sherlock Holmes", mt: "Arthur Conan Doyle · mystery",
-    q: ["Why does the King of Bohemia come to Sherlock Holmes?", "What is the Red-Headed League?", "How does Holmes solve the Red-Headed League case?", "What case involves a stepfather and a typewriter?", "What is the Red-Headed League, and how does Holmes solve it?"] },
-  { key: "og", file: "origin-of-species.pdf", fmt: "pdf", nm: "On the Origin of Species", mt: "Charles Darwin · dense science PDF",
-    q: ["What is natural selection?", "What does Darwin say about the struggle for existence?", "How does Darwin explain variation under domestication?", "What is natural selection? What does Darwin say about the struggle for existence?"] },
-  { key: "ar", file: "meridian-annual-report.docx", fmt: "docx", nm: "Meridian Annual Report", mt: "business report · tables + prose",
-    q: ["What are the three risks management worries about?", "What mistake did the company admit this year?", "Which R&D programs were cancelled and why?", "What is the FY2026 revenue guidance?", "What are the three risks, and which R&D programs were cancelled?"] },
-  { key: "km", file: "kestrel-k2-manual.pdf", fmt: "pdf", nm: "Kestrel K2 Drone Manual", mt: "user manual PDF",
-    q: ["What voids the warranty?", "Which directions can the obstacle sensors not see?", "How should batteries be handled for air travel?", "Can the drone fly in rain?", "What voids the warranty? Can the drone fly in rain?"] },
-  { key: "fin", file: "meridian-financials.xlsx", fmt: "xlsx", nm: "Meridian Financials", mt: "spreadsheet · 3 sheets",
-    q: ["What was net profit in FY25?", "Which quarter had the best gross margin?", "How did revenue grow over five years?", "What was net profit in FY25? Which quarter had the best gross margin?"] },
-  { key: "lt", file: "the-lantern-tales.md", fmt: "md", nm: "The Lantern Tales", mt: "24 short fables",
-    q: ["What three promises did the fox collect as payment for winter?", "How did Lina win her shadow back?", "What did the ferryman charge instead of coins?", "What was the rule at the night market of lost things?", "What did the ferryman charge, and what was the rule at the night market?"] },
-  { key: "hi", file: "chhoti-kahaniyan.md", fmt: "md", nm: "छोटी कहानियाँ", mt: "Hindi · 12 stories (Unicode)",
-    q: ["ईमानदार चायवाले को अंगूठी लौटाने पर क्या मिला?", "आम का पेड़ बँटवारे में किसके हिस्से आया?", "गणित की परीक्षा का आख़िरी सवाल क्या था?", "ईमानदार चायवाले को क्या मिला? आम का पेड़ किसके हिस्से आया?"] },
-];
+// Fetched from GET /api/samples on load — real, server-measured token counts
+// (computed through the same convert+cache pipeline a real compile uses),
+// not a client-side guess. See samples-manifest.ts and web.ts for the source.
+let SAMPLES: Sample[] = [];
+
+async function loadSamples(): Promise<void> {
+  const wrap = $("samples");
+  try {
+    const resp = await fetch("/api/samples");
+    const data: Sample[] = await resp.json();
+    if (!Array.isArray(data)) throw new Error("Unexpected response shape");
+    SAMPLES = data;
+    renderSamples();
+  } catch (e) {
+    console.warn("Could not load the sample library:", e);
+    wrap.textContent = "Couldn't load the sample library right now — uploading your own file still works.";
+  }
+}
 
 // Hindi text uses Devanagari; tag such strings with lang="hi" so assistive
 // tech doesn't mispronounce them under the page's declared lang="en".
@@ -79,6 +79,7 @@ const MAX_FILE_BYTES = 50 * 1024 * 1024;
 
 function renderSamples(): void {
   const wrap = $("samples");
+  wrap.innerHTML = "";
   SAMPLES.forEach((s) => {
     const c = document.createElement("button");
     c.type = "button";
@@ -121,7 +122,17 @@ async function selectSample(s: Sample, card: HTMLButtonElement): Promise<void> {
   renderQChips(s.q);
   $<HTMLInputElement>("task").value = s.q[0];
   syncQChips();
-  announce(s.nm + " loaded. " + s.q.length + " suggested questions available below the question field.");
+  // The sample's real size is already known (measured ahead of time), so the
+  // budget picker can be scaled to it immediately — before the user even
+  // presses Compile, unlike an arbitrary upload where size is unknown until
+  // conversion. See computePresets().
+  const presets = computePresets(s.tok);
+  applyPresets(presets, "standard");
+  renderDocSizeNote(s.tok, presets !== DEFAULT_PRESETS);
+  announce(
+    s.nm + (s.tok ? " loaded (~" + s.tok.toLocaleString() + " tokens). " : " loaded. ") +
+    s.q.length + " suggested questions available below the question field."
+  );
 }
 
 function renderQChips(questions: string[]): void {
@@ -171,6 +182,51 @@ document.querySelectorAll<HTMLButtonElement>(".bpre").forEach((b) => {
 });
 syncBudget();
 
+// Static defaults make sense for a big document (a 20,000-token novel: 1,000
+// / 4,000 / 8,000 are genuinely different choices). They make NO sense for a
+// small one — a 400-token spreadsheet fits comfortably under even "quick
+// fact", so all three presets silently become "return the whole file" with
+// no real choice. Below the default "deep dive" ceiling, scale all three
+// presets to the document's own size so they stay meaningfully different.
+const DEFAULT_PRESETS: BudgetPresets = { quick: 1000, standard: 4000, deep: 8000 };
+
+function computePresets(rawTokens: number | null): BudgetPresets {
+  if (!rawTokens || rawTokens >= DEFAULT_PRESETS.deep) return DEFAULT_PRESETS;
+  const round50 = (n: number) => Math.max(50, Math.round(n / 50) * 50);
+  const deep = Math.max(300, rawTokens); // "deep dive" = essentially the whole document
+  const standard = Math.min(deep, round50(Math.max(200, rawTokens * 0.5)));
+  const quick = Math.min(standard, round50(Math.max(100, rawTokens * 0.2)));
+  return { quick, standard, deep };
+}
+
+// selectTier: which preset to jump the slider to, or null to just relabel the
+// buttons in place (used after a compile completes — the user already chose
+// a value for that run; don't yank the slider out from under the result they
+// just got, just refresh the preset numbers for their NEXT compile).
+function applyPresets(p: BudgetPresets, selectTier: keyof BudgetPresets | null): void {
+  document.querySelectorAll<HTMLButtonElement>(".bpre").forEach((b) => {
+    const tier = b.dataset.tier as keyof BudgetPresets | undefined;
+    if (!tier) return;
+    b.dataset.v = String(p[tier]);
+    const small = b.querySelector("small");
+    if (small) small.textContent = "~" + p[tier].toLocaleString();
+  });
+  if (selectTier) $<HTMLInputElement>("budget").value = String(p[selectTier]);
+  syncBudget();
+}
+
+function renderDocSizeNote(rawTokens: number | null, scaled: boolean): void {
+  const el = $("docSizeNote");
+  if (!rawTokens) {
+    el.classList.add("hidden");
+    return;
+  }
+  el.textContent = scaled
+    ? `This document is about ${rawTokens.toLocaleString()} tokens total — the presets below are scaled to it.`
+    : `This document is about ${rawTokens.toLocaleString()} tokens total.`;
+  el.classList.remove("hidden");
+}
+
 $<HTMLButtonElement>("viewToggle").onclick = () => {
   const raw = $("out").classList.toggle("hidden");
   $("sections").classList.toggle("hidden", !raw);
@@ -188,8 +244,56 @@ function clearErr(): void {
   $("fileErr").classList.add("hidden");
 }
 
+// Real, pre-compile size signal for a manually chosen upload (as opposed to a
+// sample, whose size is already known from the server). This is NOT a guess:
+// the file is sent through /api/measure, which runs the exact same
+// convert+cache pipeline a real compile uses, so the number is exactly what
+// raw_tokens will read after you press Compile — true for every format
+// (xlsx, pptx, images, ...), not just plain text. Content-hash caching means
+// this upload isn't wasted work: pressing Compile afterward on the same
+// bytes hits the cache this call just populated, instead of converting twice.
+let measureSeq = 0;
+
+async function estimateUploadSize(f: File): Promise<void> {
+  const el = $("docSizeNote");
+  const seq = ++measureSeq;
+  applyPresets(DEFAULT_PRESETS, null);
+  el.textContent = "Measuring document size…";
+  el.classList.remove("hidden");
+  try {
+    const fd = new FormData();
+    fd.append("file", f);
+    const resp = await fetch("/api/measure", { method: "POST", body: fd });
+    const d: MeasureApiResult = await resp.json();
+    if (seq !== measureSeq) return; // a newer file was picked while this was in flight
+    if (d.error) throw new Error(d.error);
+    const presets = computePresets(d.raw_tokens);
+    applyPresets(presets, "standard");
+    const scaledNote = presets !== DEFAULT_PRESETS ? " Presets below are scaled to it." : "";
+    el.textContent = `This document is ~${d.raw_tokens.toLocaleString()} tokens once converted.${scaledNote}`;
+  } catch (e) {
+    if (seq !== measureSeq) return;
+    console.warn("Could not measure the uploaded file ahead of compiling:", e);
+    // Formats markitdown can't read at all (e.g. a plain image with no
+    // OCR/captioning backend configured) surface their real reason here
+    // instead of a generic fallback, so the note stays honest either way.
+    el.textContent = e instanceof Error && e.message
+      ? `Couldn't pre-measure this file: ${e.message}`
+      : "Size will be shown after you compile.";
+  }
+}
+
+// Kept in lockstep with ALLOWED_EXTENSIONS in web.ts (server has the final
+// say; this is just so a rejection shows up instantly, before any upload).
+// Images are deliberately excluded: markitdown's LLM image captioning only
+// works through its Python API with an OpenAI-shaped client, not the CLI
+// this demo shells out to — a bare image upload would just fail after a full
+// round trip with no useful result. Revisit if that gets wired up.
+const ALLOWED_EXT_RE = /\.(docx|pdf|xlsx|pptx|csv|md|markdown|txt|html?)$/i;
+
 // Client-side validation before any network round-trip: catch obviously
-// wrong file sizes immediately instead of after a full upload.
+// wrong file sizes and unsupported formats immediately instead of after a
+// full upload.
 $<HTMLInputElement>("file").addEventListener("change", () => {
   const f = $<HTMLInputElement>("file").files?.[0];
   $("fileErr").classList.add("hidden");
@@ -197,7 +301,17 @@ $<HTMLInputElement>("file").addEventListener("change", () => {
     $("fileErr").textContent = `"${f.name}" is ${(f.size / 1e6).toFixed(1)} MB — over the 50 MB limit. Pick a smaller file.`;
     $("fileErr").classList.remove("hidden");
     $<HTMLInputElement>("file").value = "";
+    return;
   }
+  if (f && !ALLOWED_EXT_RE.test(f.name)) {
+    $("fileErr").textContent =
+      `"${f.name}" isn't a supported format yet. Supported: pdf, docx, xlsx, pptx, csv, md, txt, html. ` +
+      `Images aren't supported without an OCR/captioning backend, which this demo doesn't have configured.`;
+    $("fileErr").classList.remove("hidden");
+    $<HTMLInputElement>("file").value = "";
+    return;
+  }
+  if (f) estimateUploadSize(f);
 });
 
 // The GitHub links are placeholders until this repo is public — warn in
@@ -263,6 +377,12 @@ $<HTMLFormElement>("compileForm").addEventListener("submit", async (e) => {
     const resp = await fetch("/api/compile", { method: "POST", body: fd, signal: compileAbort.signal });
     const d: CompileApiResult = await resp.json();
     if (d.error) throw new Error(d.error);
+    // Now that the real size is known (for an upload, this is the FIRST time
+    // it's known at all), refresh the presets to match — without moving the
+    // slider off the value just used for this result.
+    const presets = computePresets(d.raw_tokens);
+    applyPresets(presets, null);
+    renderDocSizeNote(d.raw_tokens, presets !== DEFAULT_PRESETS);
     $("resultsSec").classList.remove("hidden");
     countUp($("sRaw"), d.raw_tokens);
     countUp($("sUsed"), d.tokens_used);
@@ -482,7 +602,7 @@ function makeChip(o: SectionInfo, d: CompileApiResult, exp: HTMLElement): HTMLBu
       const resp = await fetch("/api/expand", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ file_path: d.file_path, section_id: o.id }),
+        body: JSON.stringify({ handle: d.handle, section_id: o.id }),
       });
       const e: ExpandApiResult = await resp.json();
       if (e.error) throw new Error(e.error);
@@ -567,4 +687,4 @@ $<HTMLButtonElement>("prove").onclick = async () => {
   }
 };
 
-renderSamples();
+loadSamples();

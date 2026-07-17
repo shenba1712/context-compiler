@@ -20,6 +20,21 @@ interface Sample {
   nm: string;
   mt: string;
   q: string[];
+  /** Real raw token count (cl100k), measured server-side from the actual
+   *  file via the same convert+cache pipeline a real compile uses (see
+   *  GET /api/samples in web.ts) — never a client-side guess, so it can't
+   *  drift from reality if the file, tokenizer, or chunker ever changes.
+   *  Lets budget presets react to actual document size before the user ever
+   *  compiles — a 400-token spreadsheet and a 20,000-token novel shouldn't
+   *  offer the same "quick fact / standard / deep dive" numbers. Null if the
+   *  server couldn't measure this one sample (conversion failed). */
+  tok: number | null;
+}
+
+interface BudgetPresets {
+  quick: number;
+  standard: number;
+  deep: number;
 }
 
 interface SectionInfo {
@@ -47,8 +62,21 @@ interface CompileApiResult {
   cost_raw_usd: number;
   cost_compiled_usd: number;
   price_per_mtok: number;
-  file_path: string;
+  /** Opaque server-minted reference to the uploaded file, passed back to
+   *  /api/expand. Not a filesystem path (the old file_path leaked the server's
+   *  layout and let a client name arbitrary paths). */
+  handle: string;
   llm_available: boolean;
+  error?: string;
+}
+
+/** Response body of POST /api/measure — a real, server-measured token count
+ *  for a freshly uploaded file, ahead of Compile, via the same convert+cache
+ *  pipeline a real compile uses. Not a guess: works identically for text and
+ *  binary formats (xlsx, pptx, images, ...) since it's the real conversion. */
+interface MeasureApiResult {
+  raw_tokens: number;
+  handle: string;
   error?: string;
 }
 
