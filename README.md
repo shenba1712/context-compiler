@@ -63,11 +63,15 @@ entirely and use Docker.
 
 ### About API keys (optional — bring any provider's)
 
-An LLM API key unlocks the two AI-assisted features: the reranker (better
-section selection on paraphrased questions) and the demo's answer-parity
-panel. **Without a key, everything else works** — conversion, chunking,
-BM25 ranking, packing, the MCP tools — fully offline; that's the
-local-first design.
+**No Anthropic key yet? Nothing is blocked.** An LLM API key unlocks exactly
+two optional upgrades: the reranker (better section selection on paraphrased
+questions) and the demo's answer-parity panel. **Without any key, everything
+else works** — conversion, chunking, BM25 ranking, packing, both MCP tools
+(`compile_context` and `expand_section`), the full web demo — fully offline;
+that's the local-first design, and it's verified in CI on every commit with
+no keys set at all. If an Anthropic key specifically doesn't arrive in time,
+any OpenAI-compatible key unlocks the same two upgrades identically — OpenAI,
+Gemini, Groq, OpenRouter, or a free local Ollama model, see below.
 
 Any of these works (checked in this order):
 
@@ -280,15 +284,17 @@ size caps + answer-context cost cap. *Planned:* API keys/quotas if this
 becomes a real service. *Why deferred:* judging traffic doesn't warrant an
 auth system; the bill is already bounded.
 
-**Vanilla single-file web UI, no framework** — *Today:* one dependency-free
-`index.html` (~400 lines): dark theme, sample library, live token bars,
-clickable expand_section, parity panel. *Planned:* a proper front-end
-(framework, design system, streaming results, auth) if the web app becomes
-a product rather than a demo instrument. *Why deferred:* the product is the
-pipeline + MCP server; the page is one form and two result panels — below
-the complexity threshold where a framework pays for its build step,
-dependency surface, and cold-start cost. Polish is a design problem, not a
-framework problem.
+**Vanilla web UI, no framework** — *Today:* dependency-free `index.html` +
+`style.css`, and a typed `src/client/app.ts` (compiled to `public/app.js` via
+`tsconfig.client.json`, a separate build target from the server): sample
+library, live token bars, clickable expand_section, parity panel. *Planned:*
+a proper front-end (framework, design system, streaming results, auth) if the
+web app becomes a product rather than a demo instrument. *Why deferred:* the
+product is the pipeline + MCP server; the page is one form and two result
+panels — below the complexity threshold where a framework pays for its build
+step, dependency surface, and cold-start cost. Polish is a design problem,
+not a framework problem — but "no framework" doesn't mean "no types or
+structure," hence the split files and the typed client build.
 
 **CJK languages (Japanese, Chinese)** — *Today:* the tokenizer is
 Unicode-aware and handles all space-delimited scripts (tested with

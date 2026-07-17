@@ -1,0 +1,69 @@
+/**
+ * Client-side mirrors of the server's API shapes (src/pipeline.ts, src/web.ts).
+ * Duplicated rather than imported: this file compiles for the browser (DOM
+ * lib, no Node types), while the server compiles for Node — sharing a source
+ * file across those two lib/module targets isn't worth the build complexity
+ * for a handful of small interfaces. Keep these in sync with pipeline.ts.
+ *
+ * Deliberately NOT an ES module (no import/export): tsconfig.client.json
+ * compiles with module "none" for a plain global <script>, and a module-ized
+ * file (any top-level import/export, even type-only) makes tsc emit a
+ * CommonJS `exports` object that doesn't exist in a browser and throws on
+ * load. These interfaces are ambient globals, visible to app.ts without an
+ * import because both files compile together as scripts, not modules.
+ */
+
+interface Sample {
+  key: string;
+  file: string;
+  fmt: string;
+  nm: string;
+  mt: string;
+  q: string[];
+}
+
+interface SectionInfo {
+  id: string;
+  section: string;
+  tokens: number;
+  relevance: number | null;
+  matched_queries?: number[];
+  text?: string;
+}
+
+/** Response body of POST /api/compile (CompileResult + web.ts's added fields). */
+interface CompileApiResult {
+  markdown: string;
+  raw_tokens: number;
+  tokens_used: number;
+  tokens_saved: number;
+  reduction_pct: number;
+  cache_hit: boolean;
+  rerank_used: boolean;
+  token_budget: number;
+  queries: string[];
+  selected_sections: SectionInfo[];
+  omitted_sections: SectionInfo[];
+  cost_raw_usd: number;
+  cost_compiled_usd: number;
+  price_per_mtok: number;
+  file_path: string;
+  llm_available: boolean;
+  error?: string;
+}
+
+/** Response body of POST /api/expand. */
+interface ExpandApiResult {
+  markdown: string;
+  tokens_used: number;
+  cache_hit: boolean;
+  error?: string;
+}
+
+/** Response body of POST /api/answer. */
+interface AnswerApiResult {
+  model: string;
+  full: { answer: string; context_tokens: number };
+  compiled: { answer: string; context_tokens: number; reduction_pct: number };
+  error?: string;
+}

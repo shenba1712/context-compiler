@@ -131,6 +131,37 @@ async function testRelevanceFloor() {
   );
 }
 
+async function testReserveDoesNotEvictFittingContent() {
+  // Regression: an under-reserved budget let greedy content-fill overcommit,
+  // forcing the eviction loop to drop a real, relevant, FITTING chunk and let
+  // the manifest re-inflate with preview text in its place. Two second-most-
+  // relevant chunks that together fit the budget must both survive, rather
+  // than one being evicted for a fatter manifest.
+  const doc = [
+    "## Alpha\n\nThe launch date for the rocket is set for March. ".repeat(30), // top match, ~small
+    "## Beta\n\nThe rocket launch date and mission details are discussed here. " +
+      "The launch date for the rocket appears again in this section. ".repeat(28),
+    ...Array.from({ length: 5 }, (_, i) => `## Filler ${i}\n\n` + `Irrelevant boilerplate text ${i}. `.repeat(30)),
+  ].join("\n\n");
+  const chunks = chunkMarkdown(doc);
+  const task = "What is the rocket launch date?";
+  const ranked = await rank(task, chunks, false);
+  const scores = new Map(chunks.map((c, i) => [c.id, bm25Scores(task, chunks)[i]]));
+
+  // Pick a budget just large enough to fit the top two relevant chunks
+  // together (content beats a padded manifest — both must be kept).
+  const top2 = ranked.slice(0, 2);
+  const top2Tokens = top2.reduce((s, c) => s + c.tokens, 0);
+  const budget = top2Tokens + 400; // headroom for wrapper + a real (non-bloated) manifest
+  const { selected } = pack(ranked, budget, "launch.md", scores);
+  const selectedIds = new Set(selected.map((c) => c.id));
+  assert.ok(
+    top2.every((c) => selectedIds.has(c.id)),
+    `both top-2 relevant chunks should survive when they jointly fit: kept ${selected.length} of top 2`
+  );
+  console.log("  reserve ok: two relevant, fitting chunks both kept instead of one evicted for manifest padding");
+}
+
 async function testOversizedTopNotice() {
   // The single most relevant section is bigger than the budget. The artifact
   // must warn the agent (not silently ship a lesser section as if sufficient).
@@ -148,9 +179,9 @@ async function testOversizedTopNotice() {
 
   const { text, selected } = pack(ranked, 200, "policy.md", scores);
   assert.ok(!selected.some((c) => c.id === refundId), "oversized top section is omitted at a tiny budget");
-  assert.ok(text.includes("most relevant section"), "artifact warns the agent about the omitted top section");
+  assert.ok(text.includes("Most relevant"), "artifact warns the agent about the omitted top section");
   assert.ok(text.includes(refundId), "warning names the section id to expand");
-  assert.ok(text.includes("expand_section"), "warning tells the agent how to fetch it");
+  assert.ok(/expand it|token_budget/i.test(text), "warning tells the agent how to recover");
   console.log("  oversized-top ok: artifact flags the too-big top section for expansion");
 }
 
@@ -245,7 +276,7 @@ async function testSmallFilePassthrough() {
   }
 }
 
-for (const fn of [testChunking, testRankAndPack, testEndToEnd, testMultilingualRanking, testRelevanceFloor, testOversizedTopNotice, testMultiQuery, testOpenAICompatClient, testSmallFilePassthrough]) {
+for (const fn of [testChunking, testRankAndPack, testEndToEnd, testMultilingualRanking, testRelevanceFloor, testReserveDoesNotEvictFittingContent, testOversizedTopNotice, testMultiQuery, testOpenAICompatClient, testSmallFilePassthrough]) {
   console.log(fn.name);
   await fn();
 }

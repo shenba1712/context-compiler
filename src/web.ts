@@ -148,4 +148,17 @@ app.post("/api/answer", upload.single("file"), async (req, res) => {
   }
 });
 
+// Multer's own errors (e.g. the file-size limit) throw INSIDE the upload
+// middleware, before a route handler's try/catch ever runs. Without this,
+// Express's default error handler renders an HTML page with a raw stack
+// trace — a leak, and inconsistent with this API's all-JSON contract.
+app.use((err: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (res.headersSent) return next(err);
+  if (err instanceof multer.MulterError) {
+    return res.status(413).json({ error: `Upload rejected: ${err.message}` });
+  }
+  console.error("Unhandled error:", err);
+  res.status(500).json({ error: "Internal server error" });
+});
+
 app.listen(PORT, () => console.log(`Context Compiler demo on http://localhost:${PORT}`));
