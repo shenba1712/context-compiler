@@ -1,5 +1,7 @@
 node_modules/
 dist/
+public/app.js
+public/types.js
 .env
 .DS_Store
 .idea/

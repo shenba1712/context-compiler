@@ -184,7 +184,12 @@ async function haikuRerank(task: string, shortlist: Chunk[]): Promise<string[] |
     const ordered = ids.filter((i) => valid.has(i));
     for (const c of shortlist) if (!ordered.includes(c.id)) ordered.push(c.id);
     return ordered;
-  } catch {
+  } catch (err) {
+    // Rerank is a best-effort upgrade over BM25, never a hard dependency —
+    // network errors, malformed JSON, or a truncated model response all fall
+    // back to lexical order. Log it so a degraded-quality run is visible in
+    // the server's output instead of silently downgrading with no trace.
+    console.warn("LLM rerank failed, falling back to BM25 order:", err);
     return null;
   }
 }

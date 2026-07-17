@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci --no-audit --no-fund
-COPY tsconfig.json ./
+COPY tsconfig.json tsconfig.client.json ./
 COPY src ./src
 COPY public ./public
 RUN npm run build && npm prune --omit=dev
