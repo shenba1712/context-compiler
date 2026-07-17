@@ -26,13 +26,13 @@
           AI agent over MCP, or try it right here.</p>
         <div class="row" style="margin-top:6px">
           <a class="btn primary" href="#try">Try it now ↓</a>
-          <a class="btn ghost" href="https://github.com/" id="repoLink" target="_blank">View the code</a>
+          <a class="btn ghost" href="https://github.com/" id="repoLink" target="_blank" rel="noopener noreferrer" data-placeholder="true">View the code</a>
         </div>
       </div>
       <div class="heromock" role="img" aria-label="Example: compiling Pride and Prejudice for the question 'How does Mr. Collins propose?' reduces the whole file from 19,612 tokens to 1,454 tokens — a 92.6% reduction with the same answer.">
-        <div class="cap">A classic novel · Pride & Prejusice · Question: "How does Mr. Collins propose?"</div>
+        <div class="cap">A classic novel · Pride &amp; Prejudice · Question: "How does Mr. Collins propose?"</div>
         <div class="hrow"><div class="htrack"><div class="hbar raw" style="width:100%"></div></div><span class="hval">Whole file — 19,612 tokens</span></div>
-        <div class="hrow"><div class="htrack"><div class="hbar small" style="width:9%"></div></div><span class="hval">Compiled — 1,454 tokens</span></div>
+        <div class="hrow"><div class="htrack"><div class="hbar small" style="width:7.4%"></div></div><span class="hval">Compiled — 1,454 tokens</span></div>
         <div class="verdict"><b>92.6% fewer tokens</b>, same answer. Every read. Forever.</div>
       </div>
     </div>
@@ -61,15 +61,15 @@
     <div id="fileErr" class="err hidden" role="alert"></div>
 
     <details class="samplesbox">
-      <summary><span>No file handy? <span class="cap">Try one of our sample documents (pdf · docx · xlsx · markdown)</span></span></summary>
+      <summary><span>No file handy? <span class="cap">Try one of our sample documents (pdf · docx · xlsx · pptx · markdown)</span></span></summary>
       <div class="samples" id="samples" role="group" aria-label="Sample documents"></div>
     </details>
 
     <label for="task" style="margin-top:20px">Question / task</label>
-    <input type="text" id="task" name="task" placeholder="e.g. What voids the warranty? Can it fly in rain?" autocomplete="off">
+    <textarea id="task" name="task" rows="1" placeholder="e.g. What voids the warranty? Can it fly in rain?" autocomplete="off"></textarea>
     <div class="qchips hidden" id="qchips" role="group" aria-label="Suggested questions"></div>
     <div class="qhint hidden" id="qhint">Suggested questions for this sample — click one, or type your own above.</div>
-    <div class="qhint">Asking several things at once? Separate them with <b>?</b> or new lines — each question is ranked on its own and its best sections merged in.</div>
+    <div class="qhint">Asking several things at once? Separate them with <b>?</b> or new lines — each question is ranked on its own and its best sections merged in. Press <kbd>Enter</kbd> to compile, <kbd>Shift+Enter</kbd> for a new line.</div>
 
     <label for="budget">Token budget <span style="font-weight:400;color:var(--faint)">— a ceiling, not a target</span></label>
     <div class="docsizenote hidden" id="docSizeNote"></div>
@@ -83,10 +83,12 @@
     </div>
     <input type="range" id="budget" name="budget" min="200" max="20000" step="100" value="4000"
       aria-describedby="budgetTip">
+    <div class="sliderscale" aria-hidden="true"><span>200</span><span>20,000 tokens</span></div>
     <div id="budgetTip" style="font-size:12px;color:var(--faint);margin-top:4px">Tip: budget by question breadth, not file size. A factual lookup rarely needs more than ~1,000 tokens.</div>
 
     <div class="row">
       <button type="submit" class="btn primary" id="go">Compile</button>
+      <button type="button" class="btn ghost hidden" id="cancelGo">Cancel</button>
       <button type="button" class="btn ghost" id="prove">Prove answer parity</button>
       <span class="saved hidden" id="sessionSaved" style="margin-left:auto" role="status"></span>
     </div>
@@ -96,13 +98,19 @@
 
 <section id="resultsSec" class="hidden"><div class="wrap">
   <div class="panel" id="results">
-    <h2 class="sr-only" id="resultsHeading" tabindex="-1">Compilation results</h2>
+    <h2 class="sec" id="resultsHeading" tabindex="-1">Your compiled context</h2>
+    <div id="loadingNote" class="floornote hidden" role="status"></div>
     <div class="stats">
       <div class="stat"><div class="v" id="sRaw" style="color:var(--muted)">–</div><div class="l">raw tokens</div></div>
-      <div class="stat" title="The full text the AI receives: the selected sections plus formatting and the omitted-sections list. This is why it's a bit more than the per-section token counts added up."><div class="v" id="sUsed" style="color:var(--green)">–</div><div class="l">compiled tokens <span aria-hidden="true" style="color:var(--faint);font-weight:400">ⓘ</span></div></div>
+      <div class="stat"><div class="v" id="sUsed" style="color:var(--green)">–</div><div class="l">compiled tokens <span aria-hidden="true" style="color:var(--faint);font-weight:400">ⓘ</span></div></div>
       <div class="stat"><div class="v" id="sPct" style="color:var(--green)">–</div><div class="l">reduction</div></div>
       <div class="stat"><div class="v" id="sCost">–</div><div class="l">cost / read <span id="price" style="color:var(--faint)"></span></div></div>
     </div>
+    <p class="qhint" id="compiledTokensNote" style="margin-top:6px">
+      <b>Why is "compiled tokens" more than the sections below add up to?</b>
+      It's the exact text sent to the AI: the selected sections <i>plus</i> the wrapper comments and the
+      omitted-sections manifest — not just the section text alone.
+    </p>
     <div class="bars">
       <div class="brow"><div class="blab">raw file</div><div class="btrack"><div class="bar raw" id="barRaw" style="width:100%"></div></div><span class="bval" id="barRawVal">–</span></div>
       <div class="brow"><div class="blab">compiled</div><div class="btrack"><div class="bar cmp" id="barC" style="width:100%"></div></div><span class="bval" id="barCVal">–</span></div>
@@ -193,8 +201,9 @@ CC_ROOT = "/path/agents/may/read"</pre>
     <div class="tool"><code>expand_section(file_path, section_id, token_budget=2000)</code>
       <span>→ one omitted section by id, when the agent decides it needs more.</span></div>
   </div>
-  <p class="sub" style="margin:16px 0 0">Full setup, provider options, and the threat model are in the README and
-    <span id="archLink">ARCHITECTURE.md</span> in the repo.</p>
+  <p class="sub" style="margin:16px 0 0">Full setup, provider options, and the threat model are in the
+    <a href="/README.md" id="readmeLink">README</a> and
+    <a href="/ARCHITECTURE.md" id="archLink">ARCHITECTURE.md</a>.</p>
 </div></div></section>
 </main>
 

@@ -3,7 +3,10 @@
     /* Forest green on warm off-white. All text/bg pairs verified WCAG AA. */
     --bg:#f8f6f1; --bg2:#f1eee6; --panel:#fffdf9; --panel2:#f5f2ea;
     --border:#e7e2d8; --border2:#d8d1c3;
-    --text:#1a1a17; --muted:#6b6459; --faint:#726c60; /* faint AA: 4.5:1+ on bg/bg2 */
+    --text:#1a1a17; --muted:#6b6459; --faint:#6b6459; /* faint == muted: the old, lighter
+      --faint (#726c60) measured exactly 4.50:1 on --bg2 — technically AA but with zero
+      margin, so any future token tweak could silently fail it. This value verifies 5:1+
+      on every surface it's used on (bg, bg2, panel). */
     --accent:#2d6a4f; --accent-dark:#1b4d38; --accent-soft:#e3ede7;
     --green:#2d6a4f; /* success == brand: green means the win (savings) */
     --neutral-bar:#cabfae; /* "raw file" bar: dull, heavy, wasteful */
@@ -80,9 +83,18 @@
   h2.sec { font-family:"Fraunces",serif; font-weight:600; font-size:24px; margin:0 0 6px; }
   .sub { color:var(--muted); font-size:14px; margin:0 0 18px; }
   label { display:block; font-size:12.5px; color:var(--muted); margin:14px 0 6px; font-weight:500; }
-  input[type=text],select { width:100%; padding:11px 12px; border-radius:10px;
+  input[type=text],select,textarea { width:100%; padding:11px 12px; border-radius:10px;
     border:1px solid var(--border2); background:var(--bg2); color:var(--text); font-size:14px; font-family:inherit; }
   input[type=range]{ width:100%; accent-color:var(--green); }
+  /* #task: auto-growing textarea (JS sets height to scrollHeight). resize:none
+     because the height already tracks content; a manual drag-handle would
+     fight that. Enter submits the form (Shift+Enter inserts a newline), so a
+     single line reads and behaves like the text input it replaced. */
+  textarea#task { resize:none; overflow:hidden; min-height:44px; line-height:1.4; }
+  kbd { font-family:"SFMono-Regular",Consolas,monospace; font-size:11px; background:var(--bg2);
+    border:1px solid var(--border2); border-bottom-width:2px; border-radius:4px; padding:1px 5px; }
+  .sliderscale { display:flex; justify-content:space-between; font-size:11px; color:var(--faint);
+    margin-top:2px; }
   .btn { padding:11px 22px; border:0; border-radius:10px; font-weight:600; font-size:14px;
     cursor:pointer; font-family:inherit; transition:transform .08s, filter .15s; }
   .btn:active{ transform:translateY(1px); }
@@ -250,4 +262,9 @@
     #sessionSaved{margin-left:0 !important; width:100%;}
     #viewToggle{margin-left:0 !important;}
     .samples{grid-template-columns:1fr;}
+    /* chip-style controls (budget presets, question chips, omitted-section
+       chips) sit well under the ~44px touch-target minimum at their default
+       padding — comfortable with a mouse, fiddly with a thumb. */
+    .bpre,.qchip,.ochip,.ochip-more{ padding-top:9px; padding-bottom:9px; min-height:40px;
+      display:inline-flex; align-items:center; }
   }

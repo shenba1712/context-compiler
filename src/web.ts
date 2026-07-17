@@ -65,6 +65,14 @@ app.use((_req, res, next) => {
 
 app.use(express.static(STATIC_DIR));
 
+// Serve the two docs the page links to (README, ARCHITECTURE) straight from
+// the repo root, so "ARCHITECTURE.md" in the UI is a real working link rather
+// than inert text — without duplicating the files into public/. Fixed,
+// literal paths only (no user input involved), so there's no traversal risk.
+const REPO_ROOT = join(STATIC_DIR, "..");
+app.get("/README.md", (_req, res) => res.type("text/markdown").sendFile(join(REPO_ROOT, "README.md")));
+app.get("/ARCHITECTURE.md", (_req, res) => res.type("text/markdown").sendFile(join(REPO_ROOT, "ARCHITECTURE.md")));
+
 // Minimal per-IP rate limit: protects the hosted demo (and the API bill)
 // from accidental or hostile hammering. In-memory is fine for one replica
 // (resets on redeploy, not shared across replicas — acceptable for a demo).
@@ -161,6 +169,14 @@ const clampBudget = (v: unknown) =>
 // Memoized in-process (sample files don't change during a server's lifetime)
 // so repeat page loads don't even pay for a disk-cache lookup.
 let samplesCache: Array<{ key: string; file: string; fmt: string; nm: string; mt: string; q: string[]; tok: number | null }> | null = null;
+
+// Lets the client know up front whether "Prove answer parity" will work,
+// instead of only finding out after a failed click (or, worse, showing it
+// fully enabled on the keyless default deploy this project's headline is
+// built around). Fetched once on page load alongside /api/samples.
+app.get("/api/config", (_req, res) => {
+  res.json({ llm_available: hasLlm() });
+});
 
 app.get("/api/samples", async (_req, res) => {
   try {
