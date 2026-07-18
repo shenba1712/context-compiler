@@ -100,10 +100,10 @@
       <button type="submit" class="btn primary" id="go">Compile once</button>
       <button type="button" class="btn agent" id="goAgent">Run agent ▸</button>
       <button type="button" class="btn ghost hidden" id="cancelGo">Cancel</button>
-      <button type="button" class="btn ghost" id="prove">Prove answer parity</button>
+      <button type="button" class="btn quiet" id="prove" title="Skip the results view — prove from file + budget directly">Prove…</button>
       <span class="saved hidden" id="sessionSaved" style="margin-left:auto" role="status"></span>
     </div>
-    <p class="qhint" id="agentHint"><strong>Compile</strong> uses your budget. <strong>Prove</strong> checks that Compile (plus any expands) against the full file. <strong>Agent</strong> is separate — it retrieves on its own.</p>
+    <p class="qhint" id="agentHint"><strong>Compile</strong> or <strong>Agent</strong> first. Prove lives under Compile results (and quietly up here as a power path). Agent has its own compare after a run.</p>
     <details class="expectbox" id="expectBox">
       <summary>Limits &amp; free-tier notes</summary>
       <div class="expectbody" id="expectBody">
@@ -160,6 +160,11 @@
       <div id="omitChips" style="margin-top:8px"></div>
       <p class="qhint hidden" id="expandBudgetNote" style="margin-top:10px"></p>
       <div id="expanded"></div>
+    </div>
+
+    <div id="proveActions" class="hidden" style="margin-top:16px">
+      <button type="button" class="btn ghost" id="proveResults">Prove answer parity</button>
+      <span class="qhint" style="margin-left:8px">Full file vs this compile (+ any expands) — optional, not an Agent run.</span>
     </div>
   </div>
 

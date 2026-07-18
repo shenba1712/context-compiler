@@ -115,6 +115,10 @@
   .btn.primary:hover{ background:var(--accent-dark); }
   .btn.ghost{ background:transparent; color:var(--accent); border:1px solid var(--border2); }
   .btn.ghost:hover{ border-color:var(--accent); background:var(--accent-soft); }
+  /* Power-path actions in the form row — present but quieter than primary/ghost. */
+  .btn.quiet{ background:transparent; color:var(--muted); border:0; padding:8px 12px; font-weight:500; font-size:13px;
+    text-decoration:underline; text-underline-offset:3px; text-decoration-color:var(--border2); }
+  .btn.quiet:hover{ color:var(--accent); text-decoration-color:var(--accent); }
   .btn:disabled{ opacity:.45; cursor:not-allowed; }
   .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-top:18px; }
 

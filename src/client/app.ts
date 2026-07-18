@@ -46,14 +46,23 @@ const NO_LLM_TITLE = "The server has no LLM API key configured. Everything else 
 /** Keep Prove + Run agent in sync with whether the server can call a model. */
 function setLlmDependentButtons(available: boolean): void {
   llmAvailable = available;
-  const proveBtn = $<HTMLButtonElement>("prove");
+  const proveTop = $<HTMLButtonElement>("prove");
+  const proveResults = $<HTMLButtonElement>("proveResults");
   const agentBtn = $<HTMLButtonElement>("goAgent");
-  proveBtn.disabled = !available;
+  proveTop.disabled = !available;
+  proveResults.disabled = !available;
   agentBtn.disabled = !available;
-  proveBtn.title = available
+  const proveTitle = available
     ? "Compare answers from the full file vs your Compile result (not Agent)"
     : NO_LLM_TITLE;
+  proveTop.title = available
+    ? "Power path: prove from file + budget without waiting on the results view"
+    : NO_LLM_TITLE;
+  proveResults.title = proveTitle;
   agentBtn.title = available ? "Let the model expand sections until it can answer" : NO_LLM_TITLE;
+  // Results-area Prove appears after a compile (when an LLM is available).
+  if (available && hasCompiledOnce) $("proveActions").classList.remove("hidden");
+  else if (!available) $("proveActions").classList.add("hidden");
 }
 
 async function loadConfig(): Promise<void> {
@@ -649,6 +658,7 @@ $<HTMLFormElement>("compileForm").addEventListener("submit", async (e) => {
     applyPresets(presets, null);
     renderDocSizeNote(d.raw_tokens, presets !== DEFAULT_PRESETS);
     $("resultsSec").classList.remove("hidden");
+    $("results").classList.remove("hidden");
     countUp($("sRaw"), d.raw_tokens);
     countUp($("sUsed"), d.tokens_used);
     countUp($("sPct"), Math.round(d.reduction_pct), "%");
@@ -677,13 +687,13 @@ $<HTMLFormElement>("compileForm").addEventListener("submit", async (e) => {
     renderMultiNote(d);
     renderFloorNote(d);
     bumpSavings(d);
+    hasCompiledOnce = true;
     setLlmDependentButtons(d.llm_available !== false);
     // Move focus (not just scroll) to the results heading so screen-reader
     // and keyboard users land where the sighted eye would.
     $("resultsSec").scrollIntoView({ behavior: "smooth", block: "start" });
     $("resultsHeading").focus();
     announce(`Compiled: ${d.reduction_pct}% fewer tokens, ${d.omitted_sections.length} sections omitted.`);
-    hasCompiledOnce = true;
   } catch (e) {
     hideLoading();
     // No prior successful result to fall back to — don't leave an empty
@@ -1230,7 +1240,21 @@ function renderOmitted(d: CompileApiResult): void {
 }
 
 let proveAbort: AbortController | null = null;
-$<HTMLButtonElement>("prove").onclick = async () => {
+
+const PROVE_IDLE = "Prove answer parity";
+const PROVE_TOP_IDLE = "Prove…";
+const PROVE_BUSY = "Asking the model twice…";
+
+function setProveButtonsBusy(busy: boolean): void {
+  const top = $<HTMLButtonElement>("prove");
+  const results = $<HTMLButtonElement>("proveResults");
+  top.disabled = busy || !llmAvailable;
+  results.disabled = busy || !llmAvailable;
+  top.textContent = busy ? PROVE_BUSY : PROVE_TOP_IDLE;
+  results.textContent = busy ? PROVE_BUSY : PROVE_IDLE;
+}
+
+async function runProveFlow(): Promise<void> {
   clearErr();
   const fd = formData();
   if (!fd) return fail("Pick a file and enter a question first.");
@@ -1239,9 +1263,7 @@ $<HTMLButtonElement>("prove").onclick = async () => {
   }
   proveAbort?.abort();
   proveAbort = new AbortController();
-  const proveBtn = $<HTMLButtonElement>("prove");
-  proveBtn.disabled = true;
-  proveBtn.textContent = "Asking the model twice…";
+  setProveButtonsBusy(true);
   announce("Asking the model twice, this can take a few seconds…");
   try {
     const resp = await fetch("/api/answer", { method: "POST", body: fd, signal: proveAbort.signal });
@@ -1249,6 +1271,14 @@ $<HTMLButtonElement>("prove").onclick = async () => {
       .json()
       .catch(() => ({ error: "Parity request failed." }) as AnswerApiResult);
     if (!resp.ok || d.error) throw new Error(await apiFailureMessage(resp, d));
+    // Parity lives inside resultsSec. If they haven't compiled yet (power-path
+    // Prove…), show only the parity panel — don't unveil the empty compile shell.
+    $("resultsSec").classList.remove("hidden");
+    if (hasCompiledOnce) {
+      $("results").classList.remove("hidden");
+    } else {
+      $("results").classList.add("hidden");
+    }
     $("parity").classList.remove("hidden");
     $("parityModel").textContent = d.model;
     $("ansFull").textContent = d.full.answer;
@@ -1284,10 +1314,12 @@ $<HTMLButtonElement>("prove").onclick = async () => {
     if (e instanceof DOMException && e.name === "AbortError") return;
     fail(e instanceof Error ? e.message : String(e));
   } finally {
-    proveBtn.disabled = !llmAvailable;
-    proveBtn.textContent = "Prove answer parity";
+    setProveButtonsBusy(false);
   }
-};
+}
+
+$<HTMLButtonElement>("prove").onclick = () => void runProveFlow();
+$<HTMLButtonElement>("proveResults").onclick = () => void runProveFlow();
 
 loadConfig().then(() => {
   loadSamples();
