@@ -960,7 +960,7 @@ async function testRecallEval() {
   const { runRecallEval } = await import("../eval/recall.js");
   const report = await runRecallEval(1);
   assert.equal(report.failed.length, 0, `all recall fixtures must pass: ${JSON.stringify(report.failed)}`);
-  assert.ok(report.total >= 8, "fixture set should stay large enough to catch regressions");
+  assert.ok(report.total >= 15, "fixture set should stay large enough to catch regressions");
   console.log(`  recall eval ok: ${report.passed}/${report.total} hit@budget`);
 }
 
