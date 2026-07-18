@@ -71,12 +71,29 @@ async function loadSamples(): Promise<void> {
 
 // Known up front (not just after a failed click, or worse, left fully
 // enabled on the keyless default deploy this project's headline is built
-// around) so "Prove answer parity" is correctly disabled + explained from
-// the moment the page loads, not only after the first compile.
+// around) so LLM-only actions are correctly disabled + explained from the
+// moment the page loads, not only after the first compile.
 let maxFileBytes = 20 * 1024 * 1024;
+let llmAvailable = true;
+
+const NO_LLM_TITLE = "The server has no LLM API key configured. Everything else works without one.";
+
+/** Keep Prove + Run agent in sync with whether the server can call a model. */
+function setLlmDependentButtons(available: boolean): void {
+  llmAvailable = available;
+  const proveBtn = $<HTMLButtonElement>("prove");
+  const agentBtn = $<HTMLButtonElement>("goAgent");
+  proveBtn.disabled = !available;
+  agentBtn.disabled = !available;
+  proveBtn.title = available
+    ? "Answer the question from the full file vs the compiled context"
+    : NO_LLM_TITLE;
+  agentBtn.title = available
+    ? "Let the model expand sections until it can answer"
+    : NO_LLM_TITLE;
+}
 
 async function loadConfig(): Promise<void> {
-  const proveBtn = $<HTMLButtonElement>("prove");
   try {
     const resp = await fetch("/api/config");
     const cfg: {
@@ -101,13 +118,10 @@ async function loadConfig(): Promise<void> {
         field.value = getDemoToken();
       }
     }
-    proveBtn.disabled = !cfg.llm_available;
-    proveBtn.title = cfg.llm_available
-      ? "Answer the question from the full file vs the compiled context"
-      : "The server has no LLM API key configured. Everything else works without one.";
+    setLlmDependentButtons(Boolean(cfg.llm_available));
   } catch (e) {
     console.warn("Could not load server config:", e);
-    // Leave the button enabled — worst case a click surfaces the real error.
+    // Leave the buttons enabled — worst case a click surfaces the real error.
   }
 }
 
@@ -589,12 +603,7 @@ $<HTMLFormElement>("compileForm").addEventListener("submit", async (e) => {
     renderMultiNote(d);
     renderFloorNote(d);
     bumpSavings(d);
-    const proveBtn = $<HTMLButtonElement>("prove");
-    proveBtn.disabled = d.llm_available === false;
-    proveBtn.title =
-      d.llm_available === false
-        ? "The server has no LLM API key configured. Everything else works without one."
-        : "Answer the question from the full file vs the compiled context";
+    setLlmDependentButtons(d.llm_available !== false);
     // Move focus (not just scroll) to the results heading so screen-reader
     // and keyboard users land where the sighted eye would.
     $("resultsSec").scrollIntoView({ behavior: "smooth", block: "start" });
@@ -773,7 +782,7 @@ async function runAgentFlow(): Promise<void> {
     if (e instanceof DOMException && e.name === "AbortError") return;
     agentError(e instanceof Error ? e.message : String(e));
   } finally {
-    btn.disabled = false;
+    btn.disabled = !llmAvailable;
     btn.textContent = "Run agent ▸";
     $<HTMLButtonElement>("cancelGo").classList.add("hidden");
   }
@@ -1071,7 +1080,7 @@ $<HTMLButtonElement>("prove").onclick = async () => {
     if (e instanceof DOMException && e.name === "AbortError") return;
     fail(e instanceof Error ? e.message : String(e));
   } finally {
-    proveBtn.disabled = false;
+    proveBtn.disabled = !llmAvailable;
     proveBtn.textContent = "Prove answer parity";
   }
 };

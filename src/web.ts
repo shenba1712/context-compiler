@@ -17,7 +17,7 @@ import { runAgent } from "./agent.js";
 import { BUDGET_FLOORS, MAX_FILE_BYTES, clampBudget } from "./config.js";
 import { ConversionError, ConverterBusyError, converterAvailable } from "./convert.js";
 import { intEnv, numEnv, trustProxyFromEnv } from "./env.js";
-import { answerModel, complete, hasLlm, LlmBusyError, releaseLlmJob, tryAcquireLlmJob } from "./llm.js";
+import { answerModel, complete, hasLlm, LlmBusyError, LlmUnavailableError, releaseLlmJob, tryAcquireLlmJob } from "./llm.js";
 import { log } from "./log.js";
 import { inc, snapshot } from "./metrics.js";
 import { compileContext, expandSection, fullMarkdown } from "./pipeline.js";
@@ -269,6 +269,11 @@ function errorResponse(res: express.Response, e: unknown, context: string) {
   if (e instanceof LlmBusyError) {
     res.setHeader("Retry-After", "5");
     return res.status(503).json({ error: e.message });
+  }
+  if (e instanceof LlmUnavailableError) {
+    res.setHeader("Retry-After", "30");
+    log.warn(`${context}: LLM unavailable`, { err: e.message });
+    return res.status(503).json({ error: e.publicMessage });
   }
   if (e instanceof ConverterBusyError) {
     res.setHeader("Retry-After", "5");
@@ -551,15 +556,24 @@ app.post("/api/agent", upload.single("file"), guardUpload, async (req, res) => {
     send("done", result);
   } catch (e) {
     // The stream is already open, so errors go out as an SSE event, not a status
-    // code. Conversion messages are pre-sanitized; anything else is generic.
+    // code. Conversion / LLM-unavailable messages are safe for clients; anything
+    // else stays generic.
     const msg =
       e instanceof ConversionError
         ? e.message
-        : e instanceof Error && /cancelled|aborted/i.test(e.message)
-          ? "Agent cancelled"
-          : "Internal server error.";
-    if (!(e instanceof ConversionError) && !/cancelled|aborted/i.test(String(e))) {
+        : e instanceof LlmUnavailableError
+          ? e.publicMessage
+          : e instanceof Error && /cancelled|aborted/i.test(e.message)
+            ? "Agent cancelled"
+            : "Internal server error.";
+    if (
+      !(e instanceof ConversionError) &&
+      !(e instanceof LlmUnavailableError) &&
+      !/cancelled|aborted/i.test(String(e))
+    ) {
       log.error("agent failed", { err: e instanceof Error ? e.message : String(e) });
+    } else if (e instanceof LlmUnavailableError) {
+      log.warn("agent: LLM unavailable", { err: e.message });
     }
     send("error", { error: msg });
   } finally {
