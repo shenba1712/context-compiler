@@ -37,6 +37,8 @@ export interface AgentResult {
   raw_tokens: number; // whole-file token count, for the "vs dumping it all" compare
   final_context_tokens: number; // size of the context the final answer was written from
   stopped_reason: StopReason;
+  /** Server-only: context the final answer was written from (for optional parity). */
+  final_context?: string;
 }
 
 type CompleteFn = (prompt: string, opts?: { maxTokens?: number; signal?: AbortSignal }) => Promise<string>;
@@ -271,5 +273,7 @@ export async function runAgent(
     raw_tokens: rawTokens,
     final_context_tokens: countTokens(finalContext),
     stopped_reason: stopped,
+    // Web demo peels this off for optional post-run parity; not sent to the browser.
+    final_context: finalContext,
   };
 }

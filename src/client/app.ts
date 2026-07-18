@@ -51,7 +51,7 @@ function setLlmDependentButtons(available: boolean): void {
   proveBtn.disabled = !available;
   agentBtn.disabled = !available;
   proveBtn.title = available
-    ? "Answer the question from the full file vs the compiled context"
+    ? "Compare answers from the full file vs your Compile result (not Agent)"
     : NO_LLM_TITLE;
   agentBtn.title = available ? "Let the model expand sections until it can answer" : NO_LLM_TITLE;
 }
@@ -264,7 +264,6 @@ function renderQChips(questions: string[]): void {
     box.appendChild(b);
   });
   box.classList.remove("hidden");
-  $("qhint").classList.remove("hidden");
 }
 
 // Highlight whichever chip matches the current text (if any).
@@ -276,9 +275,8 @@ function syncQChips(): void {
 }
 $<HTMLTextAreaElement>("task").addEventListener("input", syncQChips);
 
-// #task replaced a single-line <input> so multi-question tasks (which the
-// copy right below it actively encourages — "separate with ? or new lines")
-// are actually comfortable to type and read, not squeezed into one line.
+// #task replaced a single-line <input> so multi-question tasks
+// (see “Tips for questions”) are comfortable to type and read.
 // Grow with content instead of scrolling internally; call after every value
 // change, including the programmatic ones (sample select, chip click).
 function autoGrowTask(): void {
@@ -575,20 +573,14 @@ function refreshExpandBudgetNote(): void {
     return;
   }
   const total = lastCompiledTokens + expandSum;
-  const n = proveExpandedIds.size;
   el.innerHTML =
-    "<strong>Prove context is now larger than the slider.</strong> Compile used <strong>" +
+    "Prove context ≈ <strong>" +
     lastCompiledTokens.toLocaleString() +
-    "</strong> tokens; " +
-    n +
-    " expand" +
-    (n === 1 ? "" : "s") +
-    " add <strong>+" +
+    "</strong> + <strong>" +
     expandSum.toLocaleString() +
-    "</strong> → about <strong>" +
+    "</strong> expands → <strong>" +
     total.toLocaleString() +
-    "</strong> tokens when you Prove answer parity. " +
-    "The budget slider stays put — it only controls Compile / Agent start, not these manual expands.";
+    "</strong> tokens (slider unchanged).";
   el.classList.remove("hidden");
 }
 
@@ -674,11 +666,8 @@ $<HTMLFormElement>("compileForm").addEventListener("submit", async (e) => {
     });
     $("cacheBadge").textContent = d.cache_hit ? "⚡ conversion cached" : "converted fresh";
     $("cacheBadge").title = d.cache_hit
-      ? "This file was already converted, so we reused the cached markdown and skipped conversion."
-      : "First time we saw this file, so we converted it and cached the result.";
-    $("cacheNote").innerHTML = d.cache_hit
-      ? "⚡ <strong>Conversion cached.</strong> We recognised this exact file (matched by content hash), so we reused the markdown from a previous run instead of re-converting it. Only the file→markdown step is cached — your question was still ranked fresh just now."
-      : "<strong>Converted fresh.</strong> First time we've seen this exact file, so we converted it to markdown and cached it by content hash. Ask another question on the same file and this step is skipped (you'll see “⚡ conversion cached”). Edit the file and it converts again.";
+      ? "This file was already converted — reused cached markdown. Ranking still ran fresh."
+      : "First time we saw this file — converted and cached by content hash.";
     $("rankBadge").textContent = "bm25 ranking";
     $("omitBadge").textContent = d.omitted_sections.length + " sections omitted";
     $("out").textContent = d.markdown;
@@ -714,6 +703,9 @@ $<HTMLFormElement>("compileForm").addEventListener("submit", async (e) => {
 // answer. We render each step as it arrives, not after the whole run.
 let agentAbort: AbortController | null = null;
 let agentTokens = 0;
+/** Opaque handle from the last successful agent `done` event (for opt-in compare). */
+let agentParityHandle: string | null = null;
+let agentParityAbort: AbortController | null = null;
 
 const AGENT_ACTIONS: Record<AgentStep["action"], { icon: string; cls: string; label: string }> = {
   compile: { icon: "▤", cls: "a-compile", label: "compile_context" },
@@ -731,13 +723,21 @@ const STOP_TEXT: Record<AgentRunResult["stopped_reason"], string> = {
 
 function startAgentPanel(): void {
   agentTokens = 0;
+  agentParityHandle = null;
+  agentParityAbort?.abort();
   $("agentSec").classList.remove("hidden");
   $("aSteps").innerHTML = "";
   $("aAnswerWrap").classList.add("hidden");
+  $("aParityActions").classList.add("hidden");
+  $("aParity").classList.add("hidden");
+  $("aParityErr").classList.add("hidden");
   $("aErr").classList.add("hidden");
   $("aTokens").textContent = "0";
   $("aWhole").textContent = "";
   $("aBar").style.width = "0%";
+  const parityBtn = $<HTMLButtonElement>("aParityBtn");
+  parityBtn.disabled = !llmAvailable;
+  parityBtn.textContent = "Compare to full file";
   $<HTMLButtonElement>("cancelGo").classList.remove("hidden");
   $("agentSec").scrollIntoView({ behavior: "smooth", block: "start" });
   announce("Agent started.");
@@ -789,6 +789,12 @@ function onAgentDone(r: AgentRunResult): void {
     pct +
     "% of the file).";
   $("aAnswerWrap").classList.remove("hidden");
+  agentParityHandle = r.parity_handle ?? null;
+  if (agentParityHandle && llmAvailable) {
+    $("aParityActions").classList.remove("hidden");
+  } else {
+    $("aParityActions").classList.add("hidden");
+  }
   $("agentHeading").focus();
   announce(
     "Agent finished — read " +
@@ -873,6 +879,54 @@ async function runAgentFlow(): Promise<void> {
   }
 }
 $<HTMLButtonElement>("goAgent").onclick = () => void runAgentFlow();
+
+$<HTMLButtonElement>("aParityBtn").onclick = async () => {
+  clearErr();
+  $("aParityErr").classList.add("hidden");
+  if (!agentParityHandle) {
+    const el = $("aParityErr");
+    el.textContent = "Run the agent again to unlock comparison.";
+    el.classList.remove("hidden");
+    return;
+  }
+  agentParityAbort?.abort();
+  agentParityAbort = new AbortController();
+  const btn = $<HTMLButtonElement>("aParityBtn");
+  btn.disabled = true;
+  btn.textContent = "Comparing…";
+  announce("Comparing agent context to the full file…");
+  try {
+    const resp = await fetch("/api/agent-parity", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ parity_handle: agentParityHandle }),
+      signal: agentParityAbort.signal,
+    });
+    const d: AgentParityResult = await resp
+      .json()
+      .catch(() => ({ error: "Comparison failed." }) as AgentParityResult);
+    if (!resp.ok || d.error) throw new Error(await apiFailureMessage(resp, d));
+    $("aParity").classList.remove("hidden");
+    $("aParityModel").textContent = d.model;
+    $("aAnsFull").textContent = d.full.answer;
+    applyLang($("aAnsFull"), d.full.answer);
+    $("aAnsFullCost").textContent = d.full.context_tokens.toLocaleString() + " context tokens";
+    $("aAnsAgent").textContent = d.agent.answer;
+    applyLang($("aAnsAgent"), d.agent.answer);
+    $("aAnsAgentCost").textContent = d.agent.context_tokens.toLocaleString() + " context tokens";
+    $("aParity").scrollIntoView({ behavior: "smooth", block: "nearest" });
+    announce("Agent vs full-file comparison ready.");
+  } catch (e) {
+    if (e instanceof DOMException && e.name === "AbortError") return;
+    const el = $("aParityErr");
+    el.textContent = e instanceof Error ? e.message : String(e);
+    el.classList.remove("hidden");
+    announce("Comparison error: " + el.textContent);
+  } finally {
+    btn.disabled = !llmAvailable || !agentParityHandle;
+    btn.textContent = "Compare to full file";
+  }
+};
 
 function renderSections(d: CompileApiResult): void {
   const wrap = $("sections");
@@ -1115,12 +1169,16 @@ function makeChip(o: SectionInfo, d: CompileApiResult, exp: HTMLElement): HTMLBu
       });
       const e: ExpandApiResult = await resp.json();
       if (e.error) throw new Error(e.error);
-      const blk = document.createElement("div");
+      const blk = document.createElement("details");
       blk.className = "expblk";
-      blk.innerHTML =
-        '<div class="t">expand_section("' + o.id + '") → ' + (e.tokens_used || "?") + " tokens</div>";
+      // First expand stays open so the user sees what they fetched; later ones
+      // stay collapsed so the page doesn’t flood with prose.
+      if (proveExpandedIds.size === 0) blk.open = true;
+      const sum = document.createElement("summary");
+      sum.textContent = o.id + " · " + lastCrumb(o.section) + " → " + (e.tokens_used || "?") + " tokens";
       const pre = document.createElement("pre");
       pre.textContent = e.markdown;
+      blk.appendChild(sum);
       blk.appendChild(pre);
       exp.appendChild(blk);
       b.classList.add("done");
@@ -1212,16 +1270,14 @@ $<HTMLButtonElement>("prove").onclick = async () => {
     const budget = Number($<HTMLInputElement>("budget").value);
     $("parityBudgetNote").innerHTML =
       expandedN > 0
-        ? "The <strong>compiled</strong> answer used your <strong>" +
-          budget.toLocaleString() +
-          "-token</strong> compile plus the omitted section" +
-          (expandedN === 1 ? "" : "s") +
-          " you expanded (<code>" +
+        ? "Compile path (+ expands <code>" +
           esc(d.compiled.expanded_ids!.join(", ")) +
-          "</code>). Raise the budget to fold more in automatically, or expand other chips and prove again."
-        : "The <strong>compiled</strong> answer is based only on what fit your <strong>" +
+          "</code>) on a <strong>" +
           budget.toLocaleString() +
-          "-token</strong> budget. If it looks thinner than the full-file answer, raise the budget and prove again — or expand omitted sections below, then prove again.";
+          "-token</strong> budget — not an Agent run."
+        : "Compile path only — what fit your <strong>" +
+          budget.toLocaleString() +
+          "-token</strong> budget. Not an Agent run.";
     $("parity").scrollIntoView({ behavior: "smooth", block: "nearest" });
     announce("Answer parity ready: both answers shown below.");
   } catch (e) {

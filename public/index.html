@@ -47,9 +47,8 @@
       <div class="c"><div class="n">3 · Pack</div><div class="h">Fit the token budget</div><div class="d">Best sections in, a manifest of what was left out.</div></div>
     </div>
     <div class="keynote">The compiled result is <strong>exactly what your AI agent receives instead of the whole file</strong>.
-      None of this needs an API key. A key unlocks one extra thing — <strong>Prove answer parity</strong> — where a model
-      answers your question twice, from the full file and from the compiled context, so you can confirm the
-      compression didn't change the answer.</div>
+      None of this needs an API key. A key unlocks <strong>Prove answer parity</strong> (full file vs your Compile result)
+      and <strong>Run agent</strong> (the model retrieves on its own).
   </div>
 </div>
 
@@ -79,8 +78,10 @@
     <label for="task" style="margin-top:20px">Question / task</label>
     <textarea id="task" name="task" rows="1" placeholder="e.g. What does the warranty not cover? Can the drone fly in rain?" autocomplete="off"></textarea>
     <div class="qchips hidden" id="qchips" role="group" aria-label="Suggested questions"></div>
-    <div class="qhint hidden" id="qhint">Suggested questions for this sample — click one, or type your own above.</div>
-    <div class="qhint">Asking several things at once? Separate them with <strong>?</strong> or new lines — each question is ranked on its own and its best sections merged in. Press <kbd>Enter</kbd> to compile, <kbd>Shift+Enter</kbd> for a new line.</div>
+    <details class="formhint">
+      <summary>Tips for questions</summary>
+      <p>Asking several things at once? Separate them with <strong>?</strong> or new lines — each question is ranked on its own. Press <kbd>Enter</kbd> to compile, <kbd>Shift+Enter</kbd> for a new line.</p>
+    </details>
 
     <label for="budget">Token budget <span style="font-weight:400;color:var(--faint)">— a ceiling, not a target</span></label>
     <div class="docsizenote hidden" id="docSizeNote"></div>
@@ -92,10 +93,8 @@
         <button type="button" class="bpre" data-v="8000" data-tier="deep" aria-pressed="false">deep dive <small>~8,000</small></button>
       </div>
     </div>
-    <input type="range" id="budget" name="budget" min="200" max="20000" step="50" value="4000"
-      aria-describedby="budgetTip">
+    <input type="range" id="budget" name="budget" min="200" max="20000" step="50" value="4000">
     <div class="sliderscale" aria-hidden="true"><span>200</span><span>20,000 tokens</span></div>
-    <div id="budgetTip" style="font-size:12px;color:var(--faint);margin-top:4px">Tip: budget by question breadth, not file size. A factual lookup rarely needs more than ~1,000 tokens.</div>
 
     <div class="row">
       <button type="submit" class="btn primary" id="go">Compile once</button>
@@ -104,17 +103,15 @@
       <button type="button" class="btn ghost" id="prove">Prove answer parity</button>
       <span class="saved hidden" id="sessionSaved" style="margin-left:auto" role="status"></span>
     </div>
-    <div class="qhint" id="agentHint"><strong>Compile once</strong> ranks and packs at the budget you set.
-      <strong>Run agent</strong> ignores the slider — the model picks a small budget, reads the manifest, and
-      expands sections on its own until it can answer. Watch it work below.</div>
+    <p class="qhint" id="agentHint"><strong>Compile</strong> uses your budget. <strong>Prove</strong> checks that Compile (plus any expands) against the full file. <strong>Agent</strong> is separate — it retrieves on its own.</p>
     <details class="expectbox" id="expectBox">
       <summary>Limits &amp; free-tier notes</summary>
       <div class="expectbody" id="expectBody">
         <p>This is a <strong>public free-tier demo</strong> — no accounts, shared capacity. Limits below are enforced per IP on this server; provider free tiers add their own caps on top.</p>
         <ul>
           <li><strong>Compile once</strong> and <strong>expand</strong> are free of model cost (local BM25). They share a pool of about <span data-k="compile_n">30</span> requests every <span data-k="window">5</span> minutes.</li>
-          <li><strong>Prove answer parity</strong> calls the server’s free-tier LLM keys. Each prove costs <span data-k="cost_answer">4</span> of those points — roughly <span data-k="prove_n">7</span> proves per <span data-k="window">5</span> minutes. The full-file side is capped at about <span data-k="answer_cap">60,000</span> tokens.</li>
-          <li><strong>Run agent</strong> also uses those free-tier keys and is heavier: <span data-k="cost_agent">8</span> points each — roughly <span data-k="agent_n">3</span> runs per <span data-k="window">5</span> minutes. At most <span data-k="llm_conc">2</span> LLM jobs run at once on this host.</li>
+          <li><strong>Prove answer parity</strong> checks your <em>Compile</em> result (not Agent) using free-tier LLM keys. Each prove costs <span data-k="cost_answer">4</span> of those points — roughly <span data-k="prove_n">7</span> proves per <span data-k="window">5</span> minutes. The full-file side is capped at about <span data-k="answer_cap">60,000</span> tokens.</li>
+          <li><strong>Run agent</strong> also uses those free-tier keys and is heavier: <span data-k="cost_agent">8</span> points each — roughly <span data-k="agent_n">3</span> runs per <span data-k="window">5</span> minutes. After a run you can optionally <strong>Compare to full file</strong> (same cost as Prove). At most <span data-k="llm_conc">2</span> LLM jobs run at once on this host.</li>
           <li id="expectLlmLine">If Gemini/OpenRouter free quota is exhausted, Prove and Agent may return 429/503 even when our rate limit still has room — wait a few minutes and retry.</li>
         </ul>
       </div>
@@ -134,27 +131,24 @@
     <div id="budgetStaleNote" class="floornote hidden" role="status"></div>
     <div class="stats">
       <div class="stat"><div class="v" id="sRaw" style="color:var(--muted)">–</div><div class="l">raw tokens</div></div>
-      <div class="stat"><div class="v" id="sUsed" style="color:var(--green)">–</div><div class="l">compiled tokens <span aria-hidden="true" style="color:var(--faint);font-weight:400">ⓘ</span></div></div>
+      <div class="stat"><div class="v" id="sUsed" style="color:var(--green)">–</div><div class="l">compiled tokens</div></div>
       <div class="stat"><div class="v" id="sPct" style="color:var(--green)">–</div><div class="l">reduction</div></div>
       <div class="stat"><div class="v" id="sCost">–</div><div class="l">cost / read <span id="price" style="color:var(--faint)"></span></div></div>
     </div>
-    <p class="qhint" id="compiledTokensNote" style="margin-top:6px">
-      <strong>Why is "compiled tokens" more than the sections below add up to?</strong>
-      It's the exact text sent to the AI: the selected sections <i>plus</i> the wrapper comments and the
-      omitted-sections manifest — not just the section text alone.
-    </p>
+    <details class="formhint" style="margin-top:6px">
+      <summary>Why compiled tokens can exceed the section sum</summary>
+      <p>It’s the exact text sent to the AI: selected sections <i>plus</i> wrapper comments and the omitted-sections manifest.</p>
+    </details>
     <div class="bars">
       <div class="brow"><div class="blab">raw file</div><div class="btrack"><div class="bar raw" id="barRaw" style="width:100%"></div></div><span class="bval" id="barRawVal">–</span></div>
       <div class="brow"><div class="blab">compiled</div><div class="btrack"><div class="bar cmp" id="barC" style="width:100%"></div></div><span class="bval" id="barCVal">–</span></div>
     </div>
     <div class="badges">
-      <strong style="font-size:14px;margin-right:4px">Compiled context</strong>
       <span class="badge" id="cacheBadge"></span>
       <span class="badge" id="rankBadge"></span>
       <span class="badge" id="omitBadge"></span>
       <button type="button" id="viewToggle" class="btn ghost" style="margin-left:auto;font-size:12px;padding:4px 12px" aria-pressed="false" title="Toggle between the readable section cards and the exact markdown string your AI agent receives">See exact text sent to AI</button>
     </div>
-    <div id="cacheNote" style="font-size:12px;color:var(--faint);margin-top:6px"></div>
     <div class="floornote hidden" id="multiNote"></div>
     <div class="floornote hidden" id="floorNote"></div>
     <div id="sections"></div>
@@ -162,7 +156,7 @@
 
     <div id="omittedRow" class="hidden" style="margin-top:16px">
       <strong style="font-size:13px">Omitted sections</strong>
-      <span class="badge">click any to fetch it live — this is the <code>expand_section</code> tool</span>
+      <span class="badge">click to expand</span>
       <div id="omitChips" style="margin-top:8px"></div>
       <p class="qhint hidden" id="expandBudgetNote" style="margin-top:10px"></p>
       <div id="expanded"></div>
@@ -171,13 +165,13 @@
 
   <div class="panel hidden" id="parity" style="margin-top:20px">
     <strong style="font-size:14px">Answer parity</strong> <span class="badge" id="parityModel"></span>
-    <p class="sub" style="margin:6px 0 0">The same question, answered from the full file vs the compiled context.</p>
+    <p class="sub" style="margin:6px 0 0">Full file vs your <strong>Compile</strong> context (and any sections you expanded) — not an Agent run.</p>
     <div class="duo">
       <div><h3>From the FULL file</h3><pre id="ansFull"></pre><div class="cost full" id="ansFullCost"></div></div>
       <div><h3 id="ansCompiledHeading">From the COMPILED context</h3><pre id="ansCompiled"></pre><div class="cost small" id="ansCompiledCost"></div></div>
     </div>
     <p class="qhint" id="parityBudgetNote" style="margin-top:12px">
-      The compiled answer only sees what fit your token budget (plus any omitted sections you expanded below). If it looks thinner than the full-file answer, raise the budget and prove again — or expand the omitted sections that look relevant, then prove again.
+      This proves the Compile path. For Agent, use Run agent — that’s a separate retrieval loop.
     </p>
   </div>
 </div></section>
@@ -202,6 +196,19 @@
     <div class="alabel">Answer</div>
     <div id="aAnswer" class="aanswer"></div>
     <div id="aStopped" class="qhint"></div>
+    <div id="aParityActions" class="hidden" style="margin-top:12px">
+      <button type="button" class="btn ghost" id="aParityBtn">Compare to full file</button>
+      <span class="qhint" style="margin-left:8px">Same question from the full file vs the agent’s context — optional, costs like Prove.</span>
+    </div>
+    <div id="aParity" class="hidden" style="margin-top:16px">
+      <strong style="font-size:14px">Agent vs full file</strong> <span class="badge" id="aParityModel"></span>
+      <p class="sub" style="margin:6px 0 0">Fresh answers from each context (not the agent’s own reply above).</p>
+      <div class="duo">
+        <div><h3>From the FULL file</h3><pre id="aAnsFull"></pre><div class="cost full" id="aAnsFullCost"></div></div>
+        <div><h3>From the AGENT context</h3><pre id="aAnsAgent"></pre><div class="cost small" id="aAnsAgentCost"></div></div>
+      </div>
+    </div>
+    <div class="err hidden" id="aParityErr" role="alert" style="margin-top:10px"></div>
   </div>
   <div class="err hidden" id="aErr" role="alert"></div>
 </div></div></section>

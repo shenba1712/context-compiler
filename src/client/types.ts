@@ -123,4 +123,14 @@ interface AgentRunResult {
   raw_tokens: number;
   final_context_tokens: number;
   stopped_reason: "confident" | "max_steps" | "token_ceiling" | "whole_file";
+  /** Opaque handle for optional POST /api/agent-parity (server holds the context). */
+  parity_handle?: string;
+}
+
+/** Response from POST /api/agent-parity. */
+interface AgentParityResult {
+  model: string;
+  full: { answer: string; context_tokens: number };
+  agent: { answer: string; context_tokens: number };
+  error?: string;
 }

@@ -693,6 +693,15 @@ async function testAgentSseEndpoint() {
     assert.ok(done, "a done event closes the stream");
     assert.ok(done!.data.answer.includes("90 days"), "final answer arrives in the done event");
     assert.ok(done!.data.tokens_read < done!.data.raw_tokens, "reads less than the whole file");
+    assert.ok(
+      typeof done!.data.parity_handle === "string" && /^[a-f0-9]{32}$/.test(done!.data.parity_handle),
+      "done event includes an opaque parity_handle for optional compare"
+    );
+    assert.equal(
+      done!.data.final_context,
+      undefined,
+      "agent context must not be sent over SSE (only the handle)"
+    );
     console.log("  agent SSE ok: /api/agent streams live steps then the final answer");
   } finally {
     server.close();
