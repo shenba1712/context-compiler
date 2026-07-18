@@ -74,7 +74,8 @@ you) calls `expand_section` with the flagged id; correct answer appears.
 > answer: every response ends with a manifest of what was omitted. The
 > agent sees what it didn't see, calls expand_section, and recovers.
 > Trimming is transparent, never silent. That's the difference between a
-> demo and infrastructure."
+> demo and infrastructure. Same story if a judge feeds an injected PDF —
+> markers mitigate; the manifest is how you recover."
 
 ### 2:35–2:50 — Close (deck slide 6 or the demo page)
 

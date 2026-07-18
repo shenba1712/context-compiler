@@ -37,11 +37,21 @@ async function loadSamples(): Promise<void> {
 // enabled on the keyless default deploy this project's headline is built
 // around) so "Prove answer parity" is correctly disabled + explained from
 // the moment the page loads, not only after the first compile.
+let maxFileBytes = 20 * 1024 * 1024;
+
 async function loadConfig(): Promise<void> {
   const proveBtn = $<HTMLButtonElement>("prove");
   try {
     const resp = await fetch("/api/config");
-    const cfg: { llm_available: boolean } = await resp.json();
+    const cfg: { llm_available: boolean; max_file_bytes?: number } = await resp.json();
+    if (typeof cfg.max_file_bytes === "number" && cfg.max_file_bytes > 0) {
+      maxFileBytes = cfg.max_file_bytes;
+      const label = document.querySelector('label[for="file"]');
+      if (label) {
+        const mb = Math.round(maxFileBytes / (1024 * 1024));
+        label.textContent = `Upload your file (pdf, docx, xlsx, pptx, html, csv, txt, md) — max ${mb} MB`;
+      }
+    }
     proveBtn.disabled = !cfg.llm_available;
     proveBtn.title = cfg.llm_available
       ? "Answer the question from the full file vs the compiled context"
@@ -113,7 +123,6 @@ document.querySelectorAll<HTMLButtonElement>(".copybtn").forEach((btn) => {
 });
 
 const blobCache: Record<string, Blob> = {};
-const MAX_FILE_BYTES = 50 * 1024 * 1024;
 
 function renderSamples(): void {
   const wrap = $("samples");
@@ -305,6 +314,17 @@ function fail(m: string): void {
   $("err").classList.remove("hidden");
   announce(m, true);
 }
+
+/** Turn HTTP status + JSON error body into a human message (429/503 aware). */
+async function apiFailureMessage(resp: Response, body: { error?: string } | null): Promise<string> {
+  const base = body?.error || `Request failed (${resp.status})`;
+  if (resp.status === 429) return base + " Wait a minute, then try again.";
+  if (resp.status === 503) {
+    const ra = resp.headers.get("Retry-After");
+    return base + (ra ? ` Retry in about ${ra}s.` : " Retry in a few seconds.");
+  }
+  return base;
+}
 function clearErr(): void {
   $("err").classList.add("hidden");
   $("fileErr").classList.add("hidden");
@@ -364,9 +384,10 @@ const ALLOWED_EXT_RE = /\.(docx|pdf|xlsx|pptx|csv|md|markdown|txt|html?)$/i;
 $<HTMLInputElement>("file").addEventListener("change", () => {
   const f = $<HTMLInputElement>("file").files?.[0];
   $("fileErr").classList.add("hidden");
-  if (f && f.size > MAX_FILE_BYTES) {
+  if (f && f.size > maxFileBytes) {
+    const mb = Math.round(maxFileBytes / (1024 * 1024));
     $("fileErr").textContent =
-      `"${f.name}" is ${(f.size / 1e6).toFixed(1)} MB — over the 50 MB limit. Pick a smaller file.`;
+      `"${f.name}" is ${(f.size / 1e6).toFixed(1)} MB — over the ${mb} MB limit. Pick a smaller file.`;
     $("fileErr").classList.remove("hidden");
     $<HTMLInputElement>("file").value = "";
     return;
@@ -478,8 +499,8 @@ $<HTMLFormElement>("compileForm").addEventListener("submit", async (e) => {
   showLoading();
   try {
     const resp = await fetch("/api/compile", { method: "POST", body: fd, signal: compileAbort.signal });
-    const d: CompileApiResult = await resp.json();
-    if (d.error) throw new Error(d.error);
+    const d: CompileApiResult = await resp.json().catch(() => ({ error: "Compile failed." }) as CompileApiResult);
+    if (!resp.ok || d.error) throw new Error(await apiFailureMessage(resp, d));
     hideLoading();
     // Now that the real size is known (for an upload, this is the FIRST time
     // it's known at all), refresh the presets to match — without moving the
@@ -692,7 +713,7 @@ async function runAgentFlow(): Promise<void> {
     if (!ctype.includes("text/event-stream") || !resp.body) {
       // A guard rejected the request before the stream opened → JSON error body.
       const d = (await resp.json().catch(() => ({ error: "Agent request failed." }))) as { error?: string };
-      throw new Error(d.error ?? "Agent request failed.");
+      throw new Error(await apiFailureMessage(resp, d));
     }
     await consumeSse(resp.body, (event, data) => {
       if (event === "step") onAgentStep(data as AgentStep);
@@ -984,8 +1005,8 @@ $<HTMLButtonElement>("prove").onclick = async () => {
   announce("Asking the model twice, this can take a few seconds…");
   try {
     const resp = await fetch("/api/answer", { method: "POST", body: fd, signal: proveAbort.signal });
-    const d: AnswerApiResult = await resp.json();
-    if (d.error) throw new Error(d.error);
+    const d: AnswerApiResult = await resp.json().catch(() => ({ error: "Parity request failed." }) as AnswerApiResult);
+    if (!resp.ok || d.error) throw new Error(await apiFailureMessage(resp, d));
     $("parity").classList.remove("hidden");
     $("parityModel").textContent = d.model;
     $("ansFull").textContent = d.full.answer;

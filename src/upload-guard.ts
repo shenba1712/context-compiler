@@ -131,7 +131,19 @@ export function validateUpload(originalName: string, buf: Buffer): void {
       throw new UploadRejected(`"${originalName}" isn't a valid ${ext} file (bad signature).`, 415);
     }
     const total = zipUncompressedTotal(buf);
-    if (total !== null && (total > MAX_UNCOMPRESSED || total / buf.length > MAX_RATIO)) {
+    if (total === null) {
+      // Can't verify declared sizes. On Linux, convert.ts's ulimit -v is the
+      // backstop; elsewhere (or with the mem cap disabled) refuse rather than
+      // risk an unbounded inflate inside the parser.
+      const memCap = process.env.CC_CONVERT_MEM_CAP_KB;
+      const memCapOff = memCap === "0";
+      if (process.platform !== "linux" || memCapOff) {
+        throw new UploadRejected(
+          `Couldn't verify "${originalName}" safely (unreadable ZIP directory). Rejected.`,
+          415
+        );
+      }
+    } else if (total > MAX_UNCOMPRESSED || total / buf.length > MAX_RATIO) {
       throw new UploadRejected(
         "This file expands to far more data than its size suggests (possible decompression " +
           "bomb) and was rejected.",

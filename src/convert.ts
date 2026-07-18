@@ -18,6 +18,8 @@ import { statSync } from "node:fs";
 
 import { MAX_FILE_BYTES } from "./config.js";
 import { intEnv } from "./env.js";
+import { log } from "./log.js";
+import { inc } from "./metrics.js";
 
 const CONVERT_TIMEOUT_MS = intEnv("CC_CONVERT_TIMEOUT_S", 120, 1) * 1000;
 const MARKITDOWN = process.env.CC_MARKITDOWN_CMD ?? "markitdown";
@@ -95,7 +97,8 @@ export async function convertToMarkdown(path: string): Promise<string> {
             // Log the real reason server-side; return a generic, safe message.
             // Raw stderr contains a Python traceback with absolute server
             // paths and dependency versions — recon fuel we must not leak.
-            console.error(`markitdown failed for ${path}:`, (stderr || err.message).slice(0, 2000));
+            inc("conversion_failed");
+            log.error("markitdown conversion failed", { detail: (stderr || err.message).slice(0, 2000) });
             const reason = err.killed
               ? `conversion timed out after ${CONVERT_TIMEOUT_MS / 1000}s`
               : "the file may be corrupt, password-protected, or an unsupported variant";
@@ -117,4 +120,29 @@ export async function convertToMarkdown(path: string): Promise<string> {
   } finally {
     release();
   }
+}
+
+// Health check: is the markitdown converter actually runnable? Result is cached
+// briefly so /healthz can be hit often without spawning a process each time.
+// Concurrent callers on a cold cache share one in-flight probe.
+let converterCache: { ok: boolean; at: number } | null = null;
+let converterInflight: Promise<boolean> | null = null;
+const CONVERTER_CHECK_TTL_MS = 30_000;
+
+export function converterAvailable(): Promise<boolean> {
+  const now = Date.now();
+  if (converterCache && now - converterCache.at < CONVERTER_CHECK_TTL_MS) {
+    return Promise.resolve(converterCache.ok);
+  }
+  if (converterInflight) return converterInflight;
+  converterInflight = new Promise<boolean>((resolve) => {
+    execFile(MARKITDOWN, ["--version"], { timeout: 5000 }, (err) => {
+      const ok = !err;
+      converterCache = { ok, at: Date.now() };
+      resolve(ok);
+    });
+  }).finally(() => {
+    converterInflight = null;
+  });
+  return converterInflight;
 }

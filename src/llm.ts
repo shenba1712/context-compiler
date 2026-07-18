@@ -21,16 +21,17 @@
  */
 import Anthropic from "@anthropic-ai/sdk";
 
-// Per-provider default models. All are overridable by the matching env var.
-// Gemini Flash is a good free-tier default; swap to gemini-2.5-flash-lite via
-// CC_GEMINI_MODEL for higher request-per-day limits at slightly lower quality.
+import { intEnv } from "./env.js";
+import { log } from "./log.js";
+import { inc } from "./metrics.js";
+
 const GEMINI_DEFAULT = "gemini-2.5-flash";
-// NOTE: OpenRouter's *free* model IDs (the ":free" suffix) come and go without
-// notice — if this one stops working, set CC_OPENROUTER_MODEL to any current
-// free (or paid) model from https://openrouter.ai/models.
 const OPENROUTER_DEFAULT = "meta-llama/llama-3.3-70b-instruct:free";
 const ANTHROPIC_DEFAULT = "claude-haiku-4-5-20251001";
 const OPENAI_DEFAULT = "gpt-4o-mini";
+
+const LLM_TIMEOUT_MS = intEnv("CC_LLM_TIMEOUT_MS", 30_000, 1_000, 300_000);
+const MAX_CONCURRENT_LLM = intEnv("CC_MAX_CONCURRENT_LLM", 2, 1, 32);
 
 type OpenAICompatProvider = {
   name: string;
@@ -43,9 +44,26 @@ type OpenAICompatProvider = {
 type AnthropicProvider = { name: string; kind: "anthropic"; apiKey: string; model: string };
 type Provider = OpenAICompatProvider | AnthropicProvider;
 
-// Build the ordered list of usable providers from the environment. Only keys
-// that are actually set produce an entry, so the list is exactly the providers
-// we can really call, already in failover order.
+/** Thrown when too many LLM-heavy demo jobs are already in flight. */
+export class LlmBusyError extends Error {
+  constructor(message = "Too many AI requests in flight — please retry in a few seconds.") {
+    super(message);
+  }
+}
+
+let activeLlmJobs = 0;
+
+/** Bound concurrent agent/parity/rerank work so one host can't melt the API bill. */
+export function tryAcquireLlmJob(): boolean {
+  if (activeLlmJobs >= MAX_CONCURRENT_LLM) return false;
+  activeLlmJobs += 1;
+  return true;
+}
+
+export function releaseLlmJob(): void {
+  activeLlmJobs = Math.max(0, activeLlmJobs - 1);
+}
+
 function providerChain(): Provider[] {
   const chain: Provider[] = [];
 
@@ -54,8 +72,6 @@ function providerChain(): Provider[] {
     chain.push({
       name: "gemini",
       kind: "openai-compat",
-      // Google's OpenAI-compatibility endpoint — same /chat/completions shape.
-      // Overridable for proxies/regional endpoints.
       baseUrl: (
         process.env.CC_GEMINI_BASE_URL ?? "https://generativelanguage.googleapis.com/v1beta/openai"
       ).replace(/\/+$/, ""),
@@ -71,8 +87,6 @@ function providerChain(): Provider[] {
       baseUrl: (process.env.CC_OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1").replace(/\/+$/, ""),
       apiKey: process.env.OPENROUTER_API_KEY,
       model: process.env.CC_OPENROUTER_MODEL ?? OPENROUTER_DEFAULT,
-      // Optional attribution headers OpenRouter uses for its dashboard; harmless
-      // if unset. Only added when the operator provides them.
       headers: process.env.CC_OPENROUTER_REFERER
         ? { "HTTP-Referer": process.env.CC_OPENROUTER_REFERER, "X-Title": "Context Compiler" }
         : undefined,
@@ -88,8 +102,6 @@ function providerChain(): Provider[] {
     });
   }
 
-  // Generic OpenAI-compatible: OPENAI_API_KEY on api.openai.com, or any endpoint
-  // via CC_LLM_API_KEY + CC_LLM_BASE_URL (Groq, Ollama, a local proxy, ...).
   const genericKey = process.env.CC_LLM_API_KEY ?? process.env.OPENAI_API_KEY;
   if (genericKey) {
     chain.push({
@@ -108,30 +120,38 @@ export function hasLlm(): boolean {
   return providerChain().length > 0;
 }
 
-/**
- * The model shown in the UI (e.g. the answer-parity panel's "answered by X"
- * label). Reflects the primary configured provider; a mid-request failover to
- * a lower-priority provider is rare enough that this stays accurate in practice.
- */
 export function answerModel(): string {
   return process.env.CC_ANSWER_MODEL ?? providerChain()[0]?.model ?? OPENAI_DEFAULT;
 }
 
 let anthropicClient: Anthropic | null = null;
 
-async function callProvider(p: Provider, prompt: string, maxTokens: number): Promise<string> {
+function mergeSignals(signal?: AbortSignal): AbortSignal {
+  const timeout = AbortSignal.timeout(LLM_TIMEOUT_MS);
+  if (!signal) return timeout;
+  return AbortSignal.any([signal, timeout]);
+}
+
+async function callProvider(
+  p: Provider,
+  prompt: string,
+  maxTokens: number,
+  signal: AbortSignal
+): Promise<string> {
   if (p.kind === "anthropic") {
     if (!anthropicClient) anthropicClient = new Anthropic({ apiKey: p.apiKey });
-    const msg = await anthropicClient.messages.create({
-      model: p.model,
-      max_tokens: maxTokens,
-      messages: [{ role: "user", content: prompt }],
-    });
+    const msg = await anthropicClient.messages.create(
+      {
+        model: p.model,
+        max_tokens: maxTokens,
+        messages: [{ role: "user", content: prompt }],
+      },
+      { signal }
+    );
     const block = msg.content[0];
     return block && block.type === "text" ? block.text : "";
   }
 
-  // OpenAI-compatible chat completions — plain fetch, no SDK dependency.
   const res = await fetch(`${p.baseUrl}/chat/completions`, {
     method: "POST",
     headers: {
@@ -144,6 +164,7 @@ async function callProvider(p: Provider, prompt: string, maxTokens: number): Pro
       max_tokens: maxTokens,
       messages: [{ role: "user", content: prompt }],
     }),
+    signal,
   });
   if (!res.ok) {
     throw new Error(`${res.status} ${(await res.text()).slice(0, 200)}`);
@@ -158,24 +179,30 @@ async function callProvider(p: Provider, prompt: string, maxTokens: number): Pro
  * fails (so a single provider's rate limit never takes the feature down while
  * another key still works).
  */
-export async function complete(prompt: string, opts: { maxTokens?: number } = {}): Promise<string> {
+export async function complete(
+  prompt: string,
+  opts: { maxTokens?: number; signal?: AbortSignal } = {}
+): Promise<string> {
   const chain = providerChain();
   if (!chain.length) throw new Error("No LLM API key configured");
   const maxTokens = opts.maxTokens ?? 1024;
+  const signal = mergeSignals(opts.signal);
 
   const errors: string[] = [];
   for (const p of chain) {
+    if (signal.aborted) throw new Error("LLM request aborted");
     try {
-      return await callProvider(p, prompt, maxTokens);
+      return await callProvider(p, prompt, maxTokens, signal);
     } catch (e) {
+      if (signal.aborted) throw new Error("LLM request aborted");
       const msg = e instanceof Error ? e.message : String(e);
       errors.push(`${p.name}: ${msg}`);
-      // Not the last provider? Note the failover so a degraded run is visible,
-      // then try the next key rather than surfacing this one error.
       if (p !== chain[chain.length - 1]) {
-        console.warn(`LLM provider "${p.name}" failed (${msg}); trying next provider.`);
+        inc("llm_failover");
+        log.warn("LLM provider failed, trying next", { provider: p.name, err: msg });
       }
     }
   }
+  inc("llm_all_failed");
   throw new Error(`All LLM providers failed — ${errors.join("; ")}`);
 }

@@ -40,4 +40,4 @@ export function relevanceFloor(): number {
 // Kept in one place so raising it can't accidentally lift the file-picker's
 // limit but not the actual upload limit (or vice versa) — see web.ts and
 // convert.ts, which both read this.
-export const MAX_FILE_BYTES = intEnv("CC_MAX_FILE_BYTES", 50 * 1024 * 1024, 1);
+export const MAX_FILE_BYTES = intEnv("CC_MAX_FILE_BYTES", 20 * 1024 * 1024, 1);
