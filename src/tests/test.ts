@@ -22,7 +22,7 @@ import { intEnv, numEnv } from "../env.js";
 import { pack } from "../pack.js";
 import { checkPathWithin } from "../path-guard.js";
 import { compileContext, expandSection } from "../pipeline.js";
-import { bm25Scores, queryAttribution, rank, rankMulti, splitQueries, tokenize } from "../rank.js";
+import { bm25Scores, queryAttribution, rank, rankMulti, splitQueries, tokenize, tokenizeQuery } from "../rank.js";
 import { countTokens } from "../tokens.js";
 import { UploadRejected, validateUpload } from "../upload-guard.js";
 
@@ -1151,6 +1151,37 @@ function testTokenizeCjkAndStem() {
   console.log("  tokenize ok: CJK bigrams + light English stem");
 }
 
+function testTokenizeQueryCleanupAndHonorific() {
+  const q = tokenizeQuery("What does Mr. Bingley think of Jane Bennet early on?");
+  assert.ok(!q.includes("what") && !q.includes("doe") && !q.includes("of"), "question/stop words dropped");
+  assert.ok(!q.includes("early"), "filler phrase 'early on' stripped");
+  assert.ok(q.includes("bingley") && q.includes("think") && q.includes("bennet"));
+  assert.ok(!q.includes("jane"), "given name dropped when honorific expansion covers Jane Bennet");
+  assert.ok(q.includes("miss"), "Jane Bennet expands to Miss … for book-style naming");
+  assert.ok(q.includes("mr") || q.includes("mrs"), "honorific variants included");
+
+  // Docs still keep stopwords — only the query path filters.
+  const docTok = tokenize("What does early on mean here");
+  assert.ok(docTok.includes("what") || docTok.includes("early"), "document tokenize unchanged");
+
+  // Hyphenated Title Case must not invent honorifics (Red-Headed → Headed League).
+  const league = tokenizeQuery("What is the Red-Headed League?");
+  assert.ok(!league.includes("miss") && !league.includes("mrs"), "no false honorifics on Red-Headed League");
+  assert.ok(league.includes("red") && league.includes("league"), "league keywords kept");
+
+  // Sherlock Holmes is a real Cap Cap name pair — expansion OK; Holmes kept.
+  const holmes = tokenizeQuery("Why does the King of Bohemia come to Sherlock Holmes?");
+  assert.ok(holmes.includes("holme") || holmes.includes("holmes"), "Holmes kept");
+  assert.ok(!holmes.includes("sherlock"), "given name dropped for Holmes honorific path");
+
+  // Negation must survive so "not cover" ≠ "cover".
+  const neg = tokenizeQuery("What does the K2 warranty not cover?");
+  assert.ok(neg.includes("not"), "negation kept in query");
+  assert.ok(neg.includes("warranty") && neg.includes("cover"));
+
+  console.log("  tokenizeQuery ok: stopwords/fillers, Jane→Miss, no false Cap–Cap, negation kept");
+}
+
 async function testRecallEval() {
   const { runRecallEval } = await import("../eval/recall.js");
   const report = await runRecallEval(1);
@@ -1191,6 +1222,7 @@ for (const fn of [
   testNoStdoutInMcpPath,
   testSmallFilePassthrough,
   testTokenizeCjkAndStem,
+  testTokenizeQueryCleanupAndHonorific,
   testRecallEval,
 ]) {
   console.log(fn.name);

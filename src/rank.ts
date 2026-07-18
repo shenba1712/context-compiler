@@ -5,6 +5,10 @@
  * Tokenization is Unicode-aware. Scripts that don't use spaces (CJK) emit
  * character unigrams + bigrams so BM25 can match substrings of a run that
  * would otherwise be one giant "word".
+ *
+ * Query path (tokenizeQuery): strip question/filler noise, then expand
+ * "Firstname Lastname" to honorific forms (Miss/Mr/Mrs Lastname) so passages
+ * that use the book's naming style still match how people ask.
  */
 import { Chunk } from "./chunk.js";
 import { relevanceFloor } from "./config.js";
@@ -16,6 +20,159 @@ const TOKEN_RE =
   /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+|[\p{L}\p{M}\p{N}]+/gu;
 const CJK_RE = /^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+$/u;
 const HEADING_BOOST = 0.35;
+
+/** Latin query stopwords / question glue — applied only to the query, never to docs. */
+const QUERY_STOP = new Set([
+  "a",
+  "an",
+  "the",
+  "of",
+  "on",
+  "in",
+  "at",
+  "to",
+  "for",
+  "from",
+  "by",
+  "with",
+  "as",
+  "into",
+  "about",
+  "over",
+  "after",
+  "before",
+  "between",
+  "and",
+  "or",
+  "but",
+  "if",
+  "than",
+  "then",
+  "so",
+  // Keep not/no/nor/never — "warranty not cover" must not collapse to "warranty cover".
+  "what",
+  "who",
+  "whom",
+  "whose",
+  "which",
+  "where",
+  "when",
+  "why",
+  "how",
+  "do",
+  "doe", // stemLight("does")
+  "does",
+  "did",
+  "doing",
+  "is",
+  "are",
+  "was",
+  "were",
+  "be",
+  "been",
+  "being",
+  "it",
+  "its",
+  "this",
+  "that",
+  "these",
+  "those",
+  "can",
+  "could",
+  "would",
+  "should",
+  "may",
+  "might",
+  "will",
+  "shall",
+  "i",
+  "me",
+  "my",
+  "you",
+  "your",
+  "he",
+  "him",
+  "his",
+  "she",
+  "her",
+  "we",
+  "us",
+  "our",
+  "they",
+  "them",
+  "their",
+  "just",
+  "only",
+  "also",
+  "very",
+  "too",
+  "more",
+  "most",
+  "some",
+  "any",
+  "all",
+  "each",
+  "few",
+  "other",
+  "such",
+  "own",
+  "same",
+  // Standalone honorifics in the query are weak; paired names re-add them via expansion.
+  "mr",
+  "mrs",
+  "ms",
+  "miss",
+  "dr",
+]);
+
+/** Multi-word fillers that boost the wrong chunks when left as rare BM25 terms. */
+const QUERY_FILLER_RE =
+  /\b(?:early\s+on|at\s+first|at\s+the\s+(?:start|beginning)|in\s+the\s+(?:beginning|end)|to\s+begin\s+with)\b/gi;
+
+const HONORIFIC_FIRST = new Set(["mr", "mrs", "ms", "miss", "dr", "sir", "lady", "lord", "dame"]);
+
+/**
+ * Cap Cap pairs that are titles/places/adjectives, not "Givenname Surname".
+ * Blocks Red-Headed League → Headed League and similar Title Case false positives.
+ */
+const NOT_GIVEN_NAME = new Set([
+  "red",
+  "blue",
+  "black",
+  "white",
+  "green",
+  "great",
+  "little",
+  "new",
+  "old",
+  "north",
+  "south",
+  "east",
+  "west",
+  "series",
+  "annual",
+  "quarterly",
+  "total",
+  "headed",
+  "head", // stemLight("headed")
+  "king",
+  "queen",
+  "prince",
+  "princess",
+  "chapter",
+  "section",
+  "part",
+  "book",
+  "volume",
+  "league",
+  "union",
+  "united",
+  "federal",
+  "national",
+  "international",
+  "addressable",
+  "market",
+]);
 
 function isCjkRun(s: string): boolean {
   return CJK_RE.test(s);
@@ -34,6 +191,7 @@ function stemLight(t: string): string {
 /**
  * Lexical tokens for BM25. Exported for unit tests and the recall eval.
  * CJK runs → overlapping char unigrams + bigrams; Latin words get a light stem.
+ * Used for *documents*; queries go through tokenizeQuery.
  */
 export function tokenize(text: string): string[] {
   const parts = text.toLowerCase().match(TOKEN_RE) ?? [];
@@ -51,6 +209,54 @@ export function tokenize(text: string): string[] {
   return tokens;
 }
 
+/**
+ * "Jane Bennet" → miss/mr/mrs + bennet so passages that say "Miss Bennet" still match.
+ * Returns expansions plus first names to drop (books often use the honorific form instead).
+ * Only fires on capitalized Latin pairs that look like person names — not Title Case
+ * headings, and not the second half of a hyphenated compound (Red-Headed League).
+ */
+function honorificExpansions(task: string): { add: string[]; dropFirst: Set<string> } {
+  const add: string[] = [];
+  const dropFirst = new Set<string>();
+  const re = /\b([A-Z][a-z]{1,40})\s+([A-Z][a-z]{1,40})\b/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(task))) {
+    // "Red-Headed League": Headed is Cap after a hyphen — not a given name.
+    if (m.index > 0 && task[m.index - 1] === "-") continue;
+    const firstRaw = m[1]!.toLowerCase();
+    const first = stemLight(firstRaw);
+    const last = stemLight(m[2]!.toLowerCase());
+    if (HONORIFIC_FIRST.has(firstRaw)) continue;
+    if (NOT_GIVEN_NAME.has(firstRaw) || NOT_GIVEN_NAME.has(first)) continue;
+    if (NOT_GIVEN_NAME.has(m[2]!.toLowerCase()) || NOT_GIVEN_NAME.has(last)) continue;
+    add.push("miss", "mr", "mrs", last);
+    dropFirst.add(first);
+  }
+  return { add, dropFirst };
+}
+
+/**
+ * Query tokens for BM25: filler phrases stripped, stopwords dropped, then
+ * honorific expansions merged. Falls back to raw tokenize if everything was
+ * stripped (so a weird all-stopword query still ranks somehow).
+ */
+export function tokenizeQuery(task: string): string[] {
+  const cleaned = task.replace(QUERY_FILLER_RE, " ");
+  const { add, dropFirst } = honorificExpansions(task);
+  const base = tokenize(cleaned).filter(
+    (t) => t.length > 1 && !QUERY_STOP.has(t) && !dropFirst.has(t)
+  );
+  const seen = new Set(base);
+  const out = [...base];
+  for (const t of add) {
+    if (t.length > 1 && !seen.has(t)) {
+      seen.add(t);
+      out.push(t);
+    }
+  }
+  return out.length > 0 ? out : tokenize(task);
+}
+
 /** Okapi BM25, k1=1.5, b=0.75. ~40 lines, zero deps. */
 export function bm25Scores(task: string, chunks: Chunk[]): number[] {
   const k1 = 1.5;
@@ -66,7 +272,7 @@ export function bm25Scores(task: string, chunks: Chunk[]): number[] {
     for (const term of new Set(doc)) df.set(term, (df.get(term) ?? 0) + 1);
   }
 
-  const query = tokenize(task);
+  const query = tokenizeQuery(task);
   const scores = docs.map((doc) => {
     const tf = new Map<string, number>();
     for (const t of doc) tf.set(t, (tf.get(t) ?? 0) + 1);
@@ -81,7 +287,7 @@ export function bm25Scores(task: string, chunks: Chunk[]): number[] {
     return score;
   });
 
-  // Heading boost: task words in the breadcrumb are a strong signal.
+  // Heading boost: query words in the breadcrumb are a strong signal.
   const top = maxOf(scores);
   const taskWords = new Set(query);
   chunks.forEach((c, i) => {

@@ -118,5 +118,27 @@
     "task": "धनवापसी में कितने दिन लगते हैं?",
     "budget": 700,
     "must_include": ["14 कार्य दिवसों"]
+  },
+  {
+    "id": "en-paraphrase-miss-and-recover",
+    "doc": "paraphrase.md",
+    "task": "Why does Jane stay on at Netherfield after falling ill?",
+    "budget": 250,
+    "must_omit": ["unwell this morning"],
+    "expand_recover": "unwell this morning"
+  },
+  {
+    "id": "en-honorific-jane-vs-miss",
+    "doc": "honorific.md",
+    "task": "What does Mr. Bingley think of Jane Bennet early on?",
+    "budget": 400,
+    "must_include": ["angel more beautiful"]
+  },
+  {
+    "id": "en-filler-early-on",
+    "doc": "honorific.md",
+    "task": "What does Bingley think of Miss Bennet early on?",
+    "budget": 400,
+    "must_include": ["angel more beautiful"]
   }
 ]

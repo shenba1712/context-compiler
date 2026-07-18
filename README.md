@@ -131,7 +131,7 @@ Prompt injection is a known game on this stage. Compiled output is wrapped in `U
 
 ## What we know we do not do yet
 
-Lexical ranking can still miss a paraphrased-but-relevant section. The mitigation is the manifest plus `expand_section` — failure is visible and repairable, never silent. An offline recall@budget suite in `src/eval/` (lexical, paraphrase, multi-query, heading-less, compare, and miss→expand cases) guards regressions in CI. Local embeddings as a second scorer are still planned for when they can stay local-first without free-tier RAM blowups.
+Lexical ranking can still miss a paraphrased-but-relevant section — for example a question that says “falling ill” when the passage says “unwell” / “wet through,” so BM25 shares almost no stems with the answer chunk. The mitigation is the omitted-sections manifest plus `expand_section` (or Agent mode, which walks that manifest) — failure is visible and repairable, never silent. An offline recall@budget suite in `src/eval/` guards lexical hits, honorific/filler query cleanup, and a deliberate paraphrase miss→expand case in CI. Local embeddings as a second scorer are still planned for when they can stay local-first without free-tier RAM blowups.
 
 Scanned, image-only PDFs have nothing to rank; we fail loudly rather than invent text. OCR is deferred because a bad transcript silently corrupts answers, which violates the “never silently lossy” rule. Video and audio would plug in as a transcription head on the same pipeline; they are a scope cut, not a feasibility one.
 
