@@ -387,12 +387,25 @@ async function testProviderFailover() {
     const { complete, answerModel } = await import("../llm.js");
     // Primary (Gemini) label is what the UI shows, even though this call
     // fails over to the fallback under the hood.
-    assert.equal(answerModel(), "gemini-2.5-flash");
+    assert.equal(answerModel(), "gemini-3.5-flash");
     assert.equal(await complete("ping"), "fallback-answer", "should fail over to the healthy provider");
 
     // Now knock out the fallback too: every provider down → complete() throws.
     process.env.CC_OPENROUTER_BASE_URL = `http://127.0.0.1:${pPort}`;
-    await assert.rejects(() => complete("ping"), /All LLM providers failed/);
+    const { LlmUnavailableError } = await import("../llm.js");
+    await assert.rejects(
+      () => complete("ping"),
+      (e: unknown) => {
+        assert.ok(e instanceof LlmUnavailableError, "should be LlmUnavailableError");
+        assert.match((e as Error).message, /All LLM providers failed/);
+        assert.match(
+          (e as { publicMessage: string }).publicMessage,
+          /AI provider is unavailable/i,
+          "public message stays generic"
+        );
+        return true;
+      }
+    );
     console.log("  provider failover ok: primary down → fallback used; all down → throws");
   } finally {
     process.env = saved as NodeJS.ProcessEnv;
