@@ -11,8 +11,9 @@ import { createHash, randomBytes } from "node:crypto";
 import { mkdirSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, extname, join, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { runAgent } from "./agent.js";
 import { BUDGET_FLOORS, MAX_FILE_BYTES, clampBudget } from "./config.js";
 import { ConversionError, ConverterBusyError } from "./convert.js";
 import { intEnv, numEnv, trustProxyFromEnv } from "./env.js";
@@ -328,6 +329,64 @@ app.post("/api/answer", upload.single("file"), guardUpload, async (req, res) => 
   }
 });
 
+// Agent mode: run the autonomous compile→expand→answer loop and stream each
+// step to the browser as it happens (Server-Sent Events). The client reads this
+// with fetch + a stream reader rather than EventSource, since it's a POST with a
+// file upload. Guards that fail before the stream opens still reply with plain
+// JSON (the client checks the content-type before parsing as a stream).
+app.post("/api/agent", upload.single("file"), guardUpload, async (req, res) => {
+  if (!hasLlm()) {
+    res.status(400).json({
+      error:
+        "Agent mode needs an LLM API key — GEMINI_API_KEY (free), OPENROUTER_API_KEY, " +
+        "ANTHROPIC_API_KEY, OPENAI_API_KEY, or CC_LLM_API_KEY + CC_LLM_BASE_URL",
+    });
+    return;
+  }
+  if (!req.file) {
+    res.status(400).json({ error: "No file uploaded" });
+    return;
+  }
+  const task = String(req.body.task ?? "").trim();
+  if (!task) {
+    res.status(400).json({ error: "No task provided" });
+    return;
+  }
+
+  let path: string;
+  try {
+    ({ path } = saveUpload(req.file));
+  } catch (e) {
+    errorResponse(res, e, "agent");
+    return;
+  }
+
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no"); // stop proxy buffering (nginx/Render) so steps arrive live
+  res.flushHeaders();
+
+  const send = (event: string, data: unknown) =>
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+
+  try {
+    const result = await runAgent(path, task, {
+      sourceName: req.file.originalname,
+      onStep: (step) => send("step", step),
+    });
+    send("done", result);
+  } catch (e) {
+    // The stream is already open, so errors go out as an SSE event, not a status
+    // code. Conversion messages are pre-sanitized; anything else is generic.
+    const msg = e instanceof ConversionError || e instanceof Error ? e.message : "Internal server error.";
+    if (!(e instanceof ConversionError)) console.error("agent failed:", e);
+    send("error", { error: msg });
+  } finally {
+    res.end();
+  }
+});
+
 // Multer's own errors (e.g. the file-size limit) throw INSIDE the upload
 // middleware, before a route handler's try/catch ever runs. Without this,
 // Express's default error handler renders an HTML page with a raw stack
@@ -341,4 +400,10 @@ app.use((err: unknown, _req: express.Request, res: express.Response, next: expre
   return res.status(500).json({ error: "Internal server error" });
 });
 
-app.listen(PORT, () => console.log(`Context Compiler demo on http://localhost:${PORT}`));
+// Start listening only when run directly (`node dist/web.js`), not when this
+// module is imported — the tests import `app` and bind their own random port.
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  app.listen(PORT, () => console.log(`Context Compiler demo on http://localhost:${PORT}`));
+}
+
+export { app };

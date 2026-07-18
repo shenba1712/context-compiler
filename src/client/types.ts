@@ -95,3 +95,24 @@ interface AnswerApiResult {
   compiled: { answer: string; context_tokens: number; reduction_pct: number };
   error?: string;
 }
+
+/** One step in an agent run (mirrors AgentStep in src/agent.ts). Streamed over
+ *  /api/agent as an SSE "step" event while the agent works. */
+interface AgentStep {
+  n: number;
+  action: "compile" | "expand" | "recompile" | "answer";
+  detail: string;
+  reasoning?: string;
+  section_id?: string;
+  tokens_added: number;
+}
+
+/** The final "done" event from /api/agent (mirrors AgentResult in agent.ts). */
+interface AgentRunResult {
+  answer: string;
+  steps: AgentStep[];
+  tokens_read: number;
+  raw_tokens: number;
+  final_context_tokens: number;
+  stopped_reason: "confident" | "max_steps" | "token_ceiling" | "whole_file";
+}

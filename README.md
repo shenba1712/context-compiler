@@ -165,6 +165,37 @@ context, side by side. That panel simulates the product's real consumer,
 which is not a human reading a box but an AI agent receiving compiled
 context through MCP.
 
+## Agent mode — watch the model drive retrieval
+
+The one-shot compile is a human deciding the budget. The point of the tool,
+though, is an *agent* using it — and there are two ways to see that here.
+
+**In-repo agent (the "Run agent" button).** Next to "Compile once" the demo
+has "Run agent": you just ask a question, no budget slider. The model compiles
+a small slice, reads the omitted-sections manifest, and decides its own next
+move — expand a specific section, recompile at a larger budget, or answer —
+looping until it's confident. Each step streams to the page live (compile →
+expand → answer), with a token meter that climbs as it reads, next to the
+crossed-out whole-file count. This is the demo's own controlled loop over the
+same `compile_context` / `expand_section` tools, so it's reliable and visual —
+ideal for a live walkthrough. It's bounded on purpose: a max-steps cap, a total
+token ceiling, and a fail-safe that turns any bad model decision (malformed
+JSON, unknown section) into "answer with what we have" rather than a loop.
+Needs an LLM key (see [About API keys](#about-api-keys-optional--bring-any-providers));
+it runs on the same Gemini → OpenRouter failover chain as everything else.
+
+**A real coding agent over MCP.** The same two tools are exposed as an MCP
+server (above), so any MCP client — Claude Code, Cursor, Codex — calls them
+autonomously in its own agent loop. This proves the integration works in the
+real ecosystem rather than only in our own UI. It's less controllable on
+camera (it's a real model deciding in real time), so for a recording the
+in-repo loop is the dependable shot and the MCP call is the credibility shot.
+A capture recipe for the MCP path is in [DEMO_SCRIPT.md](DEMO_SCRIPT.md).
+
+The two share one design idea: the omitted-sections manifest is the map the
+agent navigates by. It's not decoration — it's what lets a model read 3% of a
+document on purpose instead of guessing or swallowing the whole thing.
+
 ## Choosing a token budget
 
 Budget by **question breadth, not file size**: a factual lookup ~1,000

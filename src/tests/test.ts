@@ -356,6 +356,162 @@ async function testProviderFailover() {
   }
 }
 
+async function testAgentLoop() {
+  // The agent loop is driven entirely by an injected `complete`, so this runs
+  // with NO model or network — the mock plays the model's part. Three scripted
+  // behaviours, all against the same fixture document.
+  const { runAgent } = await import("../agent.js");
+  const path = join(homedir(), `cc-agent-${Date.now()}.md`);
+  writeFileSync(path, makeTestDoc());
+  try {
+    // 1. Happy path: expand one offered section, then answer.
+    let decisions = 0;
+    const expandThenAnswer: (p: string) => Promise<string> = async (prompt) => {
+      if (/ONLY a JSON object/.test(prompt)) {
+        decisions += 1;
+        if (decisions === 1) {
+          const id = (prompt.match(/- (s\d+)/) ?? [])[1]; // first offered section id
+          return JSON.stringify({ action: "expand", section_id: id, reasoning: "likely holds the answer" });
+        }
+        return JSON.stringify({ action: "answer", reasoning: "have enough now" });
+      }
+      return "The termination notice period is 90 days.";
+    };
+    const r = await runAgent(path, "termination notice period", {
+      startBudget: 1200,
+      complete: (p) => expandThenAnswer(p),
+    });
+    assert.ok(r.answer.includes("90 days"), "final answer should come from the injected model");
+    assert.equal(r.steps[0].action, "compile", "first step is always a compile");
+    assert.ok(
+      r.steps.some((s) => s.action === "expand" && s.section_id),
+      "the agent should have expanded a section it was offered"
+    );
+    assert.equal(r.steps[r.steps.length - 1].action, "answer", "last step is the answer");
+    assert.equal(r.stopped_reason, "confident");
+    assert.ok(r.tokens_read < r.raw_tokens, "the whole point: it reads less than the full file");
+
+    // 2. Runaway model that never answers must still terminate at the step cap.
+    const alwaysExpand: (p: string) => Promise<string> = async (prompt) => {
+      if (/ONLY a JSON object/.test(prompt)) {
+        const id = (prompt.match(/- (s\d+)/) ?? [])[1];
+        return JSON.stringify({ action: "expand", section_id: id, reasoning: "more" });
+      }
+      return "forced answer";
+    };
+    const capped = await runAgent(path, "termination", {
+      startBudget: 1200,
+      maxSteps: 3,
+      complete: (p) => alwaysExpand(p),
+    });
+    assert.equal(capped.stopped_reason, "max_steps", "a non-stopping model hits the step cap");
+    assert.ok(
+      capped.steps.filter((s) => s.action === "expand").length <= 2,
+      "the cap bounds how many sections it can pull"
+    );
+    assert.equal(
+      capped.steps[capped.steps.length - 1].action,
+      "answer",
+      "still produces an answer at the cap"
+    );
+
+    // 3. Garbage decision output falls back to answering, never crashes.
+    const garbage: (p: string) => Promise<string> = async (prompt) =>
+      /ONLY a JSON object/.test(prompt) ? "sorry, I can't do that" : "fallback answer";
+    const safe = await runAgent(path, "termination", { startBudget: 1200, complete: (p) => garbage(p) });
+    assert.equal(safe.stopped_reason, "confident", "malformed decision → answer, not a loop");
+    assert.ok(safe.answer.length > 0);
+
+    console.log("  agent loop ok: expand→answer, step-cap terminates, bad JSON falls back safely");
+  } finally {
+    unlinkSync(path);
+  }
+}
+
+async function testAgentSseEndpoint() {
+  // End-to-end through the real Express app: a mock LLM server plays the model,
+  // and we assert the /api/agent route streams step events then a done event.
+  const http = await import("node:http");
+  let decisionCount = 0;
+  const chat = http.createServer((req, res) => {
+    let body = "";
+    req.on("data", (d) => (body += d));
+    req.on("end", () => {
+      const content = JSON.parse(body).messages[0].content as string;
+      let text: string;
+      if (/ONLY a JSON object/.test(content)) {
+        decisionCount += 1;
+        if (decisionCount === 1) {
+          const id = (content.match(/- (s\d+)/) ?? [])[1];
+          text = JSON.stringify({ action: "expand", section_id: id, reasoning: "likely holds it" });
+        } else {
+          text = JSON.stringify({ action: "answer", reasoning: "enough now" });
+        }
+      } else {
+        text = "The termination notice period is 90 days.";
+      }
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ choices: [{ message: { content: text } }] }));
+    });
+  });
+  await new Promise<void>((r) => chat.listen(0, r));
+  const chatPort = (chat.address() as { port: number }).port;
+
+  const saved = { ...process.env };
+  for (const k of [
+    "ANTHROPIC_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "OPENROUTER_API_KEY",
+    "OPENAI_API_KEY",
+  ]) {
+    delete process.env[k];
+  }
+  process.env.CC_LLM_API_KEY = "test-key";
+  process.env.CC_LLM_BASE_URL = `http://127.0.0.1:${chatPort}/v1`;
+
+  const { app } = await import("../web.js");
+  const server = app.listen(0);
+  await new Promise<void>((r) => server.once("listening", () => r()));
+  const appPort = (server.address() as { port: number }).port;
+
+  try {
+    const form = new FormData();
+    form.append("task", "termination notice period");
+    form.append("file", new Blob([makeTestDoc()], { type: "text/markdown" }), "doc.md");
+    const res = await fetch(`http://127.0.0.1:${appPort}/api/agent`, { method: "POST", body: form });
+    assert.equal(res.headers.get("content-type"), "text/event-stream", "agent route streams SSE");
+
+    // Parse the buffered event stream into {event, data} records.
+    const raw = await res.text();
+    const events = raw
+      .split("\n\n")
+      .filter(Boolean)
+      .map((block) => {
+        const event = (block.match(/^event: (.*)$/m) ?? [])[1];
+        const data = (block.match(/^data: (.*)$/m) ?? [])[1];
+        return { event, data: data ? JSON.parse(data) : null };
+      });
+
+    const steps = events.filter((e) => e.event === "step");
+    const done = events.find((e) => e.event === "done");
+    assert.ok(steps.length >= 2, "should stream at least a compile and one more step");
+    assert.equal(steps[0].data.action, "compile", "first streamed step is the compile");
+    assert.ok(
+      steps.some((s) => s.data.action === "expand"),
+      "the agent expanded a section over the wire"
+    );
+    assert.ok(done, "a done event closes the stream");
+    assert.ok(done!.data.answer.includes("90 days"), "final answer arrives in the done event");
+    assert.ok(done!.data.tokens_read < done!.data.raw_tokens, "reads less than the whole file");
+    console.log("  agent SSE ok: /api/agent streams live steps then the final answer");
+  } finally {
+    server.close();
+    chat.close();
+    process.env = saved as NodeJS.ProcessEnv;
+  }
+}
+
 async function testSmallFilePassthrough() {
   const path = join(homedir(), `cc-tiny-${Date.now()}.md`);
   writeFileSync(path, "# Tiny\n\nJust a small note about nothing.");
@@ -552,6 +708,8 @@ for (const fn of [
   testEnvParsingFailsSafe,
   testOpenAICompatClient,
   testProviderFailover,
+  testAgentLoop,
+  testAgentSseEndpoint,
   testSmallFilePassthrough,
 ]) {
   console.log(fn.name);

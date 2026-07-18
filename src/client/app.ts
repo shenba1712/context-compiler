@@ -52,13 +52,27 @@ async function loadConfig(): Promise<void> {
   }
 }
 
-// Hindi text uses Devanagari; tag such strings with lang="hi" so assistive
-// tech doesn't mispronounce them under the page's declared lang="en".
-const DEVANAGARI_RE = /[ऀ-ॿ]/;
+// The sample library spans several scripts, so tag text with the right
+// language (assistive tech pronounces it correctly under the page's lang="en")
+// and direction (Arabic is right-to-left). Latin text stays the page default.
+function scriptInfo(text: string): { lang: string; rtl: boolean } {
+  if (/[؀-ۿ]/.test(text)) return { lang: "ar", rtl: true }; // Arabic
+  if (/[ऀ-ॿ]/.test(text)) return { lang: "hi", rtl: false }; // Devanagari
+  if (/[Ѐ-ӿ]/.test(text)) return { lang: "ru", rtl: false }; // Cyrillic
+  if (/[ñ¿¡áéíóúü]/i.test(text)) return { lang: "es", rtl: false }; // Spanish accents
+  return { lang: "", rtl: false };
+}
+
+// Tag an element with the language and direction of its text.
+function applyLang(el: HTMLElement, text: string): void {
+  const info = scriptInfo(text);
+  el.lang = info.lang;
+  el.dir = info.rtl ? "rtl" : "";
+}
 
 function langSpan(text: string): HTMLSpanElement {
   const span = document.createElement("span");
-  if (DEVANAGARI_RE.test(text)) span.lang = "hi";
+  applyLang(span, text);
   span.textContent = text;
   return span;
 }
@@ -450,7 +464,10 @@ function hideLoading(): void {
   $("loadingNote").classList.add("hidden");
   $<HTMLButtonElement>("cancelGo").classList.add("hidden");
 }
-$<HTMLButtonElement>("cancelGo").onclick = () => compileAbort?.abort();
+$<HTMLButtonElement>("cancelGo").onclick = () => {
+  compileAbort?.abort();
+  agentAbort?.abort();
+};
 
 // Wrapping the inputs in a real <form> means pressing Enter in the task
 // field submits — no more silent no-op on the most natural keyboard action.
@@ -504,7 +521,7 @@ $<HTMLFormElement>("compileForm").addEventListener("submit", async (e) => {
     $("rerankBadge").textContent = d.rerank_used ? "llm rerank" : "bm25 ranking";
     $("omitBadge").textContent = d.omitted_sections.length + " sections omitted";
     $("out").textContent = d.markdown;
-    $("out").lang = DEVANAGARI_RE.test(d.markdown) ? "hi" : "";
+    applyLang($("out"), d.markdown);
     renderSections(d);
     renderOmitted(d);
     renderMultiNote(d);
@@ -534,6 +551,172 @@ $<HTMLFormElement>("compileForm").addEventListener("submit", async (e) => {
     goBtn.textContent = "Compile";
   }
 });
+
+// ---- Agent mode ----------------------------------------------------------
+// "Run agent" streams a live trace from /api/agent: the model compiles a small
+// slice, reads the manifest, and expands sections on its own until it can
+// answer. We render each step as it arrives, not after the whole run.
+let agentAbort: AbortController | null = null;
+let agentTokens = 0;
+
+const AGENT_ACTIONS: Record<AgentStep["action"], { icon: string; cls: string; label: string }> = {
+  compile: { icon: "▤", cls: "a-compile", label: "compile_context" },
+  expand: { icon: "⤢", cls: "a-expand", label: "expand_section" },
+  recompile: { icon: "↻", cls: "a-recompile", label: "recompile" },
+  answer: { icon: "✓", cls: "a-answer", label: "answer" },
+};
+
+const STOP_TEXT: Record<AgentRunResult["stopped_reason"], string> = {
+  confident: "Stopped when the agent was confident it could answer",
+  max_steps: "Hit the step limit and answered with what it had",
+  token_ceiling: "Hit the token ceiling and answered with what it had",
+  whole_file: "The whole file fit, so the agent read all of it",
+};
+
+function startAgentPanel(): void {
+  agentTokens = 0;
+  $("agentSec").classList.remove("hidden");
+  $("aSteps").innerHTML = "";
+  $("aAnswerWrap").classList.add("hidden");
+  $("aErr").classList.add("hidden");
+  $("aTokens").textContent = "0";
+  $("aWhole").textContent = "";
+  $("aBar").style.width = "0%";
+  $<HTMLButtonElement>("cancelGo").classList.remove("hidden");
+  $("agentSec").scrollIntoView({ behavior: "smooth", block: "start" });
+  announce("Agent started.");
+}
+
+function onAgentStep(step: AgentStep): void {
+  agentTokens += step.tokens_added;
+  $("aTokens").textContent = agentTokens.toLocaleString();
+  const meta = AGENT_ACTIONS[step.action];
+  const suffix = step.section_id
+    ? ' <span class="amono">' + esc(step.section_id) + "</span>"
+    : step.action === "compile" || step.action === "recompile"
+      ? ' <span class="afaint">' + esc(step.detail) + "</span>"
+      : "";
+  const card = document.createElement("div");
+  card.className = "astep " + meta.cls;
+  card.innerHTML =
+    '<div class="aicon" aria-hidden="true">' +
+    meta.icon +
+    "</div>" +
+    '<div class="abody"><div class="atitle">Step ' +
+    step.n +
+    " · " +
+    meta.label +
+    suffix +
+    "</div>" +
+    (step.reasoning ? '<div class="areason">' + esc(step.reasoning) + "</div>" : "") +
+    "</div>" +
+    '<div class="adelta">' +
+    (step.tokens_added > 0 ? "+" + step.tokens_added.toLocaleString() : "") +
+    "</div>";
+  $("aSteps").appendChild(card);
+}
+
+function onAgentDone(r: AgentRunResult): void {
+  $("aTokens").textContent = r.tokens_read.toLocaleString();
+  $("aWhole").textContent = r.raw_tokens.toLocaleString() + " if you dumped the whole file";
+  const pct = Math.round((100 * r.tokens_read) / r.raw_tokens);
+  requestAnimationFrame(() => {
+    $("aBar").style.width = Math.max(3, Math.min(100, pct)) + "%";
+  });
+  $("aAnswer").textContent = r.answer;
+  applyLang($("aAnswer"), r.answer);
+  $("aStopped").textContent =
+    STOP_TEXT[r.stopped_reason] +
+    " — reading " +
+    r.tokens_read.toLocaleString() +
+    " tokens (" +
+    pct +
+    "% of the file).";
+  $("aAnswerWrap").classList.remove("hidden");
+  $("agentHeading").focus();
+  announce(
+    "Agent finished — read " +
+      r.tokens_read.toLocaleString() +
+      " of " +
+      r.raw_tokens.toLocaleString() +
+      " tokens."
+  );
+}
+
+function agentError(msg: string): void {
+  const el = $("aErr");
+  el.textContent = msg;
+  el.classList.remove("hidden");
+  announce("Agent error: " + msg);
+}
+
+// Parse a fetch SSE body into {event, data} records and hand each to `on` as it
+// arrives. Events are separated by a blank line; we buffer across chunks.
+async function consumeSse(
+  body: ReadableStream<Uint8Array>,
+  on: (event: string, data: unknown) => void
+): Promise<void> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let idx = buf.indexOf("\n\n");
+    while (idx >= 0) {
+      const block = buf.slice(0, idx);
+      buf = buf.slice(idx + 2);
+      const event = /^event: (.*)$/m.exec(block)?.[1] ?? "message";
+      const data = /^data: (.*)$/m.exec(block)?.[1];
+      if (data) on(event, JSON.parse(data));
+      idx = buf.indexOf("\n\n");
+    }
+  }
+}
+
+async function runAgentFlow(): Promise<void> {
+  clearErr();
+  const f = $<HTMLInputElement>("file").files?.[0];
+  const task = $<HTMLTextAreaElement>("task").value.trim();
+  if (!f || !task) {
+    fail("Pick a file (or a sample) and enter a question.");
+    return;
+  }
+
+  const fd = new FormData();
+  fd.append("file", f);
+  fd.append("task", task);
+
+  agentAbort?.abort();
+  agentAbort = new AbortController();
+  const btn = $<HTMLButtonElement>("goAgent");
+  btn.disabled = true;
+  btn.textContent = "Agent working…";
+  startAgentPanel();
+  try {
+    const resp = await fetch("/api/agent", { method: "POST", body: fd, signal: agentAbort.signal });
+    const ctype = resp.headers.get("content-type") ?? "";
+    if (!ctype.includes("text/event-stream") || !resp.body) {
+      // A guard rejected the request before the stream opened → JSON error body.
+      const d = (await resp.json().catch(() => ({ error: "Agent request failed." }))) as { error?: string };
+      throw new Error(d.error ?? "Agent request failed.");
+    }
+    await consumeSse(resp.body, (event, data) => {
+      if (event === "step") onAgentStep(data as AgentStep);
+      else if (event === "done") onAgentDone(data as AgentRunResult);
+      else if (event === "error") throw new Error((data as { error: string }).error);
+    });
+  } catch (e) {
+    if (e instanceof DOMException && e.name === "AbortError") return;
+    agentError(e instanceof Error ? e.message : String(e));
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Run agent ▸";
+    $<HTMLButtonElement>("cancelGo").classList.add("hidden");
+  }
+}
+$<HTMLButtonElement>("goAgent").onclick = () => void runAgentFlow();
 
 function renderSections(d: CompileApiResult): void {
   const wrap = $("sections");
