@@ -17,7 +17,7 @@ import { runAgent } from "./agent.js";
 import { BUDGET_FLOORS, MAX_FILE_BYTES, clampBudget } from "./config.js";
 import { ConversionError, ConverterBusyError, converterAvailable } from "./convert.js";
 import { intEnv, numEnv, trustProxyFromEnv } from "./env.js";
-import { answerModel, complete, hasLlm, LlmBusyError, releaseLlmJob, tryAcquireLlmJob } from "./llm.js";
+import { answerModel, complete, hasLlm, LlmBusyError, LlmUnavailableError, releaseLlmJob, tryAcquireLlmJob } from "./llm.js";
 import { log } from "./log.js";
 import { inc, snapshot } from "./metrics.js";
 import { compileContext, expandSection, fullMarkdown } from "./pipeline.js";
@@ -157,6 +157,33 @@ function rateLimit(req: express.Request, res: express.Response, next: express.Ne
 }
 app.use("/api", rateLimit);
 
+// Optional shared door lock for a long-lived public demo. Unset = open (local
+// / short-lived judging). When CC_DEMO_TOKEN is set, every /api route except
+// GET /api/config requires the same value via X-CC-Demo-Token, Authorization:
+// Bearer, or ?token=. Not real auth — just keeps casual scrapers out.
+function demoTokenGate(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const expected = process.env.CC_DEMO_TOKEN;
+  if (!expected) return next();
+  // Config must stay reachable so the UI can learn that a token is required.
+  if (req.method === "GET" && (req.path === "/config" || req.path.endsWith("/config"))) {
+    return next();
+  }
+  const bearer = req.get("authorization");
+  const fromBearer =
+    bearer && bearer.toLowerCase().startsWith("bearer ") ? bearer.slice(7).trim() : "";
+  const got =
+    (req.get("x-cc-demo-token") ?? "").trim() ||
+    fromBearer ||
+    (typeof req.query.token === "string" ? req.query.token.trim() : "");
+  if (!got || got !== expected) {
+    return res.status(401).json({
+      error: "Demo token required. Pass header X-CC-Demo-Token (or ?token=).",
+    });
+  }
+  return next();
+}
+app.use("/api", demoTokenGate);
+
 // Opaque handle -> real upload path. The client never sees the server's
 // filesystem layout (which the old `file_path` field leaked), and can only
 // reference uploads via an unguessable id we minted, not an arbitrary path.
@@ -243,6 +270,11 @@ function errorResponse(res: express.Response, e: unknown, context: string) {
     res.setHeader("Retry-After", "5");
     return res.status(503).json({ error: e.message });
   }
+  if (e instanceof LlmUnavailableError) {
+    res.setHeader("Retry-After", "30");
+    log.warn(`${context}: LLM unavailable`, { err: e.message });
+    return res.status(503).json({ error: e.publicMessage });
+  }
   if (e instanceof ConverterBusyError) {
     res.setHeader("Retry-After", "5");
     return res.status(503).json({ error: e.message });
@@ -274,7 +306,11 @@ let samplesCache: Array<{
 // fully enabled on the keyless default deploy this project's headline is
 // built around). Fetched once on page load alongside /api/samples.
 app.get("/api/config", (_req, res) => {
-  return res.json({ llm_available: hasLlm(), max_file_bytes: MAX_FILE_BYTES });
+  return res.json({
+    llm_available: hasLlm(),
+    max_file_bytes: MAX_FILE_BYTES,
+    demo_token_required: Boolean(process.env.CC_DEMO_TOKEN),
+  });
 });
 
 // Liveness for platform probes — minimal surface, no traffic counters.
@@ -520,15 +556,24 @@ app.post("/api/agent", upload.single("file"), guardUpload, async (req, res) => {
     send("done", result);
   } catch (e) {
     // The stream is already open, so errors go out as an SSE event, not a status
-    // code. Conversion messages are pre-sanitized; anything else is generic.
+    // code. Conversion / LLM-unavailable messages are safe for clients; anything
+    // else stays generic.
     const msg =
       e instanceof ConversionError
         ? e.message
-        : e instanceof Error && /cancelled|aborted/i.test(e.message)
-          ? "Agent cancelled"
-          : "Internal server error.";
-    if (!(e instanceof ConversionError) && !/cancelled|aborted/i.test(String(e))) {
+        : e instanceof LlmUnavailableError
+          ? e.publicMessage
+          : e instanceof Error && /cancelled|aborted/i.test(e.message)
+            ? "Agent cancelled"
+            : "Internal server error.";
+    if (
+      !(e instanceof ConversionError) &&
+      !(e instanceof LlmUnavailableError) &&
+      !/cancelled|aborted/i.test(String(e))
+    ) {
       log.error("agent failed", { err: e instanceof Error ? e.message : String(e) });
+    } else if (e instanceof LlmUnavailableError) {
+      log.warn("agent: LLM unavailable", { err: e.message });
     }
     send("error", { error: msg });
   } finally {

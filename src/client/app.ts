@@ -19,10 +19,46 @@ function $<T extends HTMLElement = HTMLElement>(id: string): T {
 // not a client-side guess. See samples-manifest.ts and web.ts for the source.
 let SAMPLES: Sample[] = [];
 
+// Optional shared door lock (CC_DEMO_TOKEN on the server). Not real auth —
+// just a passphrase for a long-lived public URL. Loaded from ?token=, then
+// sessionStorage, then the form field.
+const DEMO_TOKEN_KEY = "cc-demo-token";
+let demoTokenRequired = false;
+
+function getDemoToken(): string {
+  const fromUrl = new URLSearchParams(location.search).get("token");
+  if (fromUrl) {
+    sessionStorage.setItem(DEMO_TOKEN_KEY, fromUrl);
+    return fromUrl;
+  }
+  const field = document.getElementById("demoToken") as HTMLInputElement | null;
+  if (field?.value.trim()) {
+    sessionStorage.setItem(DEMO_TOKEN_KEY, field.value.trim());
+    return field.value.trim();
+  }
+  return sessionStorage.getItem(DEMO_TOKEN_KEY) ?? "";
+}
+
+function apiHeaders(extra?: HeadersInit): Headers {
+  const h = new Headers(extra);
+  const tok = getDemoToken();
+  if (tok) h.set("X-CC-Demo-Token", tok);
+  return h;
+}
+
+function apiFetch(input: string, init: RequestInit = {}): Promise<Response> {
+  const headers = apiHeaders(init.headers);
+  return fetch(input, { ...init, headers });
+}
+
 async function loadSamples(): Promise<void> {
   const wrap = $("samples");
   try {
-    const resp = await fetch("/api/samples");
+    const resp = await apiFetch("/api/samples");
+    if (resp.status === 401) {
+      wrap.textContent = "Enter the demo token above to load the sample library.";
+      return;
+    }
     const data: Sample[] = await resp.json();
     if (!Array.isArray(data)) throw new Error("Unexpected response shape");
     SAMPLES = data;
@@ -35,15 +71,36 @@ async function loadSamples(): Promise<void> {
 
 // Known up front (not just after a failed click, or worse, left fully
 // enabled on the keyless default deploy this project's headline is built
-// around) so "Prove answer parity" is correctly disabled + explained from
-// the moment the page loads, not only after the first compile.
+// around) so LLM-only actions are correctly disabled + explained from the
+// moment the page loads, not only after the first compile.
 let maxFileBytes = 20 * 1024 * 1024;
+let llmAvailable = true;
+
+const NO_LLM_TITLE = "The server has no LLM API key configured. Everything else works without one.";
+
+/** Keep Prove + Run agent in sync with whether the server can call a model. */
+function setLlmDependentButtons(available: boolean): void {
+  llmAvailable = available;
+  const proveBtn = $<HTMLButtonElement>("prove");
+  const agentBtn = $<HTMLButtonElement>("goAgent");
+  proveBtn.disabled = !available;
+  agentBtn.disabled = !available;
+  proveBtn.title = available
+    ? "Answer the question from the full file vs the compiled context"
+    : NO_LLM_TITLE;
+  agentBtn.title = available
+    ? "Let the model expand sections until it can answer"
+    : NO_LLM_TITLE;
+}
 
 async function loadConfig(): Promise<void> {
-  const proveBtn = $<HTMLButtonElement>("prove");
   try {
     const resp = await fetch("/api/config");
-    const cfg: { llm_available: boolean; max_file_bytes?: number } = await resp.json();
+    const cfg: {
+      llm_available: boolean;
+      max_file_bytes?: number;
+      demo_token_required?: boolean;
+    } = await resp.json();
     if (typeof cfg.max_file_bytes === "number" && cfg.max_file_bytes > 0) {
       maxFileBytes = cfg.max_file_bytes;
       const label = document.querySelector('label[for="file"]');
@@ -52,13 +109,19 @@ async function loadConfig(): Promise<void> {
         label.textContent = `Upload your file (pdf, docx, xlsx, pptx, html, csv, txt, md) — max ${mb} MB`;
       }
     }
-    proveBtn.disabled = !cfg.llm_available;
-    proveBtn.title = cfg.llm_available
-      ? "Answer the question from the full file vs the compiled context"
-      : "The server has no LLM API key configured. Everything else works without one.";
+    demoTokenRequired = Boolean(cfg.demo_token_required);
+    const gate = document.getElementById("demoTokenGate");
+    if (gate) {
+      gate.classList.toggle("hidden", !demoTokenRequired);
+      if (demoTokenRequired) {
+        const field = $<HTMLInputElement>("demoToken");
+        field.value = getDemoToken();
+      }
+    }
+    setLlmDependentButtons(Boolean(cfg.llm_available));
   } catch (e) {
     console.warn("Could not load server config:", e);
-    // Leave the button enabled — worst case a click surfaces the real error.
+    // Leave the buttons enabled — worst case a click surfaces the real error.
   }
 }
 
@@ -349,7 +412,7 @@ async function estimateUploadSize(f: File): Promise<void> {
   try {
     const fd = new FormData();
     fd.append("file", f);
-    const resp = await fetch("/api/measure", { method: "POST", body: fd });
+    const resp = await apiFetch("/api/measure", { method: "POST", body: fd });
     const d: MeasureApiResult = await resp.json();
     if (seq !== measureSeq) return; // a newer file was picked while this was in flight
     if (d.error) throw new Error(d.error);
@@ -498,7 +561,7 @@ $<HTMLFormElement>("compileForm").addEventListener("submit", async (e) => {
   announce("Compiling, please wait…");
   showLoading();
   try {
-    const resp = await fetch("/api/compile", { method: "POST", body: fd, signal: compileAbort.signal });
+    const resp = await apiFetch("/api/compile", { method: "POST", body: fd, signal: compileAbort.signal });
     const d: CompileApiResult = await resp.json().catch(() => ({ error: "Compile failed." }) as CompileApiResult);
     if (!resp.ok || d.error) throw new Error(await apiFailureMessage(resp, d));
     hideLoading();
@@ -540,12 +603,7 @@ $<HTMLFormElement>("compileForm").addEventListener("submit", async (e) => {
     renderMultiNote(d);
     renderFloorNote(d);
     bumpSavings(d);
-    const proveBtn = $<HTMLButtonElement>("prove");
-    proveBtn.disabled = d.llm_available === false;
-    proveBtn.title =
-      d.llm_available === false
-        ? "The server has no LLM API key configured. Everything else works without one."
-        : "Answer the question from the full file vs the compiled context";
+    setLlmDependentButtons(d.llm_available !== false);
     // Move focus (not just scroll) to the results heading so screen-reader
     // and keyboard users land where the sighted eye would.
     $("resultsSec").scrollIntoView({ behavior: "smooth", block: "start" });
@@ -708,7 +766,7 @@ async function runAgentFlow(): Promise<void> {
   btn.textContent = "Agent working…";
   startAgentPanel();
   try {
-    const resp = await fetch("/api/agent", { method: "POST", body: fd, signal: agentAbort.signal });
+    const resp = await apiFetch("/api/agent", { method: "POST", body: fd, signal: agentAbort.signal });
     const ctype = resp.headers.get("content-type") ?? "";
     if (!ctype.includes("text/event-stream") || !resp.body) {
       // A guard rejected the request before the stream opened → JSON error body.
@@ -724,7 +782,7 @@ async function runAgentFlow(): Promise<void> {
     if (e instanceof DOMException && e.name === "AbortError") return;
     agentError(e instanceof Error ? e.message : String(e));
   } finally {
-    btn.disabled = false;
+    btn.disabled = !llmAvailable;
     btn.textContent = "Run agent ▸";
     $<HTMLButtonElement>("cancelGo").classList.add("hidden");
   }
@@ -938,7 +996,7 @@ function makeChip(o: SectionInfo, d: CompileApiResult, exp: HTMLElement): HTMLBu
     if (b.classList.contains("done")) return;
     b.disabled = true;
     try {
-      const resp = await fetch("/api/expand", {
+      const resp = await apiFetch("/api/expand", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ handle: d.handle, section_id: o.id }),
@@ -1004,7 +1062,7 @@ $<HTMLButtonElement>("prove").onclick = async () => {
   proveBtn.textContent = "Asking the model twice…";
   announce("Asking the model twice, this can take a few seconds…");
   try {
-    const resp = await fetch("/api/answer", { method: "POST", body: fd, signal: proveAbort.signal });
+    const resp = await apiFetch("/api/answer", { method: "POST", body: fd, signal: proveAbort.signal });
     const d: AnswerApiResult = await resp.json().catch(() => ({ error: "Parity request failed." }) as AnswerApiResult);
     if (!resp.ok || d.error) throw new Error(await apiFailureMessage(resp, d));
     $("parity").classList.remove("hidden");
@@ -1022,10 +1080,21 @@ $<HTMLButtonElement>("prove").onclick = async () => {
     if (e instanceof DOMException && e.name === "AbortError") return;
     fail(e instanceof Error ? e.message : String(e));
   } finally {
-    proveBtn.disabled = false;
+    proveBtn.disabled = !llmAvailable;
     proveBtn.textContent = "Prove answer parity";
   }
 };
 
-loadSamples();
-loadConfig();
+loadConfig().then(() => {
+  loadSamples();
+});
+
+const demoTokenField = document.getElementById("demoToken") as HTMLInputElement | null;
+if (demoTokenField) {
+  demoTokenField.addEventListener("change", () => {
+    const v = demoTokenField.value.trim();
+    if (v) sessionStorage.setItem(DEMO_TOKEN_KEY, v);
+    else sessionStorage.removeItem(DEMO_TOKEN_KEY);
+    loadSamples();
+  });
+}

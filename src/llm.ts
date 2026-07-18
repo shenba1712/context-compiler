@@ -25,7 +25,7 @@ import { intEnv } from "./env.js";
 import { log } from "./log.js";
 import { inc } from "./metrics.js";
 
-const GEMINI_DEFAULT = "gemini-2.5-flash";
+const GEMINI_DEFAULT = "gemini-3.5-flash";
 const OPENROUTER_DEFAULT = "meta-llama/llama-3.3-70b-instruct:free";
 const ANTHROPIC_DEFAULT = "claude-haiku-4-5-20251001";
 const OPENAI_DEFAULT = "gpt-4o-mini";
@@ -44,10 +44,22 @@ type OpenAICompatProvider = {
 type AnthropicProvider = { name: string; kind: "anthropic"; apiKey: string; model: string };
 type Provider = OpenAICompatProvider | AnthropicProvider;
 
+/** Thrown when every configured provider fails (or none are configured). */
+export class LlmUnavailableError extends Error {
+  /** Safe for HTTP/SSE clients — no provider bodies or keys. */
+  readonly publicMessage =
+    "The AI provider is unavailable right now — try again in a minute.";
+  constructor(detail: string) {
+    super(detail);
+    this.name = "LlmUnavailableError";
+  }
+}
+
 /** Thrown when too many LLM-heavy demo jobs are already in flight. */
 export class LlmBusyError extends Error {
   constructor(message = "Too many AI requests in flight — please retry in a few seconds.") {
     super(message);
+    this.name = "LlmBusyError";
   }
 }
 
@@ -184,7 +196,7 @@ export async function complete(
   opts: { maxTokens?: number; signal?: AbortSignal } = {}
 ): Promise<string> {
   const chain = providerChain();
-  if (!chain.length) throw new Error("No LLM API key configured");
+  if (!chain.length) throw new LlmUnavailableError("No LLM API key configured");
   const maxTokens = opts.maxTokens ?? 1024;
   const signal = mergeSignals(opts.signal);
 
@@ -199,10 +211,14 @@ export async function complete(
       errors.push(`${p.name}: ${msg}`);
       if (p !== chain[chain.length - 1]) {
         inc("llm_failover");
-        log.warn("LLM provider failed, trying next", { provider: p.name, err: msg });
+        // Free-tier OpenRouter (and friends) 429 often — expected failover,
+        // not an ops alert. Real outages still surface if every provider fails.
+        const rateLimited = /\b429\b|rate.?limit|too many requests|quota/i.test(msg);
+        const level = rateLimited ? "info" : "warn";
+        log[level]("LLM provider failed, trying next", { provider: p.name, err: msg });
       }
     }
   }
   inc("llm_all_failed");
-  throw new Error(`All LLM providers failed — ${errors.join("; ")}`);
+  throw new LlmUnavailableError(`All LLM providers failed — ${errors.join("; ")}`);
 }
