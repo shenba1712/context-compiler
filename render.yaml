@@ -15,7 +15,7 @@ services:
   - type: web
     name: context-compiler
     runtime: docker
-    plan: free # free spins down after 15 min idle (~30-60s cold start); bump to starter for a live demo
+    plan: free # free spins down after ~15 min idle; next hit = ~30–60s cold start. Ping /healthz or use Starter for always-on.
     dockerfilePath: ./Dockerfile
     healthCheckPath: /healthz
     autoDeploy: true # redeploy on every push to the connected branch

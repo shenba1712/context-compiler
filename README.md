@@ -28,6 +28,8 @@ docker run -p 8000:8000 -e GEMINI_API_KEY=$GEMINI_API_KEY context-compiler
 
 Point Render, Railway, or Fly at the included [`render.yaml`](./render.yaml) if you want a blueprint. This needs a real container or VM, not a serverless function — it shells out to Python and keeps upload handles in memory, neither of which survives a cold invoke.
 
+**Free-tier hosts (Render Free, etc.):** the service sleeps after roughly fifteen minutes idle. The next request wakes it — expect a **30–60 second cold start** before `/healthz` or the UI responds. Ping `/healthz` every few minutes (UptimeRobot or similar) to keep it warm, or use a paid always-on plan for a live judging week.
+
 On a machine you already live in, you need Node 20+ and Python 3.10+:
 
 ```bash
@@ -119,7 +121,7 @@ LLM keys and model overrides are described above. Beyond those: `CC_ROOT` confin
 
 `npm test` builds both the server and the typed browser client, then runs a plain `node:assert` suite — chunking, ranking, packing, cache, expand, multilingual BM25, CJK bigrams, a curated offline recall@budget eval in `src/eval/`, format conversion through real markitdown, upload and path guards, provider failover, the agent loop, logger and webhook behavior, `/healthz`, and the optional demo-token door lock. No test framework, on purpose; the file is readable top to bottom.
 
-If you see `spawn markitdown ENOENT`, the converter is not on PATH — install it or set `CC_MARKITDOWN_CMD`. If pip quietly gives you markitdown `0.0.1a1`, your default Python is older than 3.10; uninstall and reinstall with uv on 3.12. Empty conversion output usually means a scanned PDF with no text layer. Port 8000 already taken? `PORT=8080 npm run web`. First request on a free-tier host feeling slow? Cold start plus an uncached conversion; warm it with a pinger or a paid instance.
+If you see `spawn markitdown ENOENT`, the converter is not on PATH — install it or set `CC_MARKITDOWN_CMD`. If pip quietly gives you markitdown `0.0.1a1`, your default Python is older than 3.10; uninstall and reinstall with uv on 3.12. Empty conversion output usually means a scanned PDF with no text layer. Port 8000 already taken? `PORT=8080 npm run web`. First request on a free-tier host hanging for half a minute? That is usually the platform cold start (service waking up), sometimes followed by an uncached conversion — ping `/healthz` or open the page a minute early before a live demo.
 
 ## Security, briefly
 

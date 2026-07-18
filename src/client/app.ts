@@ -1091,6 +1091,12 @@ loadConfig().then(() => {
   loadSamples();
 });
 
+// Free Render (and similar) sleep when idle — surface the cold-start expectation
+// only on those hosts so local `npm run web` stays uncluttered.
+if (/\.onrender\.com$/i.test(location.hostname)) {
+  document.getElementById("coldStartNote")?.classList.remove("hidden");
+}
+
 const demoTokenField = document.getElementById("demoToken") as HTMLInputElement | null;
 if (demoTokenField) {
   demoTokenField.addEventListener("change", () => {
