@@ -103,7 +103,7 @@
       <button type="button" class="btn quiet" id="prove" title="Skip the results view — prove from file + budget directly">Prove…</button>
       <span class="saved hidden" id="sessionSaved" style="margin-left:auto" role="status"></span>
     </div>
-    <p class="qhint" id="agentHint"><strong>Compile</strong> packs strictly under your budget. <strong>UI expands</strong> add tokens on top (Prove warns). <strong>Agent</strong> uses the same budget as its starting compile and soft reading ceiling — it stops starting new expands once past it; an in-flight expand may finish slightly over. Prove lives under Compile results.</p>
+    <p class="qhint" id="agentHint"><strong>Compile</strong> packs strictly under your budget. <strong>UI expands</strong> peek omitted sections; only those you Include in Prove add tokens on top. <strong>Agent</strong> uses the same budget as its starting compile and soft reading ceiling — it stops starting new expands once past it; an in-flight expand may finish slightly over. Prove lives under Compile results.</p>
     <details class="expectbox" id="expectBox">
       <summary>Limits &amp; free-tier notes</summary>
       <div class="expectbody" id="expectBody">
@@ -164,7 +164,7 @@
 
     <div id="omittedRow" class="hidden" style="margin-top:16px">
       <strong style="font-size:13px">Omitted sections</strong>
-      <span class="badge">click to expand</span>
+      <span class="badge">click to peek</span>
       <div id="omitChips" style="margin-top:8px"></div>
       <p class="qhint hidden" id="expandBudgetNote" style="margin-top:10px"></p>
       <div id="expanded"></div>
@@ -172,7 +172,7 @@
 
     <div id="proveActions" class="hidden" style="margin-top:16px">
       <button type="button" class="btn ghost" id="proveResults">Prove answer parity</button>
-      <span class="qhint" style="margin-left:8px">Full file vs this compile (+ any expands) — optional, not an Agent run.</span>
+      <span class="qhint" style="margin-left:8px">Full file vs this compile (+ any included expands) — optional, not an Agent run.</span>
     </div>
   </div>
 

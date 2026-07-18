@@ -566,12 +566,23 @@ let proveAbort: AbortController | null = null;
 // failed/cancelled attempt should hide the (empty) results panel again or
 // leave a previous successful result visible underneath the error.
 let hasCompiledOnce = false;
-/** Omitted-section ids the user expanded in the UI — sent to Prove only. */
+/** Omitted-section ids checked “Include in Prove” — sent as expanded_ids. Peeks alone do not count. */
 const proveExpandedIds = new Set<string>();
-/** Tokens added by each UI expand (for the “effective Prove context” note). */
+/** Tokens for each included expand (for the “effective Prove context” note). */
 const proveExpandedTokens = new Map<string, number>();
 /** Compiled tokens from the last successful compile (slider budget result). */
 let lastCompiledTokens = 0;
+
+function setProveInclude(id: string, tokens: number, included: boolean): void {
+  if (included) {
+    proveExpandedIds.add(id);
+    proveExpandedTokens.set(id, tokens);
+  } else {
+    proveExpandedIds.delete(id);
+    proveExpandedTokens.delete(id);
+  }
+  refreshExpandBudgetNote();
+}
 
 function refreshExpandBudgetNote(): void {
   const el = $("expandBudgetNote");
@@ -590,9 +601,9 @@ function refreshExpandBudgetNote(): void {
     lastCompiledTokens.toLocaleString() +
     "</strong> compiled + <strong>" +
     expandSum.toLocaleString() +
-    "</strong> from expands → <strong>" +
+    "</strong> from included expands → <strong>" +
     total.toLocaleString() +
-    "</strong> tokens effective (slider budget was the compile ceiling only — expands add on top).";
+    "</strong> tokens effective (slider budget was the compile ceiling only — only sections with Include in Prove add tokens; peeks do not).";
   el.classList.remove("hidden");
 }
 
@@ -1219,7 +1230,7 @@ function makeChip(o: SectionInfo, d: CompileApiResult, exp: HTMLElement): HTMLBu
     " (~" +
     o.tokens +
     " tok)";
-  b.setAttribute("aria-label", "Fetch omitted section: " + lastCrumb(o.section));
+  b.setAttribute("aria-label", "Peek omitted section: " + lastCrumb(o.section));
   b.onclick = async () => {
     if (b.classList.contains("done")) return;
     b.disabled = true;
@@ -1231,28 +1242,69 @@ function makeChip(o: SectionInfo, d: CompileApiResult, exp: HTMLElement): HTMLBu
       });
       const e: ExpandApiResult = await resp.json();
       if (e.error) throw new Error(e.error);
+      const tok = e.tokens_used || o.tokens || 0;
       const blk = document.createElement("details");
       blk.className = "expblk";
-      // First expand stays open so the user sees what they fetched; later ones
+      blk.dataset.sectionId = o.id;
+      // First peek stays open so the user sees what they fetched; later ones
       // stay collapsed so the page doesn’t flood with prose.
-      if (proveExpandedIds.size === 0) blk.open = true;
+      if (exp.querySelectorAll(".expblk").length === 0) blk.open = true;
+
       const sum = document.createElement("summary");
-      sum.textContent = o.id + " · " + lastCrumb(o.section) + " → " + (e.tokens_used || "?") + " tokens";
+      const title = document.createElement("span");
+      title.className = "expblk-title";
+      title.textContent = o.id + " · " + lastCrumb(o.section) + " → " + (e.tokens_used || "?") + " tokens";
+
+      const includeLab = document.createElement("label");
+      includeLab.className = "expblk-include";
+      includeLab.addEventListener("click", (ev) => ev.stopPropagation());
+      const includeCb = document.createElement("input");
+      includeCb.type = "checkbox";
+      includeCb.checked = false;
+      includeLab.appendChild(includeCb);
+      includeLab.appendChild(document.createTextNode(" Include in Prove"));
+      includeCb.addEventListener("change", () => {
+        setProveInclude(o.id, tok, includeCb.checked);
+        if (includeCb.checked) {
+          announce(
+            "Included " +
+              lastCrumb(o.section) +
+              " in Prove. Effective context ≈ " +
+              (lastCompiledTokens + [...proveExpandedTokens.values()].reduce((a, b) => a + b, 0)).toLocaleString() +
+              " tokens."
+          );
+        } else {
+          announce("Removed " + lastCrumb(o.section) + " from Prove (peek kept).");
+        }
+      });
+
+      const dismiss = document.createElement("button");
+      dismiss.type = "button";
+      dismiss.className = "expblk-dismiss";
+      dismiss.setAttribute("aria-label", "Dismiss peeked section " + lastCrumb(o.section));
+      dismiss.textContent = "×";
+      dismiss.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        setProveInclude(o.id, tok, false);
+        blk.remove();
+        b.classList.remove("done");
+        announce("Dismissed peek of " + lastCrumb(o.section) + ".");
+      });
+
+      sum.appendChild(title);
+      sum.appendChild(includeLab);
+      sum.appendChild(dismiss);
       const pre = document.createElement("pre");
       pre.textContent = e.markdown;
       blk.appendChild(sum);
       blk.appendChild(pre);
       exp.appendChild(blk);
       b.classList.add("done");
-      proveExpandedIds.add(o.id);
-      proveExpandedTokens.set(o.id, e.tokens_used || o.tokens || 0);
-      refreshExpandBudgetNote();
       announce(
-        "Fetched section: " +
+        "Peeked section: " +
           lastCrumb(o.section) +
-          ". Prove context is now about " +
-          (lastCompiledTokens + [...proveExpandedTokens.values()].reduce((a, b) => a + b, 0)).toLocaleString() +
-          " tokens."
+          ". Not in Prove yet — check Include in Prove to add its tokens."
       );
     } catch (err) {
       fail(err instanceof Error ? err.message : String(err));
