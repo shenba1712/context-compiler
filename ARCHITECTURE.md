@@ -1,24 +1,31 @@
-# Context Compiler — Architecture & Design
+# Context Compiler — Architecture
 
-This is the engineering companion to the [README](./README.md): why the system looks the way it does, what we traded away, and where the sharp edges still are. If the README is the story you tell a new user, this is the story you tell the next person who has to change the code.
+Engineering companion to the [README](./README.md): system model, design decisions, invariants, and known limits. For install and operator setup, see the README.
 
 ---
 
-## The problem we actually set out to solve
+## Problem and principles
 
-AI agents read files the way a tired intern photocopies an entire binder for one clause. For a twenty-thousand-token document and a task that touches five percent of it, roughly ninety-five percent of the input spend is waste — paid again on every read. Context Compiler is a deliberately small answer to that: a stateless preparation layer that turns `(file, task, token_budget)` into task-relevant markdown of a guaranteed size.
+Agents often ingest entire documents when only a fraction is relevant. Context Compiler is a **stateless preparation layer**: `(file, task, token_budget) → task-relevant markdown under a hard token budget`, plus an **omitted-sections manifest** so misses are visible and recoverable via `expand_section`.
 
-Three principles shaped every decision after that.
+Three principles constrain the design:
 
-Conversion is commodity; selection is the product. We buy MarkItDown the way apps buy ffmpeg, and we spend our complexity budget on chunking, ranking, and packing.
+1. **Conversion is commodity; selection is the product.** MarkItDown is treated like an external binary (ffmpeg-style). Complexity budget goes to chunking, ranking, and packing.
+2. **Trimming is transparent, never silent.** Lossy steps announce what was dropped and offer a recovery path — hence the omission manifest and `expand_section`.
+3. **Local-first by default.** With no API key, the system makes zero network calls. LLM use (answer parity, agent loop) is opt-in. Ranking stays BM25.
 
-Trimming must be transparent, never silent. Any lossy step has to announce what was lost and offer a recovery path. That is why every compiled response ends with an omitted-sections manifest, and why `expand_section` exists.
+---
 
-Local-first is the default, not a marketing line. With no API key configured, the system makes zero network calls. Sending content to an LLM — for answer parity or the agent loop — is strictly opt-in. Ranking stays BM25.
+## System model
 
-## The shape of the system
+Two thin entry points share one pipeline:
 
-Two thin entry points share one pipeline. The MCP server (`server.ts`) speaks JSON-RPC over stdio to Claude Code, Cursor, Codex, and friends. The demo (`web.ts`) is an Express app that accepts uploads, never caller-supplied paths. Both call into `pipeline.ts`, which is convert → chunk → rank → pack, with a content-addressed disk cache under the convert step and an optional LLM surface for demos (answer parity, agent).
+| Surface | Module | Trust model |
+| --- | --- | --- |
+| MCP (stdio JSON-RPC) | `server.ts` | Semi-trusted caller; paths confined to `CC_ROOT` via realpath |
+| Web demo (Express) | `web.ts` | Untrusted uploader; upload handles only — never caller-supplied paths |
+
+Both call `pipeline.ts`: convert → chunk → rank → pack. Conversion is content-addressed on disk; LLM features sit beside the pipeline for demos.
 
 ```
   MCP client ──► server.ts (stdio, path allowlist)
@@ -36,112 +43,198 @@ Two thin entry points share one pipeline. The MCP server (`server.ts`) speaks JS
               markitdown (Python subprocess)
 ```
 
-There is no database, no session store, no background worker. The pipeline is a pure function of its inputs plus the cache. Horizontal scaling is mostly “run more copies,” because there is almost nothing to coordinate.
+No database, session store, or background worker. The pipeline is a pure function of its inputs plus the conversion cache. Horizontal scaling is mostly “run more copies.”
 
-A compile request hashes the file bytes, looks up converted markdown, converts on a miss (size-checked, time-boxed `execFile`, atomic cache write), chunks on headings, short-circuits if the whole document already fits the budget, ranks with BM25 (`tokenizeQuery` strips stopwords/fillers and expands honorific name forms), packs under the budget with document order restored, and returns markdown plus stats plus the omission manifest. That last piece is not a nicety. It is what turns a recall miss into something an agent can fix.
+**Compile request (happy path):** hash file bytes → cache lookup → convert on miss (size-checked, time-boxed `execFile`, atomic write) → chunk on headings → short-circuit if the whole document fits the budget → BM25 rank (`tokenizeQuery` strips stopwords/fillers and expands honorific name forms) → pack under budget with document order restored → return markdown, stats, and the omission manifest.
 
-## How the pieces earn their keep
+---
 
-Token counting lives in `tokens.ts` behind js-tiktoken’s cl100k encoder, with a four-characters-per-token fallback if the encoder ever fails. Budgets are contracts of intent with the caller, not cryptographic guarantees. A couple of percent of drift versus another model’s tokenizer is expected and documented.
+## Module responsibilities
 
-`convert.ts` treats markitdown as an external binary. We use `execFile`, not a shell, so filenames cannot inject commands. Files are size-checked before spawn, stdout is capped, and the process is killed on timeout. Failures collapse into a single `ConversionError` whose public message is deliberately boring — no Python traceback, no absolute server paths — while the real detail goes to the logger. Empty converter output fails loudly; we learned the hard way that markitdown can exit zero with nothing on stdout for a bare image when no OCR backend is configured. A quiet empty compile would be worse than an error. The same module also answers `converterAvailable()` for `/metrics`, with a short TTL so a probe does not spawn a process on every hit.
+### Tokens — `tokens.ts`
 
-`chunk.ts` walks the markdown once, keeping a heading trail so every section carries a breadcrumb like `Contract > Termination > Notice`. Tables are atomic: a boundary never lands inside a `|...|` run, because dropping rows silently changes answers — the worst failure class for a tool whose pitch is “same answer.” Oversized sections split on paragraph blocks; heading-less PDFs fall back to paragraph windows with `(no heading)` breadcrumbs rather than refusing to work. Eight hundred tokens per chunk is a deliberate default: a four-thousand-token budget then fits a handful of sections plus the manifest, which is enough diversity for multi-facet questions without shredding clauses.
+js-tiktoken cl100k, with a ~4 characters/token fallback if the encoder fails. Budgets are contracts of intent, not cryptographic guarantees; a few percent of drift versus another model’s tokenizer is expected.
 
-`rank.ts` is Okapi BM25 — literature defaults, untuned, zero dependencies — with one domain twist: query terms that appear in a chunk’s breadcrumb get a heading boost, because business documents put the truth in their titles. The tokenizer is Unicode-aware on purpose; a Latin-only split would score every chunk of a Hindi document at zero. CJK runs (no spaces) emit character unigrams and bigrams, and Latin tokens get a tiny stem (`returning` → `return`) so light paraphrases hit without a stemmer dependency. Queries go through `tokenizeQuery`: stopwords and filler noise are stripped, and Title-Case name pairs expand to honorific forms (Miss/Mr/Mrs Lastname) so novels that say “Miss Bennet” still match “Jane Bennet.” Compound tasks are split into sub-questions for BM25 and interleaved round-robin so each facet sees the budget. (An LLM shortlist rerank is a possible future opt-in; it is not shipped — compile must stay free of model quota.)
+### Convert — `convert.ts`
 
-`pack.ts` is where the budget contract becomes real. An early version reserved a fixed number of tokens for the manifest and still overshot on large documents, because the manifest grows with the outline. The honest fix is to assemble the actual artifact — selected chunks in document order, breadcrumb comments, omission list — measure it, and evict the lowest-ranked selected chunk until the output fits. Manifest detail can also degrade in steps (forty lines, then twenty, then ten…) before content is sacrificed. A relative relevance floor stops the packer from padding a sharp query with weakly related runners-up; on flat score distributions nothing falls below the floor, so vague questions still fill the budget as insurance. Document order matters here too: models follow narrative better than a relevance-sorted collage, and the packet stops looking like a shuffled scrapbook.
+MarkItDown as an external binary via `execFile` (not a shell). Files are size-checked before spawn; stdout is capped; the process is killed on timeout. Failures collapse to `ConversionError` with a generic public message (no Python traceback, no absolute paths); detail goes to the logger. Empty converter output is a hard failure — markitdown can exit zero with empty stdout for a bare image when no OCR backend is configured. `converterAvailable()` probes `--version` with a short TTL for `/metrics` (never for `/healthz`).
 
-`cache.ts` keys on sha256 of file bytes. No TTL, no invalidation logic, no staleness class of bugs — edit the file and you get a new key. Writes go through a temp file and rename so concurrent compiles cannot interleave partial markdown. Only conversion is cached; chunk, rank, and pack are milliseconds and depend on the task.
+### Chunk — `chunk.ts`
 
-`pipeline.ts` orchestrates and enforces the passthrough rule. If the raw document fits the budget, ranking can only lose information, so we return everything. Results carry more than markdown now: the applied budget, the sub-queries we split into, selected and omitted sections with relevance percentages, and optional query attribution for the demo UI. MCP strips the duplicate section text before responding so the payload does not double in size.
+Single pass over markdown with a heading trail so each section carries a breadcrumb (`Contract > Termination > Notice`). Tables are atomic — a boundary never lands inside a `|...|` run. Oversized sections split on paragraph blocks; heading-less PDFs fall back to paragraph windows with `(no heading)` breadcrumbs. Default ~800 tokens per chunk so a 4k budget fits a handful of sections plus the manifest.
 
-`llm.ts` is the entire provider surface. Providers are detected from the environment and tried in fixed priority — Gemini, OpenRouter, Anthropic, then a generic OpenAI-compatible endpoint — with automatic failover. Gemini expands into a short model-id list on the same key (defaults: `gemini-flash-lite-latest` → `gemini-3-flash-preview` → `gemini-flash-latest`) so a retired free-tier id does not kill the slot. Soft 404 / “model not found” responses for Gemini are remembered in a short process-local TTL cache (`CC_GEMINI_DEAD_MODEL_TTL_MS`, default 15 minutes) so the next `complete()` skips that id without an HTTP call; 429/quota does not blacklist, but Gemini soft 429/quota waits briefly before the next chain entry (`CC_LLM_FAILOVER_COOLDOWN_MS`, default 1500ms, capped at 10s; prefers `Retry-After` when present). One free-tier wall should not take the feature down while another key still works. `answerModel()` reports the model that actually succeeded on the last `complete()` (when it is still in the chain), so UI badges do not stick on a dead primary after failover. If every provider fails, callers degrade: the answer panel reports the error, counters record the failover story.
+### Rank — `rank.ts`
 
-`agent.ts` is the demo’s controlled agent loop over the same two tools the MCP surface exposes. The web demo passes the user’s token-budget slider as both the first compile budget and a soft reading ceiling (capped at file size). The model may expand omitted sections; the loop stops *starting* new expands once `tokens_read` reaches that ceiling (an in-flight expand may finish slightly over). When start budget already equals the ceiling — the web path — recompile is omitted from the decide prompt so the model cannot waste a turn on a no-op. If the whole file already fits, it short-circuits to a single full-file answer. Unusable decisions collapse to “answer with what we have.” The omitted-sections manifest is the map it navigates by. That is not a metaphor we added for the pitch; it is the reason the manifest exists in the product at all.
+Okapi BM25 (literature defaults, untuned, zero dependencies) plus a heading boost when query terms hit the breadcrumb. Unicode-aware tokenization: CJK runs emit character unigrams and bigrams; Latin tokens get a light stem. Queries go through `tokenizeQuery` (stopword/filler cleanup; Title-Case name pairs expand to honorific forms). Compound tasks split into sub-questions and interleave round-robin so each facet sees budget. An LLM shortlist rerank is deferred — compile must stay free of model quota.
 
-`server.ts` registers exactly two tools. Path access goes through `path-guard.ts`, which realpaths both the root and the target before the prefix check — closing the symlink-escape hole that a string-only comparison would leave open. Errors return as in-band JSON `{error: ...}` payloads; agents handle data better than protocol faults.
+### Pack — `pack.ts`
 
-`web.ts` is the hosted surface: upload-only, rate-limited per IP (default pool 30 / 5 min; agent cost 12; answer/parity cost 4; `CC_MAX_CONCURRENT_LLM` default 2), with `/api/compile`, `/api/expand`, `/api/answer` (parity + optional `expanded_ids`), `/api/measure`, `/api/samples`, `/api/config`, `/api/agent` (SSE; aborts LLM work on client disconnect), and `/api/agent-parity` (one-shot opaque handle after an agent run). The demo is intentionally open for public judging (no shared passphrase); abuse posture is rate limits, size caps, and LLM concurrency. Request logging is selective on purpose — API traffic, non-GETs, and errors — so static asset noise does not drown the signal. Upload validation lives in `upload-guard.ts`: extension allowlists, magic-byte checks, and a decompression-bomb limit on archives before markitdown ever sees them. The browser UI is vanilla HTML and CSS plus a typed client compiled to plain scripts (`tsconfig.client.json`), deliberately free of a frontend framework. Compile packs strictly under the slider; omitted-section clicks are peeks by default (dismiss with ×); only **Include in Prove** populates `expanded_ids` for parity. Dual Prove buttons (quiet top vs results) compare full file vs compile(+included expands) — not Agent. Waiting states use a spinner banner, not buried status text. The page is an instrument for proving the pipeline, not a product surface that needs a design system.
+Enforces the budget on the **assembled** artifact (selected chunks in document order, breadcrumb comments, omission list), then evicts lowest-ranked selected chunks until it fits. Manifest detail degrades in steps (40 → 20 → 10 → …) before content is sacrificed. A relative relevance floor (`CC_RELEVANCE_FLOOR`, default 0.4 × top score) stops padding a sharp query with weak runners-up; on flat score distributions the floor does nothing. Document order is restored so the packet reads as narrative, not a relevance-sorted collage.
 
-Shared numbers — budget floors, relevance floor, max upload size — live in `config.ts` so the web slider and the MCP clamps cannot drift apart. `env.ts` parses numbers safely: non-numeric values warn and fall back instead of becoming NaN and silently disabling the rate limiter, which is a bug we found once and never want again.
+### Cache — `cache.ts`
 
-## Logs and the light kind of observability
+Keys on sha256 of file bytes. Content-addressing means an edit never produces a stale hit (new bytes → new key). Writes use temp file + rename. Only conversion is cached; chunk/rank/pack are cheap and task-dependent.
 
-`log.ts` writes only to stderr. The MCP transport owns stdout; a stray `console.log` would corrupt JSON-RPC, and a source scan in the test suite guards that invariant on the MCP module path. Levels are live-read from `CC_LOG_LEVEL` so tests and deploys can change them without restarting a process graph. Human-readable lines are the default; `CC_LOG_JSON=1` emits one object per line for a drain. Error-level events may also POST to `CC_LOG_WEBHOOK` — best-effort, fire-and-forget, never able to fail the request they are describing. That is the whole alert path: one env var, no SDK, errors only.
+Entries also age out by mtime (default 30 days) via a sweep triggered from `cachePut` (at most once per hour). That is disk hygiene for long-lived servers, not freshness logic — see ADR-006.
 
-`metrics.ts` keeps in-process counters — compiles, expands, agent runs, parity runs, rate-limit hits, conversion failures, LLM failovers. `GET /healthz` is a cheap liveness probe (uptime only) so platform health checks never wait on Python. Counters, `llm_configured`, and `converter_available` live behind `GET /metrics` when `CC_METRICS_TOKEN` is set. The counters reset on restart and are not shared across replicas; for a single-instance demo that is honest scope. A real multi-replica deployment would push the same events to a metrics backend instead of pretending process memory is a fleet view.
+### Pipeline — `pipeline.ts`
 
-## Decisions we are willing to defend
+Orchestrates stages and the passthrough rule: if raw tokens ≤ budget, skip ranking/packing loss and return everything. Results include applied budget, sub-queries, selected/omitted sections with relevance percentages, and optional query attribution for the demo. MCP strips duplicate section text before responding.
 
-Buying conversion and building selection (ADR-001, ADR-002) is the thesis of the project. Rebuilding PDF and Office parsers would have spent the entire complexity budget on someone else’s problem.
+### LLM — `llm.ts`
 
-BM25 for ranking, embeddings deferred (ADR-003) is what makes local-first possible and demos reproducible. Embeddings either mean a heavy local install or a mandatory network call; BM25 plus a heading boost was enough on the corpora we ship.
+Provider surface for opt-in features. Detection from env, tried in fixed priority: Gemini → OpenRouter → Anthropic → generic OpenAI-compatible, with automatic failover. Gemini expands into a short model-id list on the same key (defaults: `gemini-flash-lite-latest` → `gemini-3-flash-preview` → `gemini-flash-latest`). Soft 404 / “model not found” for Gemini is remembered in a process-local TTL (`CC_GEMINI_DEAD_MODEL_TTL_MS`, default 15 min). Soft 429/quota does not blacklist; a brief cooldown may run before the next chain entry (`CC_LLM_FAILOVER_COOLDOWN_MS`, default 1500 ms, capped at 10 s; prefers `Retry-After` when present). `answerModel()` reports the model that last succeeded on `complete()` when it is still in the chain.
 
-Heading-based chunking with atomic tables (ADR-004) trusts the author’s own segmentation. Fixed windows destroy meaning; embedding chunking adds cost and nondeterminism we did not want on day one.
+### Agent — `agent.ts`
 
-Enforcing the budget on the assembled output (ADR-005), not on a sum of chunk sizes minus a constant, is the only contract users can trust. The eviction loop exists because we shipped an overshoot once and wrote a regression test so it cannot quietly return.
+Demo-controlled loop over the same two tools MCP exposes. The web path uses the token-budget slider as both the first compile budget and a soft reading ceiling (capped at file size). The loop stops *starting* new expands once `tokens_read` reaches that ceiling (an in-flight expand may finish slightly over). When start budget already equals the ceiling, recompile is omitted from the decide prompt. Whole-file fit short-circuits to a single full-file answer. Unusable decisions collapse to “answer with what we have.”
 
-Content-hash caching without TTL (ADR-006) chooses correctness by construction over freshness heuristics. Orphans accumulate; that is acceptable at this scale and visible with `du`.
+### Surfaces — `server.ts`, `web.ts`, guards
 
-Small-file passthrough (ADR-007) and local-first networking (ADR-008) are the same instinct: never do a lossy or privacy-touching step when you do not have to.
+`server.ts` registers exactly two tools. `path-guard.ts` realpaths both root and target before the prefix check (closes symlink escape). Errors return in-band as `{error: ...}` JSON.
 
-Exactly two MCP tools (ADR-009) is a product decision disguised as an API one. `compile_context` and `expand_section` form a closed compress → inspect → recover loop. Extra tools dilute agent tool choice and expand the threat surface.
+`web.ts` is upload-only and rate-limited per IP. Routes: `/api/compile`, `/api/expand`, `/api/answer`, `/api/measure`, `/api/samples`, `/api/config`, `/api/agent` (SSE; aborts LLM work on disconnect), `/api/agent-parity` (one-shot opaque handle after an agent run). Upload validation lives in `upload-guard.ts` (extension allowlist, magic bytes, archive decompression-bomb limit). Shared clamps live in `config.ts`; `env.ts` parses numbers safely so bad env cannot become NaN and silently disable rate limiting.
 
-The relevance floor (ADR-010) treats the budget as a ceiling. Absolute BM25 thresholds do not exist — scores are not calibrated — but a relative floor works, and it wisely does nothing when every chunk scores about the same.
+---
 
-Provider failover as a chain rather than a single-vendor bet is newer than the original ADRs, but it belongs with them: the product must stay useful when a free tier melts, and BM25 remains the final safety net.
+## Design decisions (ADRs)
 
-## What the APIs promise
+| ID | Decision | Why |
+| --- | --- | --- |
+| ADR-001 / 002 | Buy conversion (MarkItDown); build selection | Rebuilding PDF/Office parsers would consume the entire complexity budget |
+| ADR-003 | BM25 for ranking; embeddings deferred | Local-first and reproducible demos; embeddings imply heavy local install or mandatory network |
+| ADR-004 | Heading-based chunking; atomic tables | Trust author segmentation; fixed windows destroy meaning; splitting tables silently changes answers |
+| ADR-005 | Enforce budget on assembled output | Sum-of-chunks minus a constant overshot when the manifest grew; eviction + regression test lock the contract |
+| ADR-006 | Content-hash keys + age-out sweep | Edits cannot stale-hit; mtime sweep (`CC_CACHE_MAX_AGE_MS`) bounds disk on long-lived hosts without inventing freshness heuristics |
+| ADR-007 | Small-file passthrough | Ranking is lossy; if lossless fits, take it |
+| ADR-008 | Local-first networking | No API key → no network; LLM features are opt-in |
+| ADR-009 | Exactly two MCP tools | `compile_context` + `expand_section` close compress → inspect → recover; more tools dilute choice and expand surface |
+| ADR-010 | Relative relevance floor | Absolute BM25 thresholds are uncalibrated; relative floor bites only when scores have signal |
 
-`compile_context` returns compiled markdown wrapped in untrusted-content markers, token stats, whether the cache fired, the budget actually applied, the sub-queries we split into, and selected plus omitted sections with relevance. `expand_section` returns one section by id, or an error plus the full outline so an agent can self-correct without a blind retry. Budgets are clamped into sane ranges; errors stay in-band as JSON.
+**Provider failover as a chain** (newer than the numbered ADRs, same spirit): stay useful when a free tier fails; BM25 remains the offline floor.
 
-On HTTP, `/api/compile` and `/api/answer` take multipart uploads; `/api/expand` re-reads only paths inside the demo’s own upload directory; `/api/measure` returns token counts for the budget slider; `/api/config` exposes demo limits and LLM availability; `/api/agent` streams SSE steps then a final answer (optional `parity_handle` on `done`); `/api/agent-parity` compares full file vs the agent’s final context once per handle (410 after consume or TTL); `/healthz` is the cheap probe. Status codes mean what you expect: 400 for missing input, 403 for path escape, 410 for expired/consumed parity handles, 413 for rejected uploads, 422 for conversion failure, 429 for rate limit, 503 for busy converter / LLM, 500 for the rest.
+---
 
-## How people actually use it
+## API contracts
 
-A developer adds one MCP config entry. Their agent discovers the tools and, on file questions, calls `compile_context` with a task and a budget derived from remaining context headroom. If the answer is thin, it reads the manifest and expands. The human’s workflow does not change.
+### MCP
 
-A judge opens the hosted URL, picks a sample or uploads a file, asks a real question, and watches the bars and cost meter (spinner banner while Compile/Prove/Agent wait). With a key they prove parity on the compile path or run the agent (soft reading ceiling, SSE, optional Compare). With a rehearsed miss — vague question, tiny budget, or a lexical paraphrase — the manifest names the missing section; peek to inspect, Include in Prove if you want it in parity, or let Agent walk the same map. Failure, detection, recovery, all in band.
+- **`compile_context`** — compiled markdown in untrusted-content markers; token stats; cache hit flag; applied budget; sub-queries; selected + omitted sections with relevance.
+- **`expand_section`** — one section by id, or error plus full outline so the agent can self-correct. Budgets clamped; errors stay in-band as JSON.
 
-## Security, as we model it
+### HTTP (demo)
 
-File content is never trusted, at parse time or inside a model prompt. The MCP caller is semi-trusted and path-restricted. The demo uploader is untrusted and upload-only. LLM providers are trusted only after an explicit key is set.
+| Route | Role |
+| --- | --- |
+| `POST /api/compile`, `/api/answer` | Multipart uploads |
+| `POST /api/expand` | Re-reads only paths under the demo upload directory |
+| `POST /api/measure` | Token counts for the budget slider |
+| `GET /api/config` | Demo limits and LLM availability |
+| `POST /api/agent` | SSE steps then final answer (optional `parity_handle` on `done`) |
+| `POST /api/agent-parity` | Full file vs agent final context; one-shot (410 after consume or TTL) |
+| `GET /healthz` | Cheap liveness (uptime only — no Python) |
+| `GET /metrics` | Counters when `CC_METRICS_TOKEN` is set |
 
-Malicious documents hit a size cap (20 MB on the public demo), a timeout, a stdout cap, and a subprocess boundary; residual risk is memory abuse inside the converter, which a tighter sandbox would shrink. Prompt injection is mitigated by markers and prompt instructions, not by magic — the consuming agent is still the last line of defense, and we say so. If injection wins a round, the omitted-sections manifest and `expand_section` are the same recovery path as a recall miss. Path escape through symlinks is closed by realpath on both sides. Data leaves the machine only when someone opts into an LLM feature. The demo’s DoS posture is size caps, timeouts, per-IP rate limits, and an answer-context cost cap. There is still no user auth — the public URL is open by design for hackathon judging. Cache entries are content-addressed and locally trusted. Converter stderr is truncated before it becomes a log-injection vector; public error messages stay generic.
+Status codes: 400 missing input, 403 path escape, 410 expired/consumed parity handle, 413 rejected upload, 422 conversion failure, 429 rate limit, 503 busy converter/LLM, 500 otherwise.
 
-## Testing and performance, honestly
+---
 
-The suite uses plain `node:assert` and no framework so it stays readable. It covers chunking invariants, ranking (including multilingual scripts, CJK bigrams, light Latin stem, query stopword/filler cleanup, and honorific expansion), packing under budget, an offline recall@budget fixture suite under `src/eval/` (lexical hits, paraphrases that should hit, a paraphrase miss that must still expand-recover, multi-query, heading-less text, compare questions, and a tiny-budget miss that must still be recoverable via expand), cache hits, expand round-trips, real pptx and csv through markitdown, image-empty failure, path and upload guards, sanitized conversion errors, safe env parsing, OpenAI-compat and failover paths, the agent loop and its SSE endpoint, logger level gating and error-only webhooks, metrics snapshot semantics, and healthz. We deliberately do not assert answer-parity equivalence in CI — that is a nondeterministic demonstration, not an invariant — but we do assert the fallback contracts when the LLM path fails.
+## Observability
 
-Conversion dominates latency and happens once per content hash. Chunk and BM25 are milliseconds at document scale. Pack’s eviction loop is negligible because the selected set is small. Untuned knobs (BM25 k1/b, heading boost, chunk size, relevance floor) are defensible defaults, not the output of a sweep. If someone asks whether we tuned them, the honest answer is no.
+`log.ts` writes only to stderr — MCP owns stdout; a test scan guards against stray stdout on the MCP path. Levels live-read from `CC_LOG_LEVEL`. Default human-readable lines; `CC_LOG_JSON=1` for one object per line. Error-level events may POST to `CC_LOG_WEBHOOK` (best-effort, never fails the request).
 
-## Deployment and what “scale” would mean next
+`metrics.ts` keeps in-process counters (compiles, expands, agent/parity runs, rate-limit hits, conversion failures, LLM failovers). Counters reset on restart and are not shared across replicas. Multi-replica deployments should push the same events to a metrics backend.
 
-A Docker image with Node and markitdown is enough for the demo. Stateless app plus content-addressed cache means N replicas need nothing shared except, eventually, a shared cache volume if duplicate conversions bother you. The honest scale path, in order, is shared cache, the rate limits we already have, a conversion worker pool if CPU becomes the bottleneck, then corpus mode with a persistent chunk index. None of that is required at demo traffic. Observability today is stderr, an optional error webhook, `/healthz`, and token-gated `/metrics`; tomorrow it would be the same events pushed to a real metrics backend once more than one replica matters.
+---
 
-### Disaster recovery
+## Security model
 
-The recovery story is the deployment story, said plainly. GitHub is the source of truth; the Docker image and the Render blueprint are how you rebuild. API keys and other secrets live in the host dashboard, never in the repo — a wiped instance comes back with the same code and the same keys you re-attach, not with anything scraped from git history.
+| Actor | Trust | Constraint |
+| --- | --- | --- |
+| File content | Untrusted | Subprocess boundary, size/timeout/stdout caps |
+| MCP caller | Semi-trusted | `CC_ROOT` after realpath |
+| Demo uploader | Untrusted | Upload-only; magic-byte / zip-bomb checks |
+| LLM provider | Trusted only after explicit key | Opt-in; keys stay server-side |
 
-What does not survive a crash or a redeploy is everything the process was holding for convenience: uploads under the demo’s tmp directory (TTL-swept anyway), one-shot parity handles, in-memory rate-limit counters and metrics, and the instance-local conversion cache. Those are ephemeral by design. After a restart, the next compile converts again on a cache miss; a judge who had a file mid-session re-uploads. Code and dashboard secrets are the durable pieces; session residue is not.
+Prompt injection is mitigated by untrusted-content markers and prompt instructions, not a sandbox — the consuming agent remains the last line of defense. If injection or recall fails, the omission manifest and `expand_section` are the recovery path. Data leaves the machine only when an LLM feature is used. Public error messages stay generic; converter stderr is truncated before logging.
 
-If every LLM provider in the chain is down, answer parity and the agent loop go quiet, but the product does not. Compile and MCP still run offline — conversion, BM25 ranking, packing, and expand — because ranking never required a key. Failover across Gemini, OpenRouter, Anthropic, and a generic OpenAI-compatible endpoint is how we ride out a single free-tier melt, not how we claim five-nines on someone else’s API.
+The hosted demo has no user accounts. Abuse posture is size caps, timeouts, per-IP rate limits, and LLM concurrency — appropriate for a public demo link, not multi-tenant SaaS.
 
-We are not multi-region HA, and there is no backup database, because there is no database. That is intentional demo scope, not an oversight we paper over with fake RTO/RPO numbers. If the host dies, you redeploy from the blueprint; if a key burns, you rotate it in the dashboard; if you care about conversion cache across restarts, attach a volume — the same scale path already named above.
+---
+
+## Failure modes and recovery
+
+| Failure | Behavior |
+| --- | --- |
+| Converter missing / timeout / empty stdout | Hard error; generic client message |
+| Converter busy (queue full) | 503-style busy |
+| BM25 paraphrase miss | Manifest names omitted sections; expand / agent recover |
+| Pack overshoot | Eviction loop + tests; must not return over budget |
+| All LLM providers down | Prove / Agent fail; compile and MCP still run offline |
+| Process restart | Uploads, parity handles, in-memory rate limits/metrics, and instance-local cache are ephemeral; next compile converts on miss |
+
+**Disaster recovery.** GitHub is source of truth; Docker image + `render.yaml` rebuild the host. Secrets live in the host dashboard, not the repo. There is no database to back up. Not multi-region HA — intentional demo scope. Attach a volume if conversion cache should survive redeploys.
+
+---
 
 ## Formats and clients
 
-DOCX and XLSX are the happiest paths — headings and tables survive. PPTX keeps slide text and loses layout. Text-layer PDFs often arrive heading-less and fall back to paragraph windows. Scanned PDFs and bare images without OCR are out of scope and fail clearly. HTML, markdown, CSV, and plain text are near-lossless. Video and audio would be a transcription head on the same pipeline when we choose to spend that complexity.
+| Format | Behavior |
+| --- | --- |
+| DOCX / XLSX | Happiest paths — headings and tables survive |
+| PPTX | Slide text kept; layout lost |
+| Text-layer PDF | Often heading-less → paragraph windows |
+| Scanned PDF / bare image without OCR | Out of scope; fail clearly |
+| HTML / markdown / CSV / plain text | Near-lossless |
 
-Any stdio MCP client works. Runtimes are Node 20+ and Python 3.10+ for the converter only. LLM support is provider-agnostic by design: Gemini and OpenRouter as the recommended free pair, Anthropic and OpenAI-compatible endpoints as further links in the chain, BM25 as the floor that never needs a key.
+Any stdio MCP client works. Runtimes: Node 20+, Python 3.10+ for the converter only. LLM support is provider-agnostic; BM25 never needs a key.
 
-## Known limitations, ranked by real risk
+---
 
-Recall is still the category risk. BM25 can miss paraphrased relevance (query “falling ill” vs passage “unwell” / “wet through”); the manifest makes that miss visible and `expand_section` makes it repairable, which is mitigation rather than a guarantee. An offline fixture suite under `src/eval/` guards the scenarios we care about — including a deliberate paraphrase miss that must remain expandable, plus honorific/filler query-cleanup hits. Embeddings remain the planned second scorer when they can stay local-first without blowing free-tier RAM.
+## Known limits and deferred work
 
-Multi-hop comparison questions are better than they were — compound queries split and interleave, and the agent loop can expand on purpose — but a single greedy pack can still under-serve a “compare §2 with appendix C” task. Two calls remain an honest workaround.
+- **Recall** — BM25 can miss paraphrased relevance; mitigation is the manifest + `expand_section` (and Agent). Offline fixtures under `src/eval/` guard scenarios we care about, including a deliberate paraphrase miss that must remain expandable. Local embeddings as a second scorer are planned when they stay local-first.
+- **Multi-hop compare** — compound queries split and interleave, but a single greedy pack can still under-serve “compare §2 with appendix C.” Two calls remain a valid workaround.
+- **Heading-less PDFs** — weaker chunks and weaker demo aesthetics.
+- **Token drift** — cl100k vs other tokenizers: a few percent.
+- **`expand_section` truncation** — character-ratio approximation, flagged in output.
+- **OCR / media transcription** — deferred so a bad transcript cannot silently corrupt answers.
+- **Hosted demo** — rate limits and cost caps, no accounts.
 
-Heading-less PDFs still degrade chunk quality and demo aesthetics; pick headed demo files when you can. Token-count drift versus non-cl100k tokenizers is a few percent. `expand_section` truncation is a character-ratio approximation, flagged in the output. The hosted demo has no user accounts. CJK ranking uses character bigrams now; residual weakness is mostly domain paraphrase and heading-less layout, not “CJK is unscored.”
+Untuned knobs (BM25 k1/b, heading boost, chunk size, relevance floor) are defensible defaults, not the output of a sweep.
 
-None of those are secrets. They are the edges of a system that chose transparent lossiness, local-first defaults, and a two-tool API over the temptation to look larger than it is.
+---
+
+## Testing posture
+
+Plain `node:assert`, no framework. Coverage includes chunking invariants, multilingual/CJK ranking, query cleanup, packing under budget, offline recall@budget fixtures (`src/eval/`), cache, expand round-trips, real pptx/csv through markitdown, image-empty failure, path/upload guards, sanitized conversion errors, safe env parsing, OpenAI-compat and failover paths, agent loop + SSE, logger/webhook gating, metrics, and healthz.
+
+Answer-parity equivalence is deliberately **not** asserted in CI — nondeterministic demonstration, not an invariant. Fallback contracts when the LLM path fails are asserted.
+
+Conversion dominates latency and runs once per content hash. Chunk and BM25 are milliseconds at document scale. Pack eviction is negligible because the selected set is small.
+
+---
+
+## Ops knobs
+
+Defaults operators most often care about. Full install and key setup live in the README.
+
+| Variable | Default | Role |
+| --- | --- | --- |
+| `CC_CACHE_DIR` | `~/.cache/context-compiler` | Conversion cache root |
+| `CC_CACHE_MAX_AGE_MS` | 30 days | Age-out for cached `.md` by mtime |
+| `CC_CACHE_SWEEP_INTERVAL_MS` | 1 hour | Max sweep frequency (on `cachePut`) |
+| `CC_MAX_FILE_BYTES` | 20 MB | Refuse before convert / upload |
+| `CC_CONVERT_TIMEOUT_S` | 120 | Converter spawn timeout |
+| `CC_MAX_CONCURRENT_CONVERSIONS` | 3 | Parallel Python procs |
+| `CC_MAX_QUEUED_CONVERSIONS` | 12 | Queue depth before busy |
+| `CC_RATE_LIMIT` | 30 / 5 min | Per-IP point pool (demo) |
+| `CC_RATE_COST_AGENT` | 12 | Agent route cost |
+| `CC_RATE_COST_ANSWER` | 4 | Answer / agent-parity cost |
+| `CC_MAX_CONCURRENT_LLM` | 2 | Concurrent Prove/Agent jobs |
+| `CC_GEMINI_DEAD_MODEL_TTL_MS` | 15 min | Skip soft-404 Gemini model ids |
+| `CC_LLM_FAILOVER_COOLDOWN_MS` | 1500 (cap 10s) | Pause before next chain entry on soft 429 |
+| `CC_METRICS_TOKEN` | unset | Enables Bearer-gated `/metrics` |
+| `CC_RELEVANCE_FLOOR` | 0.4 | Relative pack / attribution floor |
+
+Shared budget floors and the upload size cap live in `config.ts` so web slider and MCP clamps cannot drift.

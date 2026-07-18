@@ -13,7 +13,7 @@ RUN npm ci --no-audit --no-fund
 COPY tsconfig.json tsconfig.client.json ./
 COPY src ./src
 COPY public ./public
-COPY README.md ARCHITECTURE.md DEMO_SCRIPT.md ./
+COPY README.md ARCHITECTURE.md ./
 RUN npm run build && npm prune --omit=dev
 
 ENV PORT=8000

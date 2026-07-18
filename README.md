@@ -4,21 +4,40 @@
 
 Every time an AI agent opens a file, it usually pays for the whole thing — even when the answer lives in a single paragraph. A ninety-page novel read a thousand times at a few dollars per million tokens is not a rounding error. It is a bill you keep replaying.
 
-Context Compiler is a small, local-first layer that sits in front of that habit. You give it a file, a task, and a token budget. It returns only the sections that look relevant as markdown, plus a manifest of everything it left out so the agent can fetch more if it was wrong. On the documents we care about — novels, manuals, reports, spreadsheets — that routinely means ninety-one to ninety-seven percent fewer tokens with the answer still intact.
+Context Compiler is a local-first layer in front of that habit. You give it a file, a task, and a token budget. It returns only the sections that look relevant as markdown, plus a manifest of everything it left out so the agent can fetch more if it was wrong. On the documents we care about — novels, manuals, reports, spreadsheets — that routinely means ninety-one to ninety-seven percent fewer tokens with the answer still intact.
 
-The demo ships a real sample library so you can feel that claim with your hands: novels and a science text as PDF or DOCX, a business report, a financials spreadsheet, a drone manual, and short-story sets in English and Hindi. Watch a long novel compress to a single question’s worth of context and you stop needing the pitch deck.
+The demo ships a sample library so you can feel that claim: novels and a science text as PDF or DOCX, a business report, a financials spreadsheet, a pitch deck, a drone manual, and short-story sets in English, Hindi, Spanish, Russian, and Arabic.
 
-## What actually happens
+**Live demo:** [https://context-compiler.onrender.com](https://context-compiler.onrender.com)
 
-Under the hood the path is deliberately boring. The file is converted to markdown, split into heading-aware chunks (tables stay whole — we refuse to drop rows quietly), ranked against your question with our own BM25, and packed under the budget with document order restored. When the whole file already fits, we skip ranking entirely. Ranking is a lossy step; if lossless is affordable, we take it.
+## How it works
 
-TypeScript owns that pipeline. Python shows up only as the `markitdown` converter binary — the same way apps ship ffmpeg — so you get docx, xlsx, pptx, pdf, and friends without writing a single custom parser. Conversion results are cached by content hash: same bytes, same markdown, no TTL games.
+The pipeline is convert → chunk → rank → pack:
 
-If you have an LLM key, answer parity and agent mode can call the model. Compile itself stays on BM25 — free, local, no quota. Without a key, everything else still works offline. That is not a degraded mode. That is the default.
+1. Convert the file to markdown via MarkItDown (docx, xlsx, pptx, pdf, and friends).
+2. Split into heading-aware chunks (tables stay whole).
+3. Rank against your question with local BM25.
+4. Pack under the budget, restoring document order. If the whole file already fits, ranking is skipped.
 
-## Getting it running
+Compile itself never calls a model — BM25 only, free and offline. An LLM key is optional and only unlocks Prove and Agent. Conversion results are cached by content hash.
 
-The easiest path is Docker, which is also what a hosted deploy looks like:
+For design depth, see [ARCHITECTURE.md](./ARCHITECTURE.md).
+
+## Compile, Prove, and Agent
+
+| Mode | What it does | Needs an LLM key? |
+| --- | --- | --- |
+| **Compile** | Packs task-relevant sections under your budget; returns markdown + an omitted-sections manifest. | No |
+| **Prove** | Asks the model the same question from the full file and from the compiled slice, side by side. | Yes |
+| **Agent** | Lets the model compile, read the manifest, expand sections, and answer under the same budget as a soft reading ceiling. | Yes |
+
+On the demo UI, **Compile once** is the default path. **Prove…** / **Prove answer parity** check answer quality for that compile (optionally including sections you marked **Include in Prove**). **Run agent** is a separate retrieval loop — not Prove.
+
+Budget by question breadth, not file size: ~1k tokens for a factual lookup, ~4k for synthesis across a few sections. “Summarize everything” needs a budget at least as large as the file (lossless passthrough). Leaving the slider at 4,000 is almost always fine.
+
+## Install
+
+### Docker
 
 ```bash
 docker build -t context-compiler .
@@ -26,11 +45,13 @@ docker run -p 8000:8000 -e GEMINI_API_KEY=$GEMINI_API_KEY context-compiler
 # open http://localhost:8000
 ```
 
-Point Render, Railway, or Fly at the included [`render.yaml`](./render.yaml) if you want a blueprint. This needs a real container or VM, not a serverless function — it shells out to Python and keeps upload handles in memory, neither of which survives a cold invoke.
+Point Render, Railway, or Fly at [`render.yaml`](./render.yaml) for a blueprint. This needs a real container or VM — it shells out to Python and keeps upload handles in memory.
 
-**Free-tier hosts (Render Free, etc.):** the service sleeps after roughly fifteen minutes idle. The next request wakes it — expect a **30–60 second cold start** before `/healthz` or the UI responds. Ping `/healthz` every few minutes (UptimeRobot or similar) to keep it warm, or use a paid always-on plan for a live judging week.
+**Free-tier hosts (Render Free, etc.):** the service sleeps after roughly fifteen minutes idle. The next request wakes it — expect a **30–60 second cold start** before `/healthz` or the UI responds. Ping `/healthz` every few minutes (UptimeRobot or similar) to keep it warm, or use a paid always-on plan.
 
-On a machine you already live in, you need Node 20+ and Python 3.10+:
+### Local
+
+Node 20+ and Python 3.10+:
 
 ```bash
 npm install && npm run build
@@ -39,21 +60,42 @@ export GEMINI_API_KEY=...   # optional
 npm run web                 # http://localhost:8000
 ```
 
-If pip is awkward on your system, `uv tool install "markitdown[docx,pdf,xlsx,pptx]"` does the same job without fighting Homebrew’s externally-managed Python. Or skip Python entirely and stay on Docker.
+If pip fights Homebrew’s externally-managed Python, use `uv tool install "markitdown[docx,pdf,xlsx,pptx]"`. Or skip Python entirely and stay on Docker.
 
-## About API keys
+## API keys
 
-No key yet? Nothing is blocked. An LLM key unlocks the demo’s answer-parity panel and agent mode (which need a model to answer or decide the next hop). Compile is always BM25 — no model call. Without any key, conversion, chunking, BM25, packing, both MCP tools, and the full web demo still run. CI verifies that path on every commit with no secrets set.
+Keys are **optional**. Without any key, conversion, chunking, BM25, packing, both MCP tools, and the full web demo still run. CI verifies that path on every commit with no secrets set.
 
-When you do configure keys, they are tried in priority order and fail over automatically — rate limit, quota, outage, retired model id, whatever — so one free-tier wall does not take the feature down while another key still works. Gemini is the intended free primary (`GEMINI_API_KEY`). On that key we try several model ids in order (`gemini-flash-lite-latest`, then `gemini-3-flash-preview`, then `gemini-flash-latest`) before leaving Gemini; override with `CC_GEMINI_MODELS` (comma list) or pin one with `CC_GEMINI_MODEL`. Soft “model not found” / 404 responses are cached briefly in-process (`CC_GEMINI_DEAD_MODEL_TTL_MS`, default 15 minutes) so we skip that id on the next call; 429/quota is not cached, but Gemini soft 429/quota pauses briefly before the next chain entry (`CC_LLM_FAILOVER_COOLDOWN_MS`, default 1500ms, capped at 10s; prefers `Retry-After` when present). OpenRouter is the natural next provider (`OPENROUTER_API_KEY`), then Anthropic, then any OpenAI-compatible endpoint via `OPENAI_API_KEY` or `CC_LLM_API_KEY` plus `CC_LLM_BASE_URL`. Per-provider overrides also include `CC_OPENROUTER_MODEL` and friends. OpenRouter’s `:free` model IDs come and go; if the default stops answering, set `CC_OPENROUTER_MODEL` to whatever is current on their models page.
+A key unlocks **Prove** and **Agent** only. Compile stays on BM25 either way.
 
-On a hosted deployment the operator sets the key as a server env var. It never reaches the browser. Locally or over MCP, it is simply your key in your environment. Compile is free of model cost by default; a parity comparison is roughly a dime at worst, and the demo rate-limits plus caps the full-file side of that comparison so a public instance cannot silently burn a bill.
+When keys are set, providers are tried in this order and fail over automatically (rate limit, quota, outage, retired model id):
 
-## Plugging it into an agent
+1. **Gemini** (primary) — `GEMINI_API_KEY` or `GOOGLE_API_KEY`
+2. **OpenRouter** — `OPENROUTER_API_KEY`
+3. **Anthropic** — `ANTHROPIC_API_KEY`
+4. **OpenAI-compatible** — `OPENAI_API_KEY`, or `CC_LLM_API_KEY` + `CC_LLM_BASE_URL`
 
-The product surface is two MCP tools on purpose. `compile_context` turns a file into budgeted, task-relevant markdown. `expand_section` pulls back one omitted section by id. Together they form a closed loop: compress, inspect the manifest, recover. Extra tools would only dilute an agent’s ability to choose the right one.
+On Gemini, several model ids are tried on the same key before leaving that provider:
 
-Wire it into Codex, Claude Desktop, Claude Code, or Cursor the usual way — point the client at `node /path/to/context-compiler/dist/server.js` and set `CC_ROOT` to the directory agents are allowed to read. Paths are resolved with realpath before the allowlist check, so a symlink inside the root that points outside it cannot escape.
+`gemini-flash-lite-latest` → `gemini-3-flash-preview` → `gemini-flash-latest`
+
+**Overrides:**
+
+- Pin one Gemini model: `CC_GEMINI_MODEL`
+- Custom Gemini list: `CC_GEMINI_MODELS` (comma-separated)
+- OpenRouter model: `CC_OPENROUTER_MODEL` (free `:free` ids churn; set this if the default stops answering)
+
+On a hosted deploy, set keys as server env vars — they never reach the browser. Locally or over MCP, they live in your environment.
+
+### Advanced failover
+
+Most operators can ignore these. Soft “model not found” / 404 responses for Gemini are skipped briefly in-process; 429/quota is not blacklisted but may pause briefly before the next chain entry (prefers `Retry-After` when present). Knobs: `CC_GEMINI_DEAD_MODEL_TTL_MS`, `CC_LLM_FAILOVER_COOLDOWN_MS`, `CC_LLM_TIMEOUT_MS`. Details live in [ARCHITECTURE.md](./ARCHITECTURE.md).
+
+## MCP setup
+
+Two tools: `compile_context` (budgeted, task-relevant markdown + omitted-sections manifest) and `expand_section` (fetch one omitted section by id). Together they form a closed loop: compress, inspect, recover.
+
+Point the client at `node /path/to/context-compiler/dist/server.js` and set `CC_ROOT` to the directory agents may read. Paths are resolved with realpath before the allowlist check, so a symlink inside the root that points outside cannot escape. The hosted demo never accepts a caller-supplied path — uploads only.
 
 ```toml
 # ~/.codex/config.toml
@@ -77,68 +119,54 @@ CC_ROOT = "/path/agents/may/read"
 }
 ```
 
-Claude Code is one line: `claude mcp add context-compiler -- node /path/to/context-compiler/dist/server.js`.
+Claude Code: `claude mcp add context-compiler -- node /path/to/context-compiler/dist/server.js`.
 
-The hosted demo never accepts a caller-supplied path. Uploads only. The path-based API lives on the local MCP surface, where confinement belongs.
+## Gotchas
 
-## What the demo is trying to prove
+- **Cold start on free-tier hosts** — first hit after idle can take 30–60s (see Install).
+- **`spawn markitdown ENOENT`** — converter not on PATH; install it or set `CC_MARKITDOWN_CMD`. If pip gives you markitdown `0.0.1a1`, your Python is older than 3.10; reinstall with uv on 3.12.
+- **Empty conversion** — usually a scanned PDF with no text layer. We fail loudly rather than invent text.
+- **Port 8000 taken** — `PORT=8080 npm run web`.
+- **Behind a reverse proxy** — set `CC_TRUST_PROXY` to a hop count like `1`, not the string `true` (that trusts any client `X-Forwarded-For` and weakens rate limits).
+- **OpenRouter free models** — ids come and go; override with `CC_OPENROUTER_MODEL` when needed.
 
-Without an API key, the page already shows the whole argument. Upload a file, ask a question, drag the budget slider. You get relevance percentages per section, red and green token bars, a cost meter at an explicit dollars-per-million assumption, and a compiled context you can literally read. That human inspection is the first proof. The numbers are just math.
+## Useful env vars
 
-With a key, Prove asks the model the same question twice — once from the full converted file, once from the compiled slice — and puts the answers side by side. There are two buttons on purpose: a quiet **Prove…** next to Compile (skip the results view; prove from file + budget only) and **Prove answer parity** under results (compile plus any sections you checked **Include in Prove**). That path is not Agent. Cheap context is worthless if the answer changes. The panel is there so you do not have to take our word for it.
+| Variable | Role |
+| --- | --- |
+| `CC_ROOT` | MCP read confine (default: home directory) |
+| `CC_CACHE_DIR` | Converted-markdown cache (default: `~/.cache/context-compiler`) |
+| `CC_MAX_FILE_BYTES` | Upload size cap (default 20 MB) |
+| `CC_CONVERT_TIMEOUT_S` | Converter timeout (default 120s) |
+| `CC_MARKITDOWN_CMD` | Non-PATH markitdown binary |
+| `CC_LOG_LEVEL` | `error` / `warn` / `info` / `debug` / `silent` (default `info`) |
+| `CC_METRICS_TOKEN` | Enables `GET /metrics` with `Authorization: Bearer …` |
+| `CC_DEMO_PRICE_PER_MTOK` | Demo cost-meter assumption (default 3.0) |
 
-While Compile, Prove, or Agent is waiting, the demo shows a spinner banner in the results area — not a buried status line under empty stats. Cancel aborts in-flight work; closing the tab disconnects and aborts LLM calls on the server.
+Rate limits, concurrency, and other ops knobs are documented in [ARCHITECTURE.md](./ARCHITECTURE.md). Logs always go to stderr (stdout is reserved for MCP JSON-RPC). `GET /healthz` is a cheap liveness probe.
 
-## Agent mode, or watching the model drive retrieval
+## Tests
 
-A one-shot compile is a human picking a budget. The point of the tool, though, is an agent using it.
+```bash
+npm test
+```
 
-The demo’s “Run agent” button is the controlled version of that story. You ask a question and set the same token budget as Compile — that budget is both the agent’s first compile pack size and its soft reading ceiling. The model compiles under it, reads the omitted-sections manifest, and decides what to do next — expand a specific section, or answer. It stops *starting* new expands once `tokens_read` reaches the ceiling; an expand already in flight may finish slightly over (honest soft bound, not a hard gate). When the start budget already equals the ceiling (the web path), recompile is omitted from the decide prompt so the model cannot waste a turn on a no-op. Each step streams live over SSE. A token meter climbs as it reads, next to the crossed-out whole-file count. If the whole file already fits your budget, it skips retrieval and answers once. After a run, optional **Compare to full file** uses a one-shot `parity_handle`. The loop is also bounded by a max-steps cap and a fail-safe that turns any unusable decision (bad JSON, unknown section, a recompile that would not grow) into “answer with what we have” rather than a spin. It needs an LLM key and rides the same Gemini → OpenRouter failover chain as everything else.
-
-Manual UI expands on a Compile result are peeks by default: click an omitted section to read it, dismiss with × to close the peek. Only **Include in Prove** adds that section’s id to Prove’s `expanded_ids` and raises the effective Prove token count; peeks alone do not. The slider stays the compile ceiling; the page warns when included expands raise the effective Prove context.
-
-Separately, any real coding agent over MCP can call the same two tools in its own loop. That is the credibility shot for a recording; the in-repo button is the dependable one. Both share one design idea: the omitted-sections manifest is not decoration. It is the map. Design notes and a capture recipe live in [DEMO_SCRIPT.md](DEMO_SCRIPT.md); the deeper engineering story is in [ARCHITECTURE.md](ARCHITECTURE.md).
-
-## Choosing a budget
-
-Budget by question breadth, not file size. A factual lookup is happy around a thousand tokens. Synthesis across a few sections wants something like four thousand. “Summarize everything” needs a budget at least as large as the file — at which point the compiler returns the whole document as lossless passthrough. On the demo, the same control is the Agent’s starting compile budget and soft reading ceiling.
-
-For Compile, the budget is a hard packing ceiling: output stays under the slider. Peeks do not change that. **Include in Prove** and Agent expands are different — included expands raise effective Prove context (with a warning), and Agent uses a soft stop once past the ceiling. When ranking shows a clear relevance drop-off, packing stops early and returns less than you allowed (`CC_RELEVANCE_FLOOR`, default 0.4 × the top score). On vague questions with no clear signal, the packer fills the budget as recall insurance. Leaving the slider at four thousand is almost always fine.
-
-Compound questions (“What voids the warranty? Can it fly in rain?”) get split into sub-queries for BM25 and interleaved round-robin so each facet gets a fair shot at the budget.
-
-## Logs, health, and a quiet alert path
-
-A tool that sits on the hot path of agents needs to be boring to operate. Logs always go to stderr — never stdout — because the MCP server speaks JSON-RPC on stdout and a single stray print would corrupt the protocol. Levels are gated by `CC_LOG_LEVEL` (`error`, `warn`, `info`, `debug`, or `silent`; default `info`, and tests mute themselves via `NODE_ENV=test`). Set `CC_LOG_JSON=1` if you want one JSON object per line for a log drain.
-
-Error-level events can also POST to `CC_LOG_WEBHOOK` if you set it — a one-env-var path to Better Stack or a tiny collector of your own, with no SDK dependency. Delivery is best-effort and never throws; monitoring must not be able to break the request it is reporting on. Paths inside webhook payloads are redacted. Warns and infos stay in the log stream. Only errors fan out as alerts.
-
-`GET /healthz` is a cheap liveness probe (uptime only) so free-tier hosts can pass platform health checks without spawning Python. Deeper counters, `llm_configured`, and `converter_available` live at `GET /metrics`, which is disabled until you set `CC_METRICS_TOKEN` and call it with `Authorization: Bearer <token>`. The per-IP pool defaults to **30** requests per **5** minutes (`CC_RATE_LIMIT`); agent costs **12** (`CC_RATE_COST_AGENT`) and answer/parity **4** (`CC_RATE_COST_ANSWER`). Concurrent LLM jobs default to **2** (`CC_MAX_CONCURRENT_LLM`) so one enthusiastic client cannot melt the API bill. LLM calls time out (`CC_LLM_TIMEOUT_MS`) and abort when the browser disconnects.
-
-Behind a reverse proxy, set `CC_TRUST_PROXY` to a hop count like `1` — not the string `true` (that trusts any client `X-Forwarded-For` and disables rate limits). Blanket `true` only works if you also set `CC_ALLOW_INSECURE_TRUST_PROXY=1`.
-
-## Configuration, in plain language
-
-LLM keys and model overrides are described above. Beyond those: `CC_ROOT` confines the MCP server (default home), `CC_CACHE_DIR` holds converted markdown (default `~/.cache/context-compiler`), `CC_MAX_FILE_BYTES` refuses oversized uploads (default **20 MB** on the public demo), `CC_CONVERT_TIMEOUT_S` time-boxes the converter (120s), and `CC_MARKITDOWN_CMD` points at a non-PATH binary if you need to. The demo’s cost meter assumes `CC_DEMO_PRICE_PER_MTOK` (default 3.0). Rate limiting defaults are above (pool 30 / 5 min; agent 12; answer 4; max concurrent LLM 2). Behind a reverse proxy, set `CC_TRUST_PROXY=1` (hop count) — never the string `true` unless you also set `CC_ALLOW_INSECURE_TRUST_PROXY=1`. The hosted demo is open (no accounts); abuse is handled with rate limits, size caps, and LLM concurrency — not a shared passphrase.
-
-## Tests and troubleshooting
-
-`npm test` builds both the server and the typed browser client, then runs a plain `node:assert` suite — chunking, ranking, packing, cache, expand, multilingual BM25, CJK bigrams, a curated offline recall@budget eval in `src/eval/`, format conversion through real markitdown, upload and path guards, provider failover, the agent loop, logger and webhook behavior, and `/healthz`. No test framework, on purpose; the file is readable top to bottom.
-
-If you see `spawn markitdown ENOENT`, the converter is not on PATH — install it or set `CC_MARKITDOWN_CMD`. If pip quietly gives you markitdown `0.0.1a1`, your default Python is older than 3.10; uninstall and reinstall with uv on 3.12. Empty conversion output usually means a scanned PDF with no text layer. Port 8000 already taken? `PORT=8080 npm run web`. First request on a free-tier host hanging for half a minute? That is usually the platform cold start (service waking up), sometimes followed by an uncached conversion — ping `/healthz` or open the page a minute early before a live demo.
+Builds the server and typed browser client, then runs a plain `node:assert` suite (chunking, ranking, packing, cache, expand, conversion, guards, failover, agent loop, and more). No test framework — the file is readable top to bottom.
 
 ## Security, briefly
 
-Untrusted files are size-capped, time-boxed, and parsed in a subprocess with no shell. Uploads are sniffed for content that does not match the claimed extension, and zip bombs are rejected by declared uncompressed size before they ever reach the converter. MCP reads are confined to `CC_ROOT` after realpath. Without an API key, the file never leaves the machine.
+Untrusted files are size-capped, time-boxed, and parsed in a subprocess. Uploads are sniffed for content that does not match the claimed extension; zip bombs are rejected by declared uncompressed size. MCP reads are confined to `CC_ROOT` after realpath. Without an API key, the file never leaves the machine.
 
-Prompt injection is a known game on this stage. Compiled output is wrapped in `UNTRUSTED DOCUMENT CONTENT` markers, and answer/agent prompts tell the model to treat document text as data. That is mitigation, not a sandbox — a clever PDF can still try to steer the model. The product answer is the same as for recall misses: the omitted-sections manifest makes loss visible, and `expand_section` (or a second compile) recovers. If you are judging this demo, try to break parity with an injected doc; then watch whether the agent can still navigate the manifest. That is the design under stress, not a bug we pretend away.
+Compiled output is wrapped in `UNTRUSTED DOCUMENT CONTENT` markers, and answer/agent prompts treat document text as data. That is mitigation, not a sandbox — a crafted document can still try to steer the model. The omitted-sections manifest keeps loss visible; `expand_section` recovers.
 
-## What we know we do not do yet
+## Known limits
 
-Lexical ranking can still miss a paraphrased-but-relevant section — for example a question that says “falling ill” when the passage says “unwell” / “wet through,” so BM25 shares almost no stems with the answer chunk. The mitigation is the omitted-sections manifest plus `expand_section` (or Agent mode, which walks that manifest) — failure is visible and repairable, never silent. An offline recall@budget suite in `src/eval/` guards lexical hits, honorific/filler query cleanup, and a deliberate paraphrase miss→expand case in CI. Local embeddings as a second scorer are still planned for when they can stay local-first without free-tier RAM blowups.
+Lexical BM25 can miss a paraphrased-but-relevant section. The mitigation is the omitted-sections manifest plus `expand_section` (or Agent mode). An offline recall@budget suite in `src/eval/` guards those claims in CI. Local embeddings as a second scorer are planned when they can stay local-first.
 
-Scanned, image-only PDFs have nothing to rank; we fail loudly rather than invent text. OCR is deferred because a bad transcript silently corrupts answers, which violates the “never silently lossy” rule. Video and audio would plug in as a transcription head on the same pipeline; they are a scope cut, not a feasibility one.
+Scanned image-only PDFs have nothing to rank. OCR and media transcription are deferred so a bad transcript cannot silently corrupt answers. Token budgets use cl100k; other tokenizers may drift by a couple of percent.
 
-Token budgets are counted with cl100k. Other model tokenizers drift by a couple of percent; budgets are contracts of intent. The hosted demo has rate limits and cost caps but no user accounts — fine for judging traffic from a public GitHub link, not for a public SaaS. CJK ranking uses character bigrams plus a light Latin stem; the eval suite is how we keep those claims honest.
+The hosted demo has rate limits and cost caps but no user accounts — fine for a public demo link, not a multi-tenant SaaS.
 
-The web UI stays vanilla HTML, CSS, and a typed `src/client` build compiled to plain scripts. The product is the pipeline and the MCP server. The page is an instrument for proving them — and that is enough for now.
+## License
+
+[MIT](./LICENSE)
