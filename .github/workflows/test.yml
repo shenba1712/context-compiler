@@ -36,4 +36,6 @@ jobs:
         run: npm run build
 
       - name: Run tests
-        run: node dist/tests/test.js
+        run: npm test
+        env:
+          NODE_ENV: test

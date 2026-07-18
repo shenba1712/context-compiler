@@ -17,7 +17,7 @@ services:
     runtime: docker
     plan: free # free spins down after 15 min idle (~30-60s cold start); bump to starter for a live demo
     dockerfilePath: ./Dockerfile
-    healthCheckPath: / # serves index.html, returns 200 when the app is up
+    healthCheckPath: /healthz
     autoDeploy: true # redeploy on every push to the connected branch
     envVars:
       # Primary provider — Google Gemini free tier (no card). Enter in dashboard.
@@ -26,6 +26,31 @@ services:
       # Fallback provider — OpenRouter. Used automatically if Gemini errors.
       - key: OPENROUTER_API_KEY
         sync: false
+      # Random secret for GET /metrics (Bearer token). Not needed for the demo UI.
+      - key: CC_METRICS_TOKEN
+        generateValue: true
+      # One hop of reverse-proxy trust (Render). Not `true` — that would let
+      # clients spoof X-Forwarded-For and bypass rate limits.
+      - key: CC_TRUST_PROXY
+        value: "1"
+      # Abuse / cost knobs (also pinned in the Dockerfile; listed here so the
+      # dashboard shows them and you can tweak without a rebuild).
+      - key: CC_MAX_FILE_BYTES
+        value: "20971520"
+      - key: CC_RATE_LIMIT
+        value: "30"
+      - key: CC_RATE_COST_AGENT
+        value: "8"
+      - key: CC_RATE_COST_ANSWER
+        value: "4"
+      - key: CC_MAX_CONCURRENT_LLM
+        value: "2"
+      - key: CC_MAX_CONCURRENT_CONVERSIONS
+        value: "3"
+      - key: CC_MAX_QUEUED_CONVERSIONS
+        value: "12"
+      - key: CC_LLM_TIMEOUT_MS
+        value: "30000"
       # Do NOT set PORT here — Render injects it automatically and the app binds
       # to it. Model/endpoint overrides (CC_GEMINI_MODEL, CC_OPENROUTER_MODEL,
       # ...) can be added in the dashboard if you ever need them.

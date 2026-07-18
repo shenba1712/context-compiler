@@ -10,3 +10,14 @@ export function maxOf(nums: number[]): number {
   for (const n of nums) if (n > best) best = n;
   return best;
 }
+
+/**
+ * Safe display name for compiled-context headers. Strips path components and
+ * characters that would confuse agents or look like markup/injection in the
+ * `<!-- Compiled context from: … -->` comment.
+ */
+export function sanitizeSourceName(name: string): string {
+  const base = name.replace(/^.*[/\\]/, "").slice(0, 120);
+  const cleaned = base.replace(/[^\w.\- ()[\]]+/g, "_").replace(/_+/g, "_");
+  return cleaned.replace(/^[_.]+|[_.]+$/g, "") || "document";
+}

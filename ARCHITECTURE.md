@@ -1,395 +1,137 @@
 # Context Compiler — Architecture & Design
 
-Engineering documentation: system design, ADRs, trade-offs, threat model,
-and known limitations. Companion to the README (usage) and DEMO_SCRIPT.md.
+This is the engineering companion to the [README](./README.md): why the system looks the way it does, what we traded away, and where the sharp edges still are. If the README is the story you tell a new user, this is the story you tell the next person who has to change the code.
 
 ---
 
-## 1. Problem statement & design philosophy
+## The problem we actually set out to solve
 
-AI agents ingest whole files to answer narrow questions. For a 20k-token
-document and a task touching 5% of it, ~95% of input spend is waste, paid on
-every read. Context Compiler is a **stateless context-preparation layer**:
-`(file, task, token_budget) → task-relevant markdown of guaranteed size`.
+AI agents read files the way a tired intern photocopies an entire binder for one clause. For a twenty-thousand-token document and a task that touches five percent of it, roughly ninety-five percent of the input spend is waste — paid again on every read. Context Compiler is a deliberately small answer to that: a stateless preparation layer that turns `(file, task, token_budget)` into task-relevant markdown of a guaranteed size.
 
-Three principles drove every decision:
+Three principles shaped every decision after that.
 
-1. **Conversion is commodity; selection is the product.** We buy conversion
-   (MarkItDown) and spend our complexity budget on chunk/rank/pack.
-2. **Trimming must be transparent, never silent.** Any lossy step announces
-   what was lost and provides a recovery path (`expand_section`).
-3. **Local-first.** The default configuration makes zero network calls.
-   Sending content to an LLM (rerank, answer panel) is strictly opt-in.
+Conversion is commodity; selection is the product. We buy MarkItDown the way apps buy ffmpeg, and we spend our complexity budget on chunking, ranking, and packing.
 
-## 2. High-level design
+Trimming must be transparent, never silent. Any lossy step has to announce what was lost and offer a recovery path. That is why every compiled response ends with an omitted-sections manifest, and why `expand_section` exists.
+
+Local-first is the default, not a marketing line. With no API key configured, the system makes zero network calls. Sending content to an LLM — for rerank, answer parity, or the agent loop — is strictly opt-in.
+
+## The shape of the system
+
+Two thin entry points share one pipeline. The MCP server (`server.ts`) speaks JSON-RPC over stdio to Claude Code, Cursor, Codex, and friends. The demo (`web.ts`) is an Express app that accepts uploads, never caller-supplied paths. Both call into `pipeline.ts`, which is convert → chunk → rank → pack, with a content-addressed disk cache under the convert step and an optional LLM surface for rerank and demos.
 
 ```
-                 ┌──────────────────────────────────────────────┐
-  MCP client ───►│ server.ts (stdio, path allowlist)            │
-  (Claude/Cursor)│                                              │
-                 │        pipeline.ts (orchestrator)            │
-  Browser ──────►│ web.ts │  convert → chunk → rank → pack      │
-  (demo/judges)  │(Express)│     │                    ▲         │
-                 │         │     ▼                    │         │
-                 │         │  cache.ts (sha256 → md on disk)    │
-                 │         │  llm.ts (optional Claude calls)    │
-                 └─────────┴────────────┬─────────────┴─────────┘
-                                        ▼
-                          markitdown (Python subprocess)
+  MCP client ──► server.ts (stdio, path allowlist)
+                        │
+  Browser    ──► web.ts ─┤
+                 (demo)  │
+                         ▼
+                   pipeline.ts
+              convert → chunk → rank → pack
+                    │              ▲
+                    ▼              │
+              cache.ts        log.ts / metrics.ts
+                    │
+                    ▼
+              markitdown (Python subprocess)
 ```
 
-Two thin entry points share one pipeline. The pipeline is a pure function of
-its inputs plus a content-addressed cache — no database, no session state,
-no background jobs. Horizontal scaling is trivial because there is nothing
-to coordinate (see §12).
+There is no database, no session store, no background worker. The pipeline is a pure function of its inputs plus the cache. Horizontal scaling is mostly “run more copies,” because there is almost nothing to coordinate.
 
-### Request flow (compile_context)
+A compile request hashes the file bytes, looks up converted markdown, converts on a miss (size-checked, time-boxed `execFile`, atomic cache write), chunks on headings, short-circuits if the whole document already fits the budget, ranks with BM25 (and optionally an LLM reshuffle of the top twenty), packs under the budget with document order restored, and returns markdown plus stats plus the omission manifest. That last piece is not a nicety. It is what turns a recall miss into something an agent can fix.
 
-1. `fileKey()` — sha256 of file bytes → cache lookup.
-2. Miss → `convertToMarkdown()` spawns `markitdown <path>` (`execFile`, no
-   shell), 50MB pre-check, 120s timeout → cache write (tmp + atomic rename).
-3. `chunkMarkdown()` — heading-split with breadcrumbs; tables atomic.
-4. Short-circuit: if `raw_tokens ≤ budget`, return everything (§5, ADR-007).
-5. `rank()` — BM25 + heading boost; optional Haiku rerank of top-20.
-6. `pack()` — greedy fill → document-order restore → manifest append →
-   measure assembled output → evict-worst loop until `≤ budget`.
-7. Return `{markdown, stats, omitted_sections[]}`.
+## How the pieces earn their keep
 
-## 3. Low-level design
+Token counting lives in `tokens.ts` behind js-tiktoken’s cl100k encoder, with a four-characters-per-token fallback if the encoder ever fails. Budgets are contracts of intent with the caller, not cryptographic guarantees. A couple of percent of drift versus another model’s tokenizer is expected and documented.
 
-### tokens.ts
-`js-tiktoken` (cl100k_base, pure JS, no network). Fallback: `len/4` chars if
-the encoder fails. Budgets are advisory contracts with the caller, not
-cryptographic guarantees; a ±2% counting mismatch vs. a given model's
-tokenizer is acceptable and documented.
+`convert.ts` treats markitdown as an external binary. We use `execFile`, not a shell, so filenames cannot inject commands. Files are size-checked before spawn, stdout is capped, and the process is killed on timeout. Failures collapse into a single `ConversionError` whose public message is deliberately boring — no Python traceback, no absolute server paths — while the real detail goes to the logger. Empty converter output fails loudly; we learned the hard way that markitdown can exit zero with nothing on stdout for a bare image when no OCR backend is configured. A quiet empty compile would be worse than an error. The same module also answers `converterAvailable()` for `/healthz`, with a short TTL so a probe does not spawn a process on every hit.
 
-### convert.ts
-`execFile` (not `exec` — no shell, no injection via filenames), 64MB stdout
-buffer, size check *before* spawning. Failure taxonomy: not-a-file, too
-large, timeout, converter error, empty output — all mapped to a single
-`ConversionError` with a truncated (500 char) reason to avoid log injection.
+`chunk.ts` walks the markdown once, keeping a heading trail so every section carries a breadcrumb like `Contract > Termination > Notice`. Tables are atomic: a boundary never lands inside a `|...|` run, because dropping rows silently changes answers — the worst failure class for a tool whose pitch is “same answer.” Oversized sections split on paragraph blocks; heading-less PDFs fall back to paragraph windows with `(no heading)` breadcrumbs rather than refusing to work. Eight hundred tokens per chunk is a deliberate default: a four-thousand-token budget then fits a handful of sections plus the manifest, which is enough diversity for multi-facet questions without shredding clauses.
 
-### chunk.ts
-Single pass over lines. State machine tracks a heading trail
-(`[{level,title}]`) so each section carries a breadcrumb
-(`"Doc > H2 > H3"`). Invariants:
+`rank.ts` is Okapi BM25 — literature defaults, untuned, zero dependencies — with one domain twist: query terms that appear in a chunk’s breadcrumb get a heading boost, because business documents put the truth in their titles. The tokenizer is Unicode-aware on purpose; a Latin-only split would score every chunk of a Hindi document at zero. Compound tasks are split into sub-questions for BM25 and interleaved round-robin so each facet sees the budget; under LLM rerank we leave the task whole. Optional rerank takes the BM25 top twenty, asks the configured model for a JSON id ordering, validates ids against the shortlist, and on any failure — network, parse, truncation — falls back to lexical order after logging and bumping a counter. The prompt marks chunk content as untrusted data.
 
-- **Tables are atomic.** A boundary never lands inside `|...|` runs.
-  Rationale: dropping rows silently changes answers — the worst failure
-  class for a tool whose pitch is "same answer."
-- Sections > `MAX_CHUNK_TOKENS` (800) split on paragraph blocks; heading
-  line attaches to the first fragment only (breadcrumbs cover the rest).
-- No headings at all (common for text-layer PDFs) → paragraph windows with
-  `"(no heading)"` breadcrumbs. Ranking still functions; UX degrades
-  gracefully rather than failing.
-- 800 was chosen so a default 4k budget fits ~4–6 chunks plus manifest —
-  enough diversity for multi-facet questions, big enough to keep clauses
-  intact.
+`pack.ts` is where the budget contract becomes real. An early version reserved a fixed number of tokens for the manifest and still overshot on large documents, because the manifest grows with the outline. The honest fix is to assemble the actual artifact — selected chunks in document order, breadcrumb comments, omission list — measure it, and evict the lowest-ranked selected chunk until the output fits. Manifest detail can also degrade in steps (forty lines, then twenty, then ten…) before content is sacrificed. A relative relevance floor stops the packer from padding a sharp query with weakly related runners-up; on flat score distributions nothing falls below the floor, so vague questions still fill the budget as insurance. That floor is disabled under LLM rerank so a lexical rule cannot undo a semantic rescue. Document order matters here too: models follow narrative better than a relevance-sorted collage, and the packet stops looking like a shuffled scrapbook.
 
-### rank.ts
-Okapi BM25, k1=1.5, b=0.75 (literature defaults; untuned — see §11).
-~40 lines, zero deps. One domain addition: if any query term appears in a
-chunk's breadcrumb, add `0.35 × max_score` — headings are high-precision
-signals in business documents. Optional rerank: BM25 top-20 → Haiku returns
-a JSON id ordering; ids validated against the shortlist, dropped ids keep
-BM25 position, *any* failure (network, parse, model) silently falls back to
-BM25 order. The rerank prompt explicitly marks chunk content as untrusted
-data (§9).
+`cache.ts` keys on sha256 of file bytes. No TTL, no invalidation logic, no staleness class of bugs — edit the file and you get a new key. Writes go through a temp file and rename so concurrent compiles cannot interleave partial markdown. Only conversion is cached; chunk, rank, and pack are milliseconds and depend on the task.
 
-### pack.ts
-Greedy fill against `budget − 250` (manifest reserve estimate), then the
-real invariant is enforced empirically: assemble the *actual* output —
-selected chunks restored to document order, breadcrumb comments, omitted-
-sections manifest (≤40 itemized lines + summarized tail) — measure it, and
-evict the lowest-ranked selected chunk until `countTokens(output) ≤ budget`.
-This eviction loop exists because the manifest's size grows with document
-size; a fixed reserve under-counted on a 30-section doc and shipped 1,890
-tokens against a 1,500 budget in testing. Enforcing on the assembled
-artifact is the only honest contract. Worst case O(n²) token counts; n is
-chunks-selected (single digits), immaterial in practice.
+`pipeline.ts` orchestrates and enforces the passthrough rule. If the raw document fits the budget, ranking can only lose information, so we return everything. Results carry more than markdown now: the applied budget, the sub-queries we split into, selected and omitted sections with relevance percentages, and optional query attribution for the demo UI. MCP strips the duplicate section text before responding so the payload does not double in size.
 
-Document-order restoration matters: models comprehend narrative order
-better than relevance order, and it prevents the packet from reading as a
-shuffled collage.
+`llm.ts` is the entire provider surface. Providers are detected from the environment and tried in fixed priority — Gemini, OpenRouter, Anthropic, then a generic OpenAI-compatible endpoint — with automatic failover. One free-tier wall should not take the feature down while another key still works. If every provider fails, callers degrade: rerank falls back to BM25, the answer panel reports the error, counters record the failover story.
 
-### cache.ts
-Key = sha256(bytes) → `$CC_CACHE_DIR/<hex>.md`. Immutable by construction:
-no TTL, no invalidation logic, no staleness class of bugs — an edited file
-is a different key. Write is tmp-file + `rename()` (atomic on POSIX same-fs)
-so concurrent compiles can't interleave partial writes. Only conversion is
-cached: it's the seconds-scale stage; chunk/rank/pack are ms-scale and
-task-dependent. A side effect proved useful: the key scheme is
-language-portable (the TS build transparently reused a cache written by the
-earlier Python prototype).
+`agent.ts` is the demo’s controlled agent loop over the same two tools the MCP surface exposes. It always starts with a small BM25 compile (rerank off — the loop itself is the reasoning layer), then lets the model choose answer, expand, or recompile until it is confident or it hits a step or token ceiling. Unusable decisions collapse to “answer with what we have.” The omitted-sections manifest is the map it navigates by. That is not a metaphor we added for the pitch; it is the reason the manifest exists in the product at all.
 
-### pipeline.ts
-Orchestration + the passthrough rule: if the whole document fits the
-budget, return all of it in document order with an empty manifest. Ranking
-is a lossy operation — never run it when lossless is affordable.
+`server.ts` registers exactly two tools. Path access goes through `path-guard.ts`, which realpaths both the root and the target before the prefix check — closing the symlink-escape hole that a string-only comparison would leave open. Errors return as in-band JSON `{error: ...}` payloads; agents handle data better than protocol faults.
 
-### llm.ts
-The entire provider surface is one file: `hasLlm()`, `complete(prompt,
-{model, maxTokens})`. Two backends auto-detected from env: Anthropic SDK
-(`ANTHROPIC_API_KEY`) or any OpenAI-compatible endpoint via plain fetch
-(`OPENAI_API_KEY`, or `CC_LLM_API_KEY` + `CC_LLM_BASE_URL` — covers OpenAI,
-Gemini, Groq, Ollama, OpenRouter with zero added dependencies). Model
-defaults per provider; `CC_RERANK_MODEL`/`CC_ANSWER_MODEL` override. The
-generic path is covered by a mock-endpoint test.
+`web.ts` is the hosted surface: upload-only, rate-limited per IP, with compile, expand, answer-parity, measure, samples, config, and the SSE agent endpoint. Request logging is selective on purpose — API traffic, non-GETs, and errors — so static asset noise does not drown the signal. Upload validation lives in `upload-guard.ts`: extension allowlists, magic-byte checks, and a decompression-bomb limit on archives before markitdown ever sees them. The browser UI is vanilla HTML and CSS plus a typed client compiled to plain scripts (`tsconfig.client.json`), deliberately free of a frontend framework. The page is an instrument for proving the pipeline, not a product surface that needs a design system.
 
-### server.ts (MCP)
-`@modelcontextprotocol/sdk`, stdio transport, zod schemas. Two tools only
-(ADR-009). Path guard: resolve (incl. `~`), require prefix under `CC_ROOT`
-(default `$HOME`), require regular file. Budgets clamped (500–200k /
-200–200k). All errors return as JSON `{error}` payloads rather than
-protocol errors — agents handle data better than faults.
+Shared numbers — budget floors, relevance floor, max upload size — live in `config.ts` so the web slider and the MCP clamps cannot drift apart. `env.ts` parses numbers safely: non-numeric values warn and fall back instead of becoming NaN and silently disabling the rate limiter, which is a bug we found once and never want again.
 
-### web.ts + public/index.html (demo)
-Express + multer (50MB cap, memory storage → random-hex filename with
-original extension preserved, since markitdown sniffs by extension).
-Endpoints: `POST /api/compile`, `POST /api/answer` (parity), static UI.
-The hosted surface **never accepts a caller-supplied path** — uploads only;
-the path-based API exists only on the local MCP surface. Single HTML file,
-zero frontend deps: vanilla JS, ~200 lines. UI decisions in §8.
+## Logs and the light kind of observability
 
-## 4. Architecture decision records
+`log.ts` writes only to stderr. The MCP transport owns stdout; a stray `console.log` would corrupt JSON-RPC, and a source scan in the test suite guards that invariant on the MCP module path. Levels are live-read from `CC_LOG_LEVEL` so tests and deploys can change them without restarting a process graph. Human-readable lines are the default; `CC_LOG_JSON=1` emits one object per line for a drain. Error-level events may also POST to `CC_LOG_WEBHOOK` — best-effort, fire-and-forget, never able to fail the request they are describing. That is the whole alert path: one env var, no SDK, errors only.
 
-**ADR-001 — TypeScript core, Python as converter subprocess.**
-Context: TS preferred by the builder and the judge audience; best-in-class
-conversion (MarkItDown) is Python; pure-TS conversion is weak for pdf/pptx.
-Decision: TS owns everything; Python appears only as an external binary
-(`execFile markitdown`), like shelling to ffmpeg. Zero custom Python code.
-Consequences: two runtimes required — dissolved by Docker for hosting and
-acceptable (node + uv) for local MCP; converter swappable via
-`CC_MARKITDOWN_CMD`.
+`metrics.ts` keeps in-process counters — compiles, expands, agent runs, parity runs, rate-limit hits, conversion failures, rerank failures, LLM failovers. `GET /healthz` exposes them alongside converter availability, whether an LLM key is configured, and uptime. A missing converter makes healthz return 503, because every compile would fail. The counters reset on restart and are not shared across replicas; for a single-instance demo that is honest scope. A real multi-replica deployment would push the same events to a metrics backend instead of pretending process memory is a fleet view.
 
-**ADR-002 — Buy conversion (MarkItDown), build selection.**
-Rebuilding parsers is the mistake this product's thesis warns against.
-Consequences: full docx/xlsx/pptx/pdf coverage on day one; inherit upstream
-improvements; also inherit upstream parsing bugs (accepted; mitigated by
-subprocess isolation).
+## Decisions we are willing to defend
 
-**ADR-003 — BM25 default; LLM rerank opt-in; embeddings deferred.**
-BM25 is deterministic, offline, free, and ~zero-latency; it makes
-local-first (principle 3) possible and keeps the demo reproducible. Haiku
-rerank recovers paraphrase matches on the top-20 shortlist at bounded cost.
-Embeddings rejected for MVP: heavy install or mandatory network, and BM25 +
-heading boost was empirically sufficient on test corpora. Revisit as
-roadmap (§13).
+Buying conversion and building selection (ADR-001, ADR-002) is the thesis of the project. Rebuilding PDF and Office parsers would have spent the entire complexity budget on someone else’s problem.
 
-**ADR-004 — Heading-based chunking with atomic tables.**
-Alternatives: fixed-size windows (destroy semantic boundaries), semantic/
-embedding chunking (cost, nondeterminism). Headings are the author's own
-segmentation; trust them, fall back to paragraphs when absent.
+BM25 as the default, LLM rerank as opt-in, embeddings deferred (ADR-003) is what makes local-first possible and demos reproducible. Embeddings either mean a heavy local install or a mandatory network call; BM25 plus a heading boost was enough on the corpora we ship.
 
-**ADR-005 — Budget enforced on assembled output via eviction loop.**
-See pack.ts above. The contract users rely on is "output ≤ budget," not
-"selected chunk sum ≤ budget − constant."
+Heading-based chunking with atomic tables (ADR-004) trusts the author’s own segmentation. Fixed windows destroy meaning; embedding chunking adds cost and nondeterminism we did not want on day one.
 
-**ADR-006 — Content-hash cache, no TTL.**
-Correctness by construction beats freshness heuristics. Cost: orphaned
-entries accumulate (no eviction) — acceptable for MVP, `du`-able, roadmap
-item.
+Enforcing the budget on the assembled output (ADR-005), not on a sum of chunk sizes minus a constant, is the only contract users can trust. The eviction loop exists because we shipped an overshoot once and wrote a regression test so it cannot quietly return.
 
-**ADR-007 — Small-file passthrough.**
-If `raw ≤ budget`, ranking can only lose information. Skip it. This also
-gives a safe demo fallback for any file under the budget.
+Content-hash caching without TTL (ADR-006) chooses correctness by construction over freshness heuristics. Orphans accumulate; that is acceptable at this scale and visible with `du`.
 
-**ADR-008 — Local-first; network strictly opt-in.**
-No `ANTHROPIC_API_KEY` → no network calls at all. Privacy is a feature
-(“your contract never leaves the machine”), not a limitation.
+Small-file passthrough (ADR-007) and local-first networking (ADR-008) are the same instinct: never do a lossy or privacy-touching step when you do not have to.
 
-**ADR-010 — Relevance floor: the budget is a ceiling, not a target.**
-Context: greedy fill-to-budget pads sharp queries with weakly-related
-runner-up sections (paying for insurance the query doesn't need). Absolute
-score thresholds don't exist for BM25 (scores aren't calibrated), but a
-RELATIVE floor works: omit chunks scoring < 0.15 × top score, always keep
-the top chunk. Key property: on flat score distributions (vague queries,
-no ranker signal) nothing falls below a relative floor, so the packer
-fills the budget — the insurance stays exactly where it's needed.
-Disabled under LLM rerank, since a lexical floor would evict sections the
-reranker promoted for semantic relevance. Env: `CC_RELEVANCE_FLOOR`
-(0 disables).
+Exactly two MCP tools (ADR-009) is a product decision disguised as an API one. `compile_context` and `expand_section` form a closed compress → inspect → recover loop. Extra tools dilute agent tool choice and expand the threat surface.
 
-**ADR-009 — API surface: exactly two tools.**
-`compile_context` + `expand_section` form a closed loop (compress →
-inspect manifest → recover). Every additional tool dilutes agent tool-choice
-accuracy and expands the threat surface. Rejected: `list_cache`,
-`convert_only`, `search` (all expressible via the two).
+The relevance floor (ADR-010) treats the budget as a ceiling. Absolute BM25 thresholds do not exist — scores are not calibrated — but a relative floor works, and it wisely does nothing when every chunk scores about the same.
 
-## 5. Product decisions
+Provider failover as a chain rather than a single-vendor bet is newer than the original ADRs, but it belongs with them: the product must stay useful when a free tier melts, and BM25 remains the final safety net.
 
-- **The manifest is the product's conscience.** Recall failure is the
-  category-killing risk of any compression layer. We chose *transparent*
-  lossiness: every response enumerates omissions with ids and token sizes.
-  This converts "the tool hid something" into "the agent chose not to
-  fetch it" — a fundamentally better failure.
-- **Scope cuts, stated not hidden:** video/audio (transcription pipeline —
-  roadmap), OCR for scanned PDFs, multi-file corpora, embeddings, cache
-  eviction. Cut for a 4-day solo build; each has a slot in the design
-  (video = new converter head; embeddings = second scorer in rank.ts).
-- **Model-agnostic core with model-optional intelligence** — the product
-  must be excellent with zero API keys and better with one.
+## What the APIs promise
 
-## 6. API specification
+`compile_context` returns compiled markdown wrapped in untrusted-content markers, token stats, whether the cache and rerank fired, the budget actually applied, the sub-queries we split into, and selected plus omitted sections with relevance. `expand_section` returns one section by id, or an error plus the full outline so an agent can self-correct without a blind retry. Budgets are clamped into sane ranges; errors stay in-band as JSON.
 
-### MCP tools (stdio)
+On HTTP, `/api/compile` and `/api/answer` take multipart uploads; `/api/expand` re-reads only paths inside the demo’s own upload directory; `/api/agent` streams SSE steps then a final answer; `/healthz` is the probe. Status codes mean what you expect: 400 for missing input, 403 for path escape, 413 for rejected uploads, 422 for conversion failure, 429 for rate limit, 503 for a dead converter, 500 for the rest.
 
-`compile_context(file_path: string, task: string, token_budget: int = 4000) → JSON`
+## How people actually use it
 
-```json
-{
-  "markdown": "<compiled context with UNTRUSTED markers + manifest>",
-  "raw_tokens": 20364, "tokens_used": 591, "tokens_saved": 19773,
-  "reduction_pct": 97.1, "cache_hit": true, "rerank_used": false,
-  "omitted_sections": [{ "id": "s3", "section": "Ch 3 > …", "tokens": 412 }]
-}
-```
+A developer adds one MCP config entry. Their agent discovers the tools and, on file questions, calls `compile_context` with a task and a budget derived from remaining context headroom. If the answer is thin, it reads the manifest and expands. The human’s workflow does not change.
 
-`expand_section(file_path: string, section_id: string, token_budget: int = 2000) → JSON`
-→ `{markdown, tokens_used, cache_hit}` or `{error, outline}` (unknown id
-returns the full outline so the agent can self-correct without a retry
-loop).
+A judge opens the hosted URL, picks a sample or uploads a file, asks a real question, and watches the bars and cost meter. With a key they click parity or run the agent. With a rehearsed miss — vague question, tiny budget — the manifest names the missing section and expand recovers it. Failure, detection, recovery, all in band.
 
-Errors: always `{"error": "..."}` in-band. Budget clamps: 500–200,000 and
-200–200,000 respectively.
+## Security, as we model it
 
-### HTTP (demo)
+File content is never trusted, at parse time or inside a model prompt. The MCP caller is semi-trusted and path-restricted. The demo uploader is untrusted and upload-only. LLM providers are trusted only after an explicit key is set.
 
-- `POST /api/compile` multipart `{file, task, token_budget}` → compile
-  result + `cost_raw_usd`, `cost_compiled_usd`, `price_per_mtok`,
-  `llm_available`.
-- `POST /api/answer` multipart, requires API key → asks the answer model
-  the same question with full vs compiled context (parallel calls) →
-  `{model, full: {answer, context_tokens}, compiled: {answer,
-  context_tokens, reduction_pct}}`.
-- `POST /api/expand` JSON `{file_path, section_id}` → one omitted section.
-  Path must resolve inside the demo's own upload directory (403 otherwise),
-  preserving the invariant that the hosted surface never reads arbitrary
-  paths — it can only re-read files it created from uploads.
-- Status codes: 400 (missing input), 403 (path outside upload dir),
-  422 (conversion failure), 429 (rate limit), 500 (other).
+Malicious documents hit a size cap (20 MB on the public demo), a timeout, a stdout cap, and a subprocess boundary; residual risk is memory abuse inside the converter, which a tighter sandbox would shrink. Prompt injection is mitigated by markers and prompt instructions, not by magic — the consuming agent is still the last line of defense, and we say so. If injection wins a round, the omitted-sections manifest and `expand_section` are the same recovery path as a recall miss. Path escape through symlinks is closed by realpath on both sides. Data leaves the machine only when someone opts into an LLM feature. The demo’s DoS posture is size caps, timeouts, per-IP rate limits, and an answer-context cost cap; there is still no auth, which is fine for judging and not fine for a public SaaS. Cache entries are content-addressed and locally trusted. Converter stderr is truncated before it becomes a log-injection vector; public error messages stay generic.
 
-## 7. User flows
+## Testing and performance, honestly
 
-1. **Agent flow (primary):** dev adds one MCP config entry → agent
-   discovers tools → on file questions calls `compile_context` with its
-   task and headroom-derived budget → optionally `expand_section` after
-   reading the manifest. Zero workflow change for the human.
-2. **Judge/demo flow:** open hosted URL → upload → question → slider →
-   Compile (bars, cost meter, session savings counter) → "Prove answer
-   parity" (side-by-side answers).
-3. **Recovery flow (rehearsed in demo):** vague question or tiny budget →
-   incomplete answer → manifest names the missing section → expand → correct
-   answer. Failure → detection → recovery, all in-band.
+The suite uses plain `node:assert` and no framework so it stays readable. It covers chunking invariants, ranking (including multilingual scripts), packing under budget, cache hits, expand round-trips, real pptx and csv through markitdown, image-empty failure, path and upload guards, sanitized conversion errors, safe env parsing, OpenAI-compat and failover paths, the agent loop and its SSE endpoint, logger level gating and error-only webhooks, metrics snapshot semantics, and healthz. We deliberately do not assert rerank quality or answer-parity equivalence in CI — those are nondeterministic demonstrations, not invariants — but we do assert the fallback contracts when they fail.
 
-## 8. UI/UX decisions
+Conversion dominates latency and happens once per content hash. Chunk and BM25 are milliseconds at document scale. Rerank adds a model round-trip when enabled. Pack’s eviction loop is negligible because the selected set is small. Untuned knobs (BM25 k1/b, heading boost, chunk size, relevance floor) are defensible defaults, not the output of a sweep. If someone asks whether we tuned them, the honest answer is no.
 
-- **One screen, no navigation.** The demo makes one argument; every pixel
-  serves it. Upload → question → slider → two bars.
-- **The budget is a slider, not an input** — dragging it and re-compiling
-  is the interactive proof that the budget is a hard contract.
-- **Red/green horizontal bars** for raw vs compiled: the entire pitch,
-  preattentively legible in one glance from the back of a room.
-- **Cost meter with an explicit price assumption** (`@$3/Mtok`,
-  configurable): honest unit economics, judges can recompute.
-- **Session savings counter** (cumulative $, tokens, per-1,000-reads
-  projection): converts an abstract percentage into money, and grows as
-  judges play — the longer they try to break it, the better it looks.
-- **Badges (cache hit / rerank mode / omissions count)** expose internal
-  state instead of hiding it — infrastructure credibility.
-- **Parity panel** is the trust closer: cheap context is worthless if the
-  answer changes, so we show the answers, not just the numbers.
-- Dark theme matches the deck; zero frontend frameworks (one HTML file)
-  keeps the hosted demo cold-start fast and unbreakable by dependency drift.
+## Deployment and what “scale” would mean next
 
-## 9. Security & threat model
+A Docker image with Node and markitdown is enough for the demo. Stateless app plus content-addressed cache means N replicas need nothing shared except, eventually, a shared cache volume if duplicate conversions bother you. The honest scale path, in order, is shared cache, the rate limits we already have, a conversion worker pool if CPU becomes the bottleneck, then corpus mode with a persistent chunk index. None of that is required at demo traffic. Observability today is stderr, an optional error webhook, and `/healthz`; tomorrow it would be the same events pushed to a real metrics backend once more than one replica matters.
 
-| Threat | Vector | Mitigation | Residual |
-|---|---|---|---|
-| Malicious document exploits parser | Crafted pdf/docx | Subprocess isolation (`execFile`, no shell), 50MB pre-check, 120s timeout, 64MB stdout cap | In-process memory abuse inside converter; full sandbox (container/seccomp) is roadmap |
-| Prompt injection via document content | "Ignore instructions…" inside a file, or injection crafted to *rank well* | Output wrapped in `UNTRUSTED DOCUMENT CONTENT` markers; rerank + answer prompts explicitly instruct model to treat content as data | Markers are convention, not enforcement — final defense is the consuming agent's; stated honestly |
-| Path traversal / file probing | Agent passes `/etc/passwd`, `../..`, `~` tricks | `resolve()` incl. `~` expansion, prefix check under `CC_ROOT`, regular-file check; hosted surface accepts uploads only, never paths | Symlinks inside CC_ROOT pointing out (accepted for MVP; `realpath` both sides to close) |
-| Data exfiltration | Rerank/answer calls send content to API | Off by default; single opt-in env var; one-file LLM surface auditable in 30 lines | User trust in provider once opted in |
-| DoS (hosted demo) | Huge/many uploads, conversion CPU | Size caps, timeouts, stdout cap | **No rate limiting or auth on demo** — known gap; front with a rate limiter for anything beyond judging |
-| Cache poisoning | Writing forged cache entries | Key = content hash (preimage-resistant); atomic writes; local FS trust boundary | Anyone with FS write access owns the box anyway |
-| Log injection | Converter stderr into logs | Error reasons truncated to 500 chars | Low |
+## Formats and clients
 
-Trust boundaries: (1) file content — never trusted, at parse time or in
-model context; (2) MCP caller — semi-trusted, path-restricted; (3) demo
-uploader — untrusted, upload-only surface; (4) Anthropic API — trusted
-once explicitly enabled.
+DOCX and XLSX are the happiest paths — headings and tables survive. PPTX keeps slide text and loses layout. Text-layer PDFs often arrive heading-less and fall back to paragraph windows. Scanned PDFs and bare images without OCR are out of scope and fail clearly. HTML, markdown, CSV, and plain text are near-lossless. Video and audio would be a transcription head on the same pipeline when we choose to spend that complexity.
 
-## 10. Testing
+Any stdio MCP client works. Runtimes are Node 20+ and Python 3.10+ for the converter only. LLM support is provider-agnostic by design: Gemini and OpenRouter as the recommended free pair, Anthropic and OpenAI-compatible endpoints as further links in the chain, BM25 as the floor that never needs a key.
 
-- **Unit:** chunking (count, table atomicity, breadcrumbs), rank (target
-  section wins for its query), pack (answer survives, `UNTRUSTED` +
-  manifest present, **measured output ≤ budget** — the regression test for
-  the manifest-overflow bug found during development).
-- **Integration:** synthetic 30-section corpus e2e (>50% reduction, answer
-  survives, cache hit on 2nd call, task-sensitivity of selection,
-  expand_section round-trip); real .docx through the actual markitdown
-  subprocess (92.4% reduction, answer intact); raw MCP stdio handshake
-  (initialize → tools/list → tools/call → allowlist rejection); HTTP
-  compile endpoint against a running server.
-- **Deliberately untested:** rerank quality (nondeterministic; contract
-  tested via fallback path), conversion fidelity (upstream's domain),
-  answer parity as an assertion (it's a demonstration, not an invariant —
-  asserting LLM equivalence in CI is flaky theater).
-- Style: plain `node:assert` scripts, no framework — the suite is readable
-  top-to-bottom in two minutes, which for a judged repo is a feature.
+## Known limitations, ranked by real risk
 
-## 11. Performance characteristics
+Recall is still the category risk. BM25 can miss paraphrased relevance; the manifest makes that miss visible and `expand_section` makes it repairable, which is mitigation rather than a guarantee. Embeddings remain the planned second scorer when they can stay local-first.
 
-Conversion dominates: seconds, once per file *content*, then O(1) via
-cache. Chunk: O(n) single pass. BM25: O(chunks × query terms) after O(n)
-indexing — ms at document scale (BM25 is built per call; fine at n≈10²,
-would be cached at corpus scale). Rerank adds one Haiku round-trip
-(~1–2s, opt-in). Pack: ms (eviction loop is n_selected² token counts,
-single digits). Cold demo request ≈ conversion cost; warm ≈ <100ms + any
-rerank. Untuned: k1/b, heading boost 0.35, chunk size 800 — all defensible
-defaults, none validated by sweep (honest answer if asked).
+Multi-hop comparison questions are better than they were — compound queries split and interleave, and the agent loop can expand on purpose — but a single greedy pack can still under-serve a “compare §2 with appendix C” task. Two calls remain an honest workaround.
 
-## 12. Deployment & scaling path
+Heading-less PDFs degrade chunk quality and demo aesthetics; pick demo files accordingly. Token-count drift versus non-cl100k tokenizers is a few percent. `expand_section` truncation is a character-ratio approximation, flagged in the output. The hosted demo has no auth. CJK without word boundaries weakens BM25 until we ship character-bigram tokenization with a real corpus behind it.
 
-Stateless app + content-addressed cache ⇒ N replicas need nothing shared
-(worst case: duplicate conversions per replica; fix = shared cache volume
-or S3-backed cache). Docker image = node:22-slim + python3 + markitdown.
-Scale story, in order: shared cache → per-IP rate limits → conversion
-worker pool with queue → corpus mode (persistent chunk index + incremental
-BM25/embeddings). None needed at demo scale.
-
-## 13. Compatibility matrix
-
-| Input | Engine | Quality | Notes |
-|---|---|---|---|
-| .docx | mammoth via markitdown | ★★★ | headings preserved — best case |
-| .xlsx | markitdown | ★★★ | sheets → tables; atomic-table rule critical |
-| .pptx | markitdown | ★★☆ | slide text; layout semantics lost |
-| .pdf (text layer) | markitdown | ★★☆ | often heading-less → paragraph fallback, "(no heading)" breadcrumbs |
-| .pdf (scanned) | — | ✗ | needs OCR — declared out of scope |
-| .html/.md/.csv/.txt | markitdown | ★★★ | near-lossless |
-| images | markitdown | ★☆☆ | metadata; captioning/OCR not wired |
-| video/audio | — | ✗ | roadmap (transcription → same pipeline) |
-
-Clients: any stdio MCP client (Codex, Claude Desktop, Claude Code, Cursor
-via config; protocol handshake integration-tested). Runtimes: Node ≥ 20,
-Python ≥ 3.10 (converter only). LLM: Anthropic native, or any
-OpenAI-compatible provider (OpenAI, Gemini, Groq, Ollama) via env — the
-product is provider-agnostic by design.
-
-## 14. Known limitations (ranked by real risk)
-
-1. **Recall**: BM25 can miss paraphrased relevance; the manifest converts
-   silent failure into visible, recoverable omission — mitigation, not
-   guarantee.
-2. **Multi-hop tasks** ("compare §2 with appendix C"): single-shot ranking
-   splits its budget poorly across facets. Workaround: two calls or
-   expand_section; fix: query decomposition (roadmap).
-3. **Heading-less PDFs** degrade chunk quality and demo aesthetics — choose
-   demo files accordingly.
-4. **Token counting drift** vs non-cl100k tokenizers: ±few %, budgets are
-   contracts of intent.
-5. **expand_section truncation** is char-ratio approximate, flagged in
-   output with a truncation comment.
-6. **No auth/rate limiting on the hosted demo** — acceptable for judging,
-   not for production.
+None of those are secrets. They are the edges of a system that chose transparent lossiness, local-first defaults, and a two-tool API over the temptation to look larger than it is.

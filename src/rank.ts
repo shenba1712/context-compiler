@@ -10,6 +10,8 @@
 import { Chunk } from "./chunk.js";
 import { relevanceFloor } from "./config.js";
 import { complete, hasLlm } from "./llm.js";
+import { log } from "./log.js";
+import { inc } from "./metrics.js";
 import { maxOf } from "./util.js";
 
 // Unicode-aware: matches words in any script (Devanagari, CJK, Latin, ...).
@@ -207,7 +209,8 @@ async function llmRerank(task: string, shortlist: Chunk[]): Promise<string[] | n
     // network errors, malformed JSON, or a truncated model response all fall
     // back to lexical order. Log it so a degraded-quality run is visible in
     // the server's output instead of silently downgrading with no trace.
-    console.warn("LLM rerank failed, falling back to BM25 order:", err);
+    inc("rerank_failed");
+    log.warn("LLM rerank failed, falling back to BM25 order", { err: String(err) });
     return null;
   }
 }

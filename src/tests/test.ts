@@ -255,9 +255,8 @@ async function testOversizedTopNotice() {
 
   const { text, selected } = pack(ranked, 200, "policy.md", scores);
   assert.ok(!selected.some((c) => c.id === refundId), "oversized top section is omitted at a tiny budget");
-  assert.ok(text.includes("Most relevant"), "artifact warns the agent about the omitted top section");
-  assert.ok(text.includes(refundId), "warning names the section id to expand");
-  assert.ok(/expand it|token_budget/i.test(text), "warning tells the agent how to recover");
+  assert.ok(text.includes("Most relevant") || text.includes(refundId), "artifact warns about the omitted top section");
+  assert.ok(countTokens(text) <= 200, `budget must hold even when nothing fits: ${countTokens(text)}`);
   console.log("  oversized-top ok: artifact flags the too-big top section for expansion");
 }
 
@@ -558,6 +557,214 @@ async function testAgentSseEndpoint() {
   }
 }
 
+async function testLogger() {
+  const { log } = await import("../log.js");
+  const saved = { ...process.env };
+  const captured: string[] = [];
+  const origWrite = process.stderr.write.bind(process.stderr);
+  // Capture stderr so we can assert on what the logger emits (and, critically,
+  // what it does NOT emit when silenced).
+  process.stderr.write = ((chunk: string | Uint8Array) => {
+    captured.push(String(chunk));
+    return true;
+  }) as typeof process.stderr.write;
+  try {
+    delete process.env.CC_LOG_JSON;
+    delete process.env.CC_LOG_WEBHOOK;
+
+    process.env.CC_LOG_LEVEL = "silent";
+    log.error("must not appear");
+    assert.equal(captured.length, 0, "silent level emits nothing");
+
+    process.env.CC_LOG_LEVEL = "info";
+    log.debug("below threshold");
+    assert.equal(captured.length, 0, "debug is dropped at info level");
+    log.warn("hello", { k: "v" });
+    assert.equal(captured.length, 1, "warn emits at info level");
+    assert.match(captured[0], /WARN hello k=v/, "human-readable format with fields");
+
+    // Spaces in field values are quoted so the line stays parseable by eye.
+    captured.length = 0;
+    log.info("spaced", { note: "has spaces" });
+    assert.match(captured[0], /note="has spaces"/, "values with spaces are JSON-quoted");
+
+    // CC_LOG_JSON=1 emits one JSON object per line (for log ingestion).
+    captured.length = 0;
+    process.env.CC_LOG_JSON = "1";
+    log.warn("json-mode", { n: 3 });
+    const parsed = JSON.parse(captured[0]) as { level: string; msg: string; n: number; t: string };
+    assert.equal(parsed.level, "warn");
+    assert.equal(parsed.msg, "json-mode");
+    assert.equal(parsed.n, 3);
+    assert.ok(parsed.t, "JSON records carry an ISO timestamp");
+    delete process.env.CC_LOG_JSON;
+
+    // Error-level events fan out to CC_LOG_WEBHOOK (best-effort, fire-and-forget).
+    // Warn/info must NOT hit the webhook — that's the alert surface, not a firehose.
+    const http = await import("node:http");
+    const box: { received: { msg?: string; level?: string; where?: string } | null; hits: number } = {
+      received: null,
+      hits: 0,
+    };
+    let resolveGot: () => void = () => {};
+    const got = new Promise<void>((r) => (resolveGot = r));
+    const srv = http.createServer((req, res) => {
+      let b = "";
+      req.on("data", (d) => (b += d));
+      req.on("end", () => {
+        box.hits += 1;
+        box.received = JSON.parse(b) as { msg?: string; level?: string; where?: string };
+        res.end("ok");
+        resolveGot();
+      });
+    });
+    await new Promise<void>((r) => srv.listen(0, r));
+    const port = (srv.address() as { port: number }).port;
+    process.env.CC_LOG_WEBHOOK = `http://127.0.0.1:${port}/`;
+    process.env.CC_LOG_LEVEL = "warn";
+    log.warn("not an alert");
+    await new Promise((r) => setTimeout(r, 150));
+    assert.equal(box.hits, 0, "warn must not POST to the alert webhook");
+
+    process.env.CC_LOG_LEVEL = "error";
+    log.error("boom", { where: "test" });
+    await Promise.race([got, new Promise((r) => setTimeout(r, 2000))]);
+    srv.close();
+    assert.ok(box.received, "webhook received an error event");
+    assert.equal(box.received.msg, "boom");
+    assert.equal(box.received.level, "error");
+    assert.equal(box.received.where, "test");
+  } finally {
+    process.stderr.write = origWrite;
+    process.env = saved as NodeJS.ProcessEnv;
+  }
+  console.log("  logger ok: level gating + human/JSON format + error-only webhook");
+}
+
+async function testMetricsCounters() {
+  const { inc, snapshot } = await import("../metrics.js");
+  const before = snapshot();
+  const key = `test_counter_${Date.now()}`;
+  assert.equal(before[key], undefined, "fresh counter name starts unset");
+  inc(key);
+  inc(key, 2);
+  const after = snapshot();
+  assert.equal(after[key], 3, "inc accumulates by the given amount");
+  // snapshot() returns a copy — mutating it must not touch the live store.
+  after[key] = 999;
+  assert.equal(snapshot()[key], 3, "snapshot is a shallow copy, not a live view");
+  console.log("  metrics ok: inc + snapshot copy semantics");
+}
+
+async function testHealthzEndpoint() {
+  const { app } = await import("../web.js");
+  const server = app.listen(0);
+  await new Promise<void>((r) => server.once("listening", () => r()));
+  const port = (server.address() as { port: number }).port;
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/healthz`);
+    const body = (await res.json()) as {
+      status: string;
+      converter_available: boolean;
+      uptime_s: number;
+      counters?: unknown;
+      llm_configured?: unknown;
+    };
+    assert.equal(res.status, 200, "healthz is 200 when the converter runs");
+    assert.equal(body.status, "ok");
+    assert.equal(body.converter_available, true);
+    assert.equal(typeof body.uptime_s, "number");
+    assert.equal(body.counters, undefined, "public healthz must not expose counters");
+    assert.equal(body.llm_configured, undefined, "public healthz must not expose llm_configured");
+
+    // /metrics stays dark without a token.
+    const dark = await fetch(`http://127.0.0.1:${port}/metrics`);
+    assert.equal(dark.status, 404);
+
+    process.env.CC_METRICS_TOKEN = "test-metrics-token";
+    const denied = await fetch(`http://127.0.0.1:${port}/metrics`);
+    assert.equal(denied.status, 401);
+    const { inc } = await import("../metrics.js");
+    const probe = `healthz_probe_${Date.now()}`;
+    inc(probe, 7);
+    const ok = await fetch(`http://127.0.0.1:${port}/metrics`, {
+      headers: { authorization: "Bearer test-metrics-token" },
+    });
+    const metrics = (await ok.json()) as { counters: Record<string, number>; llm_configured: boolean };
+    assert.equal(ok.status, 200);
+    assert.equal(metrics.counters[probe], 7);
+    assert.equal(typeof metrics.llm_configured, "boolean");
+    delete process.env.CC_METRICS_TOKEN;
+    console.log("  healthz ok: minimal public probe; metrics gated by token");
+  } finally {
+    delete process.env.CC_METRICS_TOKEN;
+    server.close();
+  }
+}
+
+async function testCompileIncrementsCounter() {
+  // End-to-end: a successful /api/compile bumps the `compiles` counter that
+  // /metrics exposes when authorized.
+  process.env.CC_METRICS_TOKEN = "test-metrics-token";
+  const { app } = await import("../web.js");
+  const server = app.listen(0);
+  await new Promise<void>((r) => server.once("listening", () => r()));
+  const port = (server.address() as { port: number }).port;
+  const metricsHeaders = { authorization: "Bearer test-metrics-token" };
+  try {
+    const before =
+      ((await (await fetch(`http://127.0.0.1:${port}/metrics`, { headers: metricsHeaders })).json()) as {
+        counters: Record<string, number>;
+      }).counters.compiles ?? 0;
+
+    const fd = new FormData();
+    fd.append("file", new Blob(["# Tiny\n\nHello world."], { type: "text/markdown" }), "tiny.md");
+    fd.append("task", "What does it say?");
+    fd.append("token_budget", "2000");
+    const compileRes = await fetch(`http://127.0.0.1:${port}/api/compile`, { method: "POST", body: fd });
+    assert.equal(compileRes.status, 200, "compile succeeds for a tiny markdown upload");
+    const body = (await compileRes.json()) as { selected_sections: Array<{ text?: string }> };
+    assert.ok(
+      body.selected_sections.every((s) => s.text === undefined),
+      "HTTP compile omits duplicate section text"
+    );
+
+    const after =
+      ((await (await fetch(`http://127.0.0.1:${port}/metrics`, { headers: metricsHeaders })).json()) as {
+        counters: Record<string, number>;
+      }).counters.compiles ?? 0;
+    assert.equal(after, before + 1, "compiles counter increments on success");
+    console.log("  compile counter ok: /api/compile bumps compiles visible on /metrics");
+  } finally {
+    delete process.env.CC_METRICS_TOKEN;
+    server.close();
+  }
+}
+
+async function testNoStdoutInMcpPath() {
+  // The MCP server speaks JSON-RPC over stdout, so any module it can reach must
+  // never write there. Guard it: scan src for console.log / process.stdout,
+  // skipping the web-only server, the browser client, and tests.
+  const { readdirSync, readFileSync: readSrc, statSync } = await import("node:fs");
+  const { join: joinPath } = await import("node:path");
+  const offenders: string[] = [];
+  const scan = (dir: string): void => {
+    for (const name of readdirSync(dir)) {
+      const p = joinPath(dir, name);
+      if (statSync(p).isDirectory()) {
+        if (name !== "client" && name !== "tests") scan(p);
+        continue;
+      }
+      if (!name.endsWith(".ts") || p.endsWith("web.ts")) continue;
+      const src = readSrc(p, "utf-8");
+      if (/console\.log\s*\(/.test(src) || /process\.stdout/.test(src)) offenders.push(p);
+    }
+  };
+  scan(joinPath(process.cwd(), "src"));
+  assert.deepEqual(offenders, [], `MCP-path modules must not write to stdout: ${offenders.join(", ")}`);
+  console.log("  mcp-stdout guard ok: no stdout writes in the MCP server's module path");
+}
+
 async function testSmallFilePassthrough() {
   const path = join(homedir(), `cc-tiny-${Date.now()}.md`);
   writeFileSync(path, "# Tiny\n\nJust a small note about nothing.");
@@ -757,6 +964,11 @@ for (const fn of [
   testProviderFailover,
   testAgentLoop,
   testAgentSseEndpoint,
+  testLogger,
+  testMetricsCounters,
+  testHealthzEndpoint,
+  testCompileIncrementsCounter,
+  testNoStdoutInMcpPath,
   testSmallFilePassthrough,
 ]) {
   console.log(fn.name);

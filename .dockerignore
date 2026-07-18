@@ -3,3 +3,5 @@ dist
 .git
 *.md
 !README.md
+!ARCHITECTURE.md
+!DEMO_SCRIPT.md

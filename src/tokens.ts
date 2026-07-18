@@ -5,11 +5,13 @@
 import { Tiktoken } from "js-tiktoken/lite";
 import cl100k_base from "js-tiktoken/ranks/cl100k_base";
 
+import { log } from "./log.js";
+
 let encoder: Tiktoken | null = null;
 try {
   encoder = new Tiktoken(cl100k_base);
 } catch (err) {
-  console.warn("Tiktoken encoder failed to load; falling back to the 4-chars/token estimate:", err);
+  log.warn("Tiktoken encoder failed to load; using the 4-chars/token estimate", { err: String(err) });
   encoder = null;
 }
 
@@ -25,10 +27,9 @@ export function countTokens(text: string): number {
     } catch (err) {
       if (!warnedOnEncodeFailure) {
         warnedOnEncodeFailure = true;
-        console.warn(
-          "Tiktoken encode() failed on some input; falling back to the 4-chars/token estimate:",
-          err
-        );
+        log.warn("Tiktoken encode() failed on some input; using the 4-chars/token estimate", {
+          err: String(err),
+        });
       }
     }
   }
