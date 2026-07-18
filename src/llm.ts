@@ -44,6 +44,20 @@ type OpenAICompatProvider = {
 type AnthropicProvider = { name: string; kind: "anthropic"; apiKey: string; model: string };
 type Provider = OpenAICompatProvider | AnthropicProvider;
 
+function isGeminiCompat(p: OpenAICompatProvider): boolean {
+  return p.name === "gemini" || /generativelanguage\.googleapis\.com/i.test(p.baseUrl);
+}
+
+/**
+ * Gemini 2.5/3.x spend hidden "thinking" tokens from the same max_tokens budget.
+ * With a small ceiling (e.g. 500) the visible answer truncates mid-sentence.
+ * Dial thinking down for demo Q&A; 2.5 Flash can disable it entirely.
+ */
+function geminiReasoningEffort(model: string): "none" | "minimal" | "low" {
+  if (/gemini-2\.5/i.test(model) && !/pro/i.test(model)) return "none";
+  return "minimal";
+}
+
 /** Thrown when every configured provider fails (or none are configured). */
 export class LlmUnavailableError extends Error {
   /** Safe for HTTP/SSE clients — no provider bodies or keys. */
@@ -163,6 +177,16 @@ async function callProvider(
     return block && block.type === "text" ? block.text : "";
   }
 
+  const body: Record<string, unknown> = {
+    model: p.model,
+    max_tokens: maxTokens,
+    messages: [{ role: "user", content: prompt }],
+  };
+  // Keep thinking from eating the visible answer / JSON (rerank, parity, agent).
+  if (isGeminiCompat(p)) {
+    body.reasoning_effort = geminiReasoningEffort(p.model);
+  }
+
   const res = await fetch(`${p.baseUrl}/chat/completions`, {
     method: "POST",
     headers: {
@@ -170,18 +194,26 @@ async function callProvider(
       authorization: `Bearer ${p.apiKey}`,
       ...p.headers,
     },
-    body: JSON.stringify({
-      model: p.model,
-      max_tokens: maxTokens,
-      messages: [{ role: "user", content: prompt }],
-    }),
+    body: JSON.stringify(body),
     signal,
   });
   if (!res.ok) {
     throw new Error(`${res.status} ${(await res.text()).slice(0, 200)}`);
   }
-  const data = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
-  return data.choices?.[0]?.message?.content ?? "";
+  const data = (await res.json()) as {
+    choices?: Array<{ message?: { content?: string }; finish_reason?: string }>;
+  };
+  const choice = data.choices?.[0];
+  const text = choice?.message?.content ?? "";
+  if (choice?.finish_reason === "length" || choice?.finish_reason === "max_tokens") {
+    log.warn("LLM response hit max_tokens (may be truncated)", {
+      provider: p.name,
+      model: p.model,
+      maxTokens,
+      chars: text.length,
+    });
+  }
+  return text;
 }
 
 /**

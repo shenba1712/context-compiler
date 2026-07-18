@@ -16,7 +16,7 @@ Prefer the **hosted demo + in-repo Run agent** for the recording. MCP in a codin
       (needs a server-side LLM key — Gemini free tier is enough).
 - [ ] Hero setup (rehearse numbers so you don’t invent them live):
       - Sample: **Pride and Prejudice** (or Kestrel K2 / Meridian report).
-      - Question: *How does Mr. Collins propose to Elizabeth?*
+      - Question: *What does Mr. Darcy say about Elizabeth at the Meryton assembly?*
       - Budget: **2,000** (or leave the default ~4,000 — still a huge cut).
       - Expect ~90%+ fewer tokens with the answer still in the compiled markdown.
 - [ ] Rehearse a **controlled miss**: tiny budget (e.g. 800) or a vague question
@@ -127,8 +127,9 @@ flaky on camera, skip it — **Run agent** already makes the point.
 
 | Sample | Strong question | Why it demos well |
 |--------|-----------------|-------------------|
-| Pride and Prejudice | How does Mr. Collins propose to Elizabeth? | Huge novel → tiny slice; hero mock on the landing page |
-| Kestrel K2 manual | What voids the warranty? Can it fly in rain? | Compound query + multi-section pack |
+| Pride and Prejudice | What does Mr. Darcy say about Elizabeth at the Meryton assembly? | Huge novel → tiny slice; hero mock on the landing page |
+| Kestrel K2 manual | What does the warranty not cover? Can the drone fly in rain? | Compound query + multi-section pack |
+| Sherlock Holmes | What is the Red-Headed League? | Partial text — ask what’s *in* the file, not the full plot |
 | Meridian Annual Report | What are the three risks management worries about? | Business prose + tables |
 | Meridian Financials | What was net profit in FY25? | Spreadsheet path through markitdown |
 | Origin of Species | What is natural selection? | Dense PDF; expect slower first convert |
