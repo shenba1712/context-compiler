@@ -43,7 +43,7 @@
 
     <div class="pipe" style="margin-top:34px">
       <div class="c"><div class="n">1 · Convert</div><div class="h">Any file → markdown</div><div class="d">PDF, docx, xlsx, pptx, images. The result is cached by the file's content hash, so a file is only ever converted once — ask it new questions for free.</div></div>
-      <div class="c"><div class="n">2 · Select</div><div class="h">Rank against your task</div><div class="d">BM25 lexical ranking; LLM rerank when a key is set.</div></div>
+      <div class="c"><div class="n">2 · Select</div><div class="h">Rank against your task</div><div class="d">BM25 lexical ranking — free, local, and deterministic.</div></div>
       <div class="c"><div class="n">3 · Pack</div><div class="h">Fit the token budget</div><div class="d">Best sections in, a manifest of what was left out.</div></div>
     </div>
     <div class="keynote">The compiled result is <strong>exactly what your AI agent receives instead of the whole file</strong>.
@@ -137,7 +137,7 @@
     <div class="badges">
       <strong style="font-size:14px;margin-right:4px">Compiled context</strong>
       <span class="badge" id="cacheBadge"></span>
-      <span class="badge" id="rerankBadge"></span>
+      <span class="badge" id="rankBadge"></span>
       <span class="badge" id="omitBadge"></span>
       <button type="button" id="viewToggle" class="btn ghost" style="margin-left:auto;font-size:12px;padding:4px 12px" aria-pressed="false" title="Toggle between the readable section cards and the exact markdown string your AI agent receives">See exact text sent to AI</button>
     </div>

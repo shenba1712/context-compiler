@@ -61,7 +61,7 @@ async function testChunking() {
 async function testRankAndPack() {
   const chunks = chunkMarkdown(makeTestDoc());
   const task = "What are the termination notice periods?";
-  const ranked = await rank(task, chunks, false);
+  const ranked = rank(task, chunks);
   assert.ok(
     ranked[0].breadcrumb.includes("Termination") || ranked[0].text.includes("Termination"),
     `top chunk should be termination, got: ${ranked[0].breadcrumb}`
@@ -82,7 +82,7 @@ async function testEndToEnd() {
   const path = join(homedir(), `cc-test-${Date.now()}.md`);
   writeFileSync(path, makeTestDoc());
   try {
-    const r = await compileContext(path, "termination notice period", 1500, false);
+    const r = await compileContext(path, "termination notice period", 1500);
     assert.ok(r.reduction_pct > 50, `expected >50% reduction, got ${r.reduction_pct}%`);
     assert.ok(r.markdown.includes("90 days written notice"));
     assert.ok(r.omitted_sections.length, "manifest should list omitted sections");
@@ -91,7 +91,7 @@ async function testEndToEnd() {
       "pipeline attaches text on selected sections (web UI depends on this)"
     );
 
-    const r2 = await compileContext(path, "payment terms", 1500, false);
+    const r2 = await compileContext(path, "payment terms", 1500);
     assert.equal(r2.cache_hit, true, "second call hits cache");
     assert.ok(r2.markdown.includes("Payment terms"), "different task selects different sections");
 
@@ -116,7 +116,7 @@ async function testMultilingualRanking() {
     "## अध्याय 3: समाप्ति\n\n" + "समाप्ति की शर्तें और सूचना अवधि। ".repeat(30),
   ].join("\n\n");
   const chunks = chunkMarkdown(md);
-  const ranked = await rank("धनवापसी में कितने दिन लगते हैं?", chunks, false);
+  const ranked = rank("धनवापसी में कितने दिन लगते हैं?", chunks);
   assert.ok(
     ranked[0].text.includes("14 कार्य दिवसों"),
     `Hindi query should rank the refund section first, got: ${ranked[0].breadcrumb}`
@@ -166,7 +166,7 @@ async function testMoreScriptsRanking() {
   ];
   for (const c of cases) {
     const chunks = chunkMarkdown(c.doc.join("\n\n"));
-    const ranked = await rank(c.q, chunks, false);
+    const ranked = rank(c.q, chunks);
     assert.ok(
       ranked[0].text.includes(c.hit),
       `top chunk for "${c.q}" should contain "${c.hit}", got: ${ranked[0].breadcrumb}`
@@ -178,7 +178,7 @@ async function testMoreScriptsRanking() {
 async function testRelevanceFloor() {
   const chunks = chunkMarkdown(makeTestDoc());
   const task = "What are the termination notice periods?";
-  const ranked = await rank(task, chunks, false);
+  const ranked = rank(task, chunks);
   const scores = new Map(chunks.map((c, i) => [c.id, bm25Scores(task, chunks)[i]]));
 
   // Sharp query + big budget: the floor should stop early instead of
@@ -223,7 +223,7 @@ async function testReserveDoesNotEvictFittingContent() {
   ].join("\n\n");
   const chunks = chunkMarkdown(doc);
   const task = "What is the rocket launch date?";
-  const ranked = await rank(task, chunks, false);
+  const ranked = rank(task, chunks);
   const scores = new Map(chunks.map((c, i) => [c.id, bm25Scores(task, chunks)[i]]));
 
   // Pick a budget just large enough to fit the top two relevant chunks
@@ -253,7 +253,7 @@ async function testOversizedTopNotice() {
   ].join("\n\n");
   const chunks = chunkMarkdown(doc);
   const task = "What is the refund policy?";
-  const ranked = await rank(task, chunks, false);
+  const ranked = rank(task, chunks);
   const scores = new Map(chunks.map((c, i) => [c.id, bm25Scores(task, chunks)[i]]));
   const refundId = chunks.find((c) => c.text.includes("14 business days"))!.id;
 
@@ -265,6 +265,52 @@ async function testOversizedTopNotice() {
   );
   assert.ok(countTokens(text) <= 200, `budget must hold even when nothing fits: ${countTokens(text)}`);
   console.log("  oversized-top ok: artifact flags the too-big top section for expansion");
+}
+
+async function testBm25FirstPackingDespiteDemotion() {
+  // Regression: LLM (or any) order that puts many small sections ahead of the
+  // BM25 top hit can fill the budget and omit a fitting 100%-relevant section.
+  // Packing must try highest BM25 score first (pipeline sorts before pack).
+  const doc = [
+    "## Tiny A\n\nKing of Bohemia mentioned once in passing.",
+    "## Tiny B\n\nKing of Bohemia mentioned once in passing.",
+    "## Tiny C\n\nKing of Bohemia mentioned once in passing.",
+    "## Tiny D\n\nKing of Bohemia mentioned once in passing.",
+    "## Scandal\n\n" +
+      "The King of Bohemia comes to Sherlock Holmes because Irene Adler has a " +
+      "photograph that could compromise his forthcoming marriage. ".repeat(35),
+    "## Other case\n\n" +
+      "A red-headed league and a bank tunnel distraction fill this chapter. ".repeat(35),
+  ].join("\n\n");
+  const chunks = chunkMarkdown(doc);
+  const task = "Why does the King of Bohemia come to Sherlock Holmes?";
+  const scoresArr = bm25Scores(task, chunks);
+  const scores = new Map(chunks.map((c, i) => [c.id, scoresArr[i]!]));
+  const byScore = [...chunks].sort((a, b) => (scores.get(b.id) ?? 0) - (scores.get(a.id) ?? 0));
+  const top = byScore[0]!;
+  assert.ok(top.text.includes("Irene Adler"), `top BM25 should be Scandal, got ${top.breadcrumb}`);
+
+  // Demote the top hit to the end (simulates a demoted fill order).
+  const demoted = [...byScore.filter((c) => c.id !== top.id), top];
+  const budget = top.tokens + 400; // room for top + a few tinies, not all tinies + other
+  const starved = pack(demoted, budget, "bohemia.md");
+  assert.ok(
+    !starved.selected.some((c) => c.id === top.id),
+    "sanity: demoted order can starve the BM25 top when scores are not used to reorder"
+  );
+
+  const rankPos = new Map(demoted.map((c, i) => [c.id, i]));
+  const packOrder = [...demoted].sort((a, b) => {
+    const d = (scores.get(b.id) ?? 0) - (scores.get(a.id) ?? 0);
+    if (d !== 0) return d;
+    return (rankPos.get(a.id) ?? 0) - (rankPos.get(b.id) ?? 0);
+  });
+  const fixed = pack(packOrder, budget, "bohemia.md", scores);
+  assert.ok(
+    fixed.selected.some((c) => c.id === top.id),
+    "BM25-first pack order must keep the top-scoring section when it fits"
+  );
+  console.log("  bm25-first pack ok: demoted top hit still selected when it fits the budget");
 }
 
 async function testMultiQuery() {
@@ -832,7 +878,7 @@ async function testSmallFilePassthrough() {
   const path = join(homedir(), `cc-tiny-${Date.now()}.md`);
   writeFileSync(path, "# Tiny\n\nJust a small note about nothing.");
   try {
-    const r = await compileContext(path, "anything", 4000, false);
+    const r = await compileContext(path, "anything", 4000);
     assert.equal(r.tokens_saved, 0);
     assert.ok(r.markdown.includes("small note"));
     console.log("  passthrough ok: small files returned whole");
@@ -847,15 +893,14 @@ async function testFormatConversion() {
   // proved any real-world file format converts correctly. pptx and csv had
   // zero coverage anywhere (not even a sample in the demo). Lock both in
   // through the real pipeline, not a stub.
-  const pptx = await compileContext(join(FIXTURES_DIR, "deck.pptx"), "What is planned for Q2?", 4000, false);
+  const pptx = await compileContext(join(FIXTURES_DIR, "deck.pptx"), "What is planned for Q2?", 4000);
   assert.ok(pptx.markdown.includes("Add billing"), "pptx slide content survives real conversion");
   assert.ok(pptx.markdown.includes("Risks"), "pptx second slide also converts");
 
   const csv = await compileContext(
     join(FIXTURES_DIR, "data.csv"),
     "Who is in the Platform department?",
-    4000,
-    false
+    4000
   );
   assert.ok(
     csv.markdown.includes("Asha Rao") && csv.markdown.includes("Priya Nair"),
@@ -874,7 +919,7 @@ async function testImageConversionFailsClearly() {
   // "context" with nothing in it. Lock in that this fails LOUD and clear
   // instead, with a message that tells the user why.
   await assert.rejects(
-    () => compileContext(join(FIXTURES_DIR, "invoice.png"), "What is the total?", 4000, false),
+    () => compileContext(join(FIXTURES_DIR, "invoice.png"), "What is the total?", 4000),
     (err: unknown) => err instanceof Error && /empty output/i.test(err.message) && /OCR/i.test(err.message),
     "image with no OCR/captioning configured fails with a clear, actionable error"
   );
@@ -1036,6 +1081,7 @@ for (const fn of [
   testRelevanceFloor,
   testReserveDoesNotEvictFittingContent,
   testOversizedTopNotice,
+  testBm25FirstPackingDespiteDemotion,
   testMultiQuery,
   testFormatConversion,
   testImageConversionFailsClearly,

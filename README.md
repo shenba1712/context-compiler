@@ -14,7 +14,7 @@ Under the hood the path is deliberately boring. The file is converted to markdow
 
 TypeScript owns that pipeline. Python shows up only as the `markitdown` converter binary — the same way apps ship ffmpeg — so you get docx, xlsx, pptx, pdf, and friends without writing a single custom parser. Conversion results are cached by content hash: same bytes, same markdown, no TTL games.
 
-If you have an LLM key, an optional rerank can reshuffle the top of the shortlist for paraphrased questions. Without a key, everything else still works offline. That is not a degraded mode. That is the default.
+If you have an LLM key, answer parity and agent mode can call the model. Compile itself stays on BM25 — free, local, no quota. Without a key, everything else still works offline. That is not a degraded mode. That is the default.
 
 ## Getting it running
 
@@ -43,11 +43,11 @@ If pip is awkward on your system, `uv tool install "markitdown[docx,pdf,xlsx,ppt
 
 ## About API keys
 
-No key yet? Nothing is blocked. An LLM key unlocks two optional upgrades: a smarter reranker for paraphrased questions, and the demo’s answer-parity panel (plus agent mode, which needs a model to decide the next hop). Without any key, conversion, chunking, BM25, packing, both MCP tools, and the full web demo still run. CI verifies that path on every commit with no secrets set.
+No key yet? Nothing is blocked. An LLM key unlocks the demo’s answer-parity panel and agent mode (which need a model to answer or decide the next hop). Compile is always BM25 — no model call. Without any key, conversion, chunking, BM25, packing, both MCP tools, and the full web demo still run. CI verifies that path on every commit with no secrets set.
 
 When you do configure keys, they are tried in priority order and fail over automatically — rate limit, quota, outage, whatever — so one free-tier wall does not take the feature down while another key still works. Gemini is the intended free primary (`GEMINI_API_KEY`), OpenRouter the natural fallback (`OPENROUTER_API_KEY`), then Anthropic, then any OpenAI-compatible endpoint via `OPENAI_API_KEY` or `CC_LLM_API_KEY` plus `CC_LLM_BASE_URL`. Per-provider model overrides live in `CC_GEMINI_MODEL`, `CC_OPENROUTER_MODEL`, and friends. OpenRouter’s `:free` model IDs come and go; if the default stops answering, set `CC_OPENROUTER_MODEL` to whatever is current on their models page.
 
-On a hosted deployment the operator sets the key as a server env var. It never reaches the browser. Locally or over MCP, it is simply your key in your environment. Reranks cost fractions of a cent; a parity comparison is roughly a dime at worst, and the demo rate-limits plus caps the full-file side of that comparison so a public instance cannot silently burn a bill.
+On a hosted deployment the operator sets the key as a server env var. It never reaches the browser. Locally or over MCP, it is simply your key in your environment. Compile is free of model cost by default; a parity comparison is roughly a dime at worst, and the demo rate-limits plus caps the full-file side of that comparison so a public instance cannot silently burn a bill.
 
 ## Plugging it into an agent
 
@@ -99,9 +99,9 @@ Separately, any real coding agent over MCP can call the same two tools in its ow
 
 Budget by question breadth, not file size. A factual lookup is happy around a thousand tokens. Synthesis across a few sections wants something like four thousand. “Summarize everything” needs a budget at least as large as the file — at which point the compiler returns the whole document as lossless passthrough.
 
-The budget is a ceiling, not a target. When ranking shows a clear relevance drop-off, packing stops early and returns less than you allowed. That relative floor (`CC_RELEVANCE_FLOOR`, default 0.15 × the top score) is disabled under LLM rerank so a lexical rule never evicts a section the reranker promoted for semantic reasons. On vague questions with no clear signal, the packer fills the budget as recall insurance. Leaving the slider at four thousand is almost always fine.
+The budget is a ceiling, not a target. When ranking shows a clear relevance drop-off, packing stops early and returns less than you allowed (`CC_RELEVANCE_FLOOR`, default 0.15 × the top score). On vague questions with no clear signal, the packer fills the budget as recall insurance. Leaving the slider at four thousand is almost always fine.
 
-Compound questions (“What voids the warranty? Can it fly in rain?”) get split into sub-queries for BM25 and interleaved round-robin so each facet gets a fair shot at the budget. Under LLM rerank we leave the task whole — the model already reasons over compound intent.
+Compound questions (“What voids the warranty? Can it fly in rain?”) get split into sub-queries for BM25 and interleaved round-robin so each facet gets a fair shot at the budget.
 
 ## Logs, health, and a quiet alert path
 
@@ -127,7 +127,7 @@ If you see `spawn markitdown ENOENT`, the converter is not on PATH — install i
 
 Untrusted files are size-capped, time-boxed, and parsed in a subprocess with no shell. Uploads are sniffed for content that does not match the claimed extension, and zip bombs are rejected by declared uncompressed size before they ever reach the converter. MCP reads are confined to `CC_ROOT` after realpath. Without an API key, the file never leaves the machine.
 
-Prompt injection is a known game on this stage. Compiled output is wrapped in `UNTRUSTED DOCUMENT CONTENT` markers, and rerank/answer/agent prompts tell the model to treat document text as data. That is mitigation, not a sandbox — a clever PDF can still try to steer the model. The product answer is the same as for recall misses: the omitted-sections manifest makes loss visible, and `expand_section` (or a second compile) recovers. If you are judging this demo, try to break parity with an injected doc; then watch whether the agent can still navigate the manifest. That is the design under stress, not a bug we pretend away.
+Prompt injection is a known game on this stage. Compiled output is wrapped in `UNTRUSTED DOCUMENT CONTENT` markers, and answer/agent prompts tell the model to treat document text as data. That is mitigation, not a sandbox — a clever PDF can still try to steer the model. The product answer is the same as for recall misses: the omitted-sections manifest makes loss visible, and `expand_section` (or a second compile) recovers. If you are judging this demo, try to break parity with an injected doc; then watch whether the agent can still navigate the manifest. That is the design under stress, not a bug we pretend away.
 
 ## What we know we do not do yet
 

@@ -549,7 +549,7 @@ $<HTMLFormElement>("compileForm").addEventListener("submit", async (e) => {
     $("cacheNote").innerHTML = d.cache_hit
       ? "⚡ <strong>Conversion cached.</strong> We recognised this exact file (matched by content hash), so we reused the markdown from a previous run instead of re-converting it. Only the file→markdown step is cached — your question was still ranked fresh just now."
       : "<strong>Converted fresh.</strong> First time we've seen this exact file, so we converted it to markdown and cached it by content hash. Ask another question on the same file and this step is skipped (you'll see “⚡ conversion cached”). Edit the file and it converts again.";
-    $("rerankBadge").textContent = d.rerank_used ? "llm rerank" : "bm25 ranking";
+    $("rankBadge").textContent = "bm25 ranking";
     $("omitBadge").textContent = d.omitted_sections.length + " sections omitted";
     $("out").textContent = d.markdown;
     applyLang($("out"), d.markdown);
@@ -874,43 +874,47 @@ function renderFloorNote(d: CompileApiResult): void {
     el.classList.remove("hidden");
     return;
   }
-  // Most important non-empty case: a MORE relevant section was omitted purely
-  // because it was too big to fit — so a lower-relevance section is showing
-  // in its place. This can only happen when the top-ranked chunk exceeds the
-  // budget. Warn clearly and tell the user exactly how to get the real answer.
+  // More-relevant section omitted while a weaker one is shown. Usually that
+  // means the top hit alone exceeds the budget; if it would fit, say so
+  // instead of claiming it's "larger than" the budget (that was a real bug
+  // when packing order starved a fitting 100% section).
   if (topOmit && (topOmit.relevance || 0) > selRel) {
     const need = Math.ceil((topOmit.tokens + 80) / 100) * 100;
-    el.innerHTML =
-      "<strong>The most relevant section didn’t fit.</strong> “" +
-      esc(lastCrumb(topOmit.section)) +
-      "” (" +
-      topOmit.relevance +
-      "% relevant, " +
-      topOmit.tokens.toLocaleString() +
-      " tokens) is larger than your " +
-      budget.toLocaleString() +
-      "-token budget, so lower-relevance sections are shown instead. " +
-      "Raise the budget to about " +
-      need.toLocaleString() +
-      " tokens, or fetch it directly below with " +
-      "<code>expand_section</code> (<code>" +
-      topOmit.id +
-      "</code>).";
+    const tooBigAlone = topOmit.tokens + 80 > budget;
+    el.innerHTML = tooBigAlone
+      ? "<strong>The most relevant section didn’t fit.</strong> “" +
+        esc(lastCrumb(topOmit.section)) +
+        "” (" +
+        topOmit.relevance +
+        "% relevant, " +
+        topOmit.tokens.toLocaleString() +
+        " tokens) is larger than your " +
+        budget.toLocaleString() +
+        "-token budget, so lower-relevance sections are shown instead. " +
+        "Raise the budget to about " +
+        need.toLocaleString() +
+        " tokens, or fetch it directly below with " +
+        "<code>expand_section</code> (<code>" +
+        topOmit.id +
+        "</code>)."
+      : "<strong>The most relevant section was left out.</strong> “" +
+        esc(lastCrumb(topOmit.section)) +
+        "” (" +
+        topOmit.relevance +
+        "% relevant, " +
+        topOmit.tokens.toLocaleString() +
+        " tokens) fits your " +
+        budget.toLocaleString() +
+        "-token budget but wasn’t selected. Fetch it below with " +
+        "<code>expand_section</code> (<code>" +
+        topOmit.id +
+        "</code>).";
     el.classList.remove("hidden");
     return;
   }
   const spare = budget - d.tokens_used;
   const budgetBound = spare < budget * 0.12; // used almost the whole budget
-  if (d.rerank_used) {
-    if (budgetBound) {
-      el.innerHTML =
-        "<strong>Budget-bound.</strong> The compiled context nearly fills your " +
-        budget.toLocaleString() +
-        "-token budget — raising it would let more sections in.";
-    } else {
-      return;
-    }
-  } else if (budgetBound) {
+  if (budgetBound) {
     el.innerHTML =
       "<strong>Budget-bound.</strong> Selection stopped because it hit your " +
       budget.toLocaleString() +

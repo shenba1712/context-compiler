@@ -4,7 +4,7 @@
  * Providers are tried in a fixed priority order, and complete() automatically
  * falls over to the next one when a provider errors (rate limit, quota, network
  * blip, bad key). If they all fail, complete() throws and callers degrade
- * gracefully: rerank drops back to BM25, and the answer panel reports the error.
+ * gracefully: the answer panel reports the error.
  *
  * Priority order (highest first):
  *   1. Gemini      — GEMINI_API_KEY   (free tier, no card; the intended primary)
@@ -78,7 +78,7 @@ export class LlmBusyError extends Error {
 
 let activeLlmJobs = 0;
 
-/** Bound concurrent agent/parity/rerank work so one host can't melt the API bill. */
+/** Bound concurrent agent/parity work so one host can't melt the API bill. */
 export function tryAcquireLlmJob(): boolean {
   if (activeLlmJobs >= MAX_CONCURRENT_LLM) return false;
   activeLlmJobs += 1;
@@ -182,7 +182,7 @@ async function callProvider(
     max_tokens: maxTokens,
     messages: [{ role: "user", content: prompt }],
   };
-  // Keep thinking from eating the visible answer / JSON (rerank, parity, agent).
+  // Keep thinking from eating the visible answer (parity, agent).
   if (isGeminiCompat(p)) {
     body.reasoning_effort = geminiReasoningEffort(p.model);
   }

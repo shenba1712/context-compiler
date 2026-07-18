@@ -371,7 +371,6 @@ app.post("/api/compile", upload.single("file"), guardUpload, async (req, res) =>
       path,
       task,
       clampBudget(req.body.token_budget, BUDGET_FLOORS.web),
-      undefined,
       sanitizeSourceName(req.file.originalname)
     );
     inc("compiles");
@@ -440,7 +439,6 @@ app.post("/api/answer", upload.single("file"), guardUpload, async (req, res) => 
         path,
         task,
         clampBudget(req.body.token_budget, BUDGET_FLOORS.web),
-        undefined,
         sanitizeSourceName(req.file.originalname)
       );
 

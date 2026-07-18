@@ -9,8 +9,8 @@
 # from this file — it prompts you to enter them in the dashboard on first
 # deploy, and keeps them as encrypted secrets out of source control. Both are
 # optional: with neither set, the demo still runs fully (BM25 ranking, both MCP
-# tools, conversion) — the keys only unlock the reranker and the answer-parity
-# panel, with automatic Gemini → OpenRouter failover.
+# tools, conversion) — the keys only unlock answer-parity and agent mode, with
+# automatic Gemini → OpenRouter failover.
 services:
   - type: web
     name: context-compiler

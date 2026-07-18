@@ -154,10 +154,9 @@ export async function runAgent(
   };
 
   assertNotAborted(signal);
-  // Step 1 is always a compile at the starting budget. rerank is off on purpose:
-  // the agent loop is the reasoning layer, so each compile stays cheap and
-  // deterministic BM25.
-  let compiled = await compileContext(filePath, task, startBudget, false, opts.sourceName);
+  // Step 1 is always a compile at the starting budget. The agent loop is the
+  // reasoning layer; each compile stays cheap deterministic BM25.
+  let compiled = await compileContext(filePath, task, startBudget, opts.sourceName);
   const rawTokens = compiled.raw_tokens;
   let baseMarkdown = compiled.markdown;
   let baseTokens = compiled.tokens_used;
@@ -238,7 +237,7 @@ export async function runAgent(
       break;
     }
     assertNotAborted(signal);
-    compiled = await compileContext(filePath, task, next, false, opts.sourceName);
+    compiled = await compileContext(filePath, task, next, opts.sourceName);
     baseMarkdown = compiled.markdown;
     manifest = compiled.omitted_sections
       .filter((s) => !expandedIds.has(s.id))

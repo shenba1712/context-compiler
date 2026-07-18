@@ -49,7 +49,6 @@ interface CompileApiResult {
   tokens_saved: number;
   reduction_pct: number;
   cache_hit: boolean;
-  rerank_used: boolean;
   token_budget: number;
   queries: string[];
   selected_sections: SectionInfo[];

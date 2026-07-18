@@ -161,8 +161,9 @@ export function assemble(
  * budget remains — the budget is a ceiling, not a target. The floor is
  * RELATIVE, so it only bites when the ranker has real signal: on a vague
  * query with flat scores nothing falls below it, and the packer fills the
- * budget as recall insurance. Callers using an LLM rerank should NOT pass
- * scores (a lexical floor would evict the rerank's semantic rescues).
+ * budget as recall insurance. Callers should pass `ranked` in the fill
+ * priority they want (normally BM25-descending); scores here only gate the
+ * floor, they do not re-sort.
  */
 export function pack(
   ranked: Chunk[],

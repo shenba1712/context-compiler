@@ -102,8 +102,8 @@ On screen: hosted URL + `github.com/shenba1712/context-compiler`.
 - Never wait on camera: cut latency in the edit, or pre-warm cold start + cache.
 - The miss → expand beat is the riskiest and the most memorable — rehearse
   until it’s boring.
-- Ranking is BM25 by default; LLM rerank is optional when a key is set. Don’t
-  oversell embeddings you don’t ship.
+- Ranking is BM25 (local, free). Don’t oversell embeddings or an LLM rerank
+  you don’t ship — those are possible later, not today.
 - Free-tier host still waking up? Wait for the in-page cold-start note / `/healthz`
   before you start talking over a blank spinner.
 

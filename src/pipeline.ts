@@ -5,7 +5,6 @@ import { cacheGet, cachePut, fileKey } from "./cache.js";
 import { Chunk, chunkMarkdown, outline } from "./chunk.js";
 import { convertToMarkdown } from "./convert.js";
 import { DEFAULT_TOKEN_BUDGET } from "./config.js";
-import { hasLlm } from "./llm.js";
 import { assemble, pack } from "./pack.js";
 import {
   bm25Scores,
@@ -35,7 +34,6 @@ export interface CompileResult {
   tokens_saved: number;
   reduction_pct: number;
   cache_hit: boolean;
-  rerank_used: boolean;
   token_budget: number; // the budget actually applied (post-clamp) — UI truth
   queries: string[]; // sub-questions the task was split into (length 1 = single)
   selected_sections: SectionInfo[];
@@ -55,10 +53,8 @@ export async function compileContext(
   filePath: string,
   task: string,
   tokenBudget = DEFAULT_TOKEN_BUDGET,
-  rerank?: boolean,
   sourceName?: string
 ): Promise<CompileResult> {
-  const useRerank = rerank ?? hasLlm();
   const { markdown, cacheHit } = await convertedMarkdown(filePath);
   const rawTokens = countTokens(markdown);
   const chunks = chunkMarkdown(markdown);
@@ -67,10 +63,9 @@ export async function compileContext(
   const name = sourceName ?? basename(filePath);
 
   // Split a compound task ("What voids the warranty? Can it fly in rain?")
-  // into sub-questions. Multi-query handling is a lexical concern: an LLM
-  // rerank already reasons over compound intent, so we only split for BM25.
+  // into sub-questions so each facet gets a fair shot at a tight budget.
   const queries = splitQueries(task);
-  const multi = queries.length > 1 && !useRerank;
+  const multi = queries.length > 1;
 
   // Multi-query needs this same per-question breakdown for three different
   // things below (the merged score, attribution, and the ranking order), so
@@ -109,7 +104,6 @@ export async function compileContext(
       tokens_saved: 0,
       reduction_pct: 0,
       cache_hit: cacheHit,
-      rerank_used: false,
       token_budget: tokenBudget,
       queries,
       selected_sections: all.map((c) => info(c, true)),
@@ -118,11 +112,9 @@ export async function compileContext(
   }
 
   // Multi-query: interleave each sub-question's ranking round-robin so every
-  // one is represented. Otherwise rank the task as a single query.
-  const ranked = rows ? rankMultiFromRows(rows, chunks) : await rank(task, chunks, useRerank);
-  // Relevance floor only without rerank: a lexical floor must not evict
-  // sections the LLM rerank promoted for semantic (non-lexical) relevance.
-  const { text, selected, omitted } = pack(ranked, tokenBudget, name, useRerank ? undefined : scoreMap);
+  // one is represented. Otherwise rank the task as a single BM25 query.
+  const ranked = rows ? rankMultiFromRows(rows, chunks) : rank(task, chunks);
+  const { text, selected, omitted } = pack(ranked, tokenBudget, name, scoreMap);
   const used = countTokens(text);
   return {
     markdown: text,
@@ -133,7 +125,6 @@ export async function compileContext(
     // or empty file — guard it so that returns 0% instead of NaN.
     reduction_pct: rawTokens > 0 ? Math.round((1000 * (rawTokens - used)) / rawTokens) / 10 : 0,
     cache_hit: cacheHit,
-    rerank_used: useRerank,
     token_budget: tokenBudget,
     queries,
     selected_sections: selected.map((c) => info(c, true)),

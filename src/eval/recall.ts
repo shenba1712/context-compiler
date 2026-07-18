@@ -70,7 +70,7 @@ export function loadRecallCases(): RecallCase[] {
   return raw;
 }
 
-/** Pack one case the same way the BM25 (non-rerank) path does in compileContext. */
+/** Pack one case the same way compileContext does (BM25 + relevance floor). */
 export async function runRecallCase(c: RecallCase): Promise<RecallCaseResult> {
   const markdown = readFileSync(join(FIXTURES, c.doc), "utf-8");
   const chunks = chunkMarkdown(markdown);
@@ -85,7 +85,7 @@ export async function runRecallCase(c: RecallCase): Promise<RecallCaseResult> {
     const merged = multiScoresFromRows(rows, chunks);
     scores = new Map(chunks.map((ch, i) => [ch.id, merged[i]!]));
   } else {
-    ranked = await rank(c.task, chunks, false);
+    ranked = rank(c.task, chunks);
     const raw = bm25Scores(c.task, chunks);
     scores = new Map(chunks.map((ch, i) => [ch.id, raw[i]!]));
   }
