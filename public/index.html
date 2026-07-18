@@ -125,9 +125,17 @@
      toggle, omitted-sections manifest, and (if a key is set) the answer-
      parity panel comparing full-file vs compiled answers. -->
 <section id="resultsSec" class="hidden"><div class="wrap">
+  <!-- Prominent wait state for Compile / Prove — outside the results panel so
+       empty stats don't bury the message while a first conversion runs. -->
+  <div id="loadingNote" class="loading-banner hidden" role="status" aria-live="polite" aria-busy="false">
+    <span class="spinner" aria-hidden="true"></span>
+    <div class="loading-copy">
+      <strong id="loadingTitle">Compiling…</strong>
+      <span id="loadingDetail">Converting a file for the first time can take a few seconds; cached files are instant.</span>
+    </div>
+  </div>
   <div class="panel" id="results">
     <h2 class="sec" id="resultsHeading" tabindex="-1">Your compiled context</h2>
-    <div id="loadingNote" class="floornote hidden" role="status"></div>
     <div id="budgetStaleNote" class="floornote hidden" role="status"></div>
     <div class="stats">
       <div class="stat"><div class="v" id="sRaw" style="color:var(--muted)">–</div><div class="l">raw tokens</div></div>
@@ -189,6 +197,13 @@
   <h2 class="sec" id="agentHeading" tabindex="-1">Agent run</h2>
   <p class="sub">Uses your token budget as a soft reading ceiling — compiling under it, then expanding omitted
     sections until that ceiling is reached (an in-flight expand may finish slightly over), or answering from the whole file when it already fits.</p>
+  <div id="agentLoadingNote" class="loading-banner hidden" role="status" aria-live="polite" aria-busy="false">
+    <span class="spinner" aria-hidden="true"></span>
+    <div class="loading-copy">
+      <strong>Starting agent…</strong>
+      <span>First step can take a few seconds while the file converts and the model plans.</span>
+    </div>
+  </div>
   <div class="ameter">
     <div class="ametertop">
       <span><strong id="aTokens">0</strong> tokens the agent read</span>

@@ -561,6 +561,7 @@ function formData(): FormData | null {
 }
 
 let compileAbort: AbortController | null = null;
+let proveAbort: AbortController | null = null;
 // Whether any compile has ever succeeded this session — decides whether a
 // failed/cancelled attempt should hide the (empty) results panel again or
 // leave a previous successful result visible underneath the error.
@@ -603,28 +604,49 @@ function clearProveExpands(): void {
   refreshExpandBudgetNote();
 }
 
-// The only feedback during a compile used to be the button reading
-// "Compiling…" — nothing near where the answer lands, on an operation that
-// can legitimately take many seconds (first-time conversion of a large file
-// has up to a 120s server-side ceiling). Reveal the results area immediately
-// with a loading note and scroll to it, so the wait happens where the user is
-// already looking, and give them a way out via the new Cancel button.
-function showLoading(): void {
-  $("resultsSec").classList.remove("hidden");
+// First-time conversion can take many seconds (server ceiling ~120s). Show a
+// spinner + copy in the results area — not only on the button — and hide the
+// empty/stale results panel so the wait isn't buried under placeholder stats.
+type LoadingKind = "compile" | "prove";
+
+const LOADING_COPY: Record<LoadingKind, { title: string; detail: string }> = {
+  compile: {
+    title: "Compiling…",
+    detail:
+      "Converting a file for the first time can take a few seconds; cached files are instant.",
+  },
+  prove: {
+    title: "Proving answer parity…",
+    detail: "Asking the model twice — full file vs your compile. This can take a few seconds.",
+  },
+};
+
+function showLoading(kind: LoadingKind = "compile"): void {
+  const copy = LOADING_COPY[kind];
+  $("loadingTitle").textContent = copy.title;
+  $("loadingDetail").textContent = copy.detail;
   const el = $("loadingNote");
-  el.textContent =
-    "Compiling… converting a file for the first time can take a few seconds; cached files are instant.";
   el.classList.remove("hidden");
-  $<HTMLButtonElement>("cancelGo").classList.remove("hidden");
+  el.setAttribute("aria-busy", "true");
+  $("resultsSec").classList.remove("hidden");
+  // Hide compile shell + parity while waiting so the banner is the focus.
+  $("results").classList.add("hidden");
+  $("parity").classList.add("hidden");
+  if (kind === "compile") {
+    $<HTMLButtonElement>("cancelGo").classList.remove("hidden");
+  }
   $("resultsSec").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 function hideLoading(): void {
-  $("loadingNote").classList.add("hidden");
+  const el = $("loadingNote");
+  el.classList.add("hidden");
+  el.setAttribute("aria-busy", "false");
   $<HTMLButtonElement>("cancelGo").classList.add("hidden");
 }
 $<HTMLButtonElement>("cancelGo").onclick = () => {
   compileAbort?.abort();
   agentAbort?.abort();
+  proveAbort?.abort();
 };
 
 // Wrapping the inputs in a real <form> means pressing Enter in the task
@@ -700,12 +722,17 @@ $<HTMLFormElement>("compileForm").addEventListener("submit", async (e) => {
     hideLoading();
     // No prior successful result to fall back to — don't leave an empty
     // results panel showing after a failed/cancelled first attempt.
-    if (!hasCompiledOnce) $("resultsSec").classList.add("hidden");
+    if (!hasCompiledOnce) {
+      $("resultsSec").classList.add("hidden");
+    } else {
+      // showLoading hid the panel so the banner could take focus — put it back.
+      $("results").classList.remove("hidden");
+    }
     if (e instanceof DOMException && e.name === "AbortError") return;
     fail(e instanceof Error ? e.message : String(e));
   } finally {
     goBtn.disabled = false;
-    goBtn.textContent = "Compile";
+    goBtn.textContent = "Compile once";
   }
 });
 
@@ -751,12 +778,22 @@ function startAgentPanel(): void {
   const parityBtn = $<HTMLButtonElement>("aParityBtn");
   parityBtn.disabled = !llmAvailable;
   parityBtn.textContent = "Compare to full file";
+  const wait = $("agentLoadingNote");
+  wait.classList.remove("hidden");
+  wait.setAttribute("aria-busy", "true");
   $<HTMLButtonElement>("cancelGo").classList.remove("hidden");
   $("agentSec").scrollIntoView({ behavior: "smooth", block: "start" });
   announce("Agent started.");
 }
 
+function hideAgentLoading(): void {
+  const wait = $("agentLoadingNote");
+  wait.classList.add("hidden");
+  wait.setAttribute("aria-busy", "false");
+}
+
 function onAgentStep(step: AgentStep): void {
+  hideAgentLoading();
   agentTokens += step.tokens_added;
   $("aTokens").textContent = agentTokens.toLocaleString();
   const meta = AGENT_ACTIONS[step.action];
@@ -786,6 +823,7 @@ function onAgentStep(step: AgentStep): void {
 }
 
 function onAgentDone(r: AgentRunResult): void {
+  hideAgentLoading();
   $("aTokens").textContent = r.tokens_read.toLocaleString();
   $("aWhole").textContent = r.raw_tokens.toLocaleString() + " if you dumped the whole file";
   const pct = Math.round((100 * r.tokens_read) / r.raw_tokens);
@@ -827,6 +865,7 @@ function onAgentDone(r: AgentRunResult): void {
 }
 
 function agentError(msg: string): void {
+  hideAgentLoading();
   const el = $("aErr");
   el.textContent = msg;
   el.classList.remove("hidden");
@@ -892,6 +931,7 @@ async function runAgentFlow(): Promise<void> {
       else if (event === "error") throw new Error((data as { error: string }).error);
     });
   } catch (e) {
+    hideAgentLoading();
     if (e instanceof DOMException && e.name === "AbortError") return;
     agentError(e instanceof Error ? e.message : String(e));
   } finally {
@@ -1251,8 +1291,6 @@ function renderOmitted(d: CompileApiResult): void {
   }
 }
 
-let proveAbort: AbortController | null = null;
-
 const PROVE_IDLE = "Prove answer parity";
 const PROVE_TOP_IDLE = "Prove…";
 const PROVE_BUSY = "Asking the model twice…";
@@ -1276,6 +1314,7 @@ async function runProveFlow(): Promise<void> {
   proveAbort?.abort();
   proveAbort = new AbortController();
   setProveButtonsBusy(true);
+  showLoading("prove");
   announce("Asking the model twice, this can take a few seconds…");
   try {
     const resp = await fetch("/api/answer", { method: "POST", body: fd, signal: proveAbort.signal });
@@ -1283,6 +1322,7 @@ async function runProveFlow(): Promise<void> {
       .json()
       .catch(() => ({ error: "Parity request failed." }) as AnswerApiResult);
     if (!resp.ok || d.error) throw new Error(await apiFailureMessage(resp, d));
+    hideLoading();
     // Parity lives inside resultsSec. If they haven't compiled yet (power-path
     // Prove…), show only the parity panel — don't unveil the empty compile shell.
     $("resultsSec").classList.remove("hidden");
@@ -1323,6 +1363,14 @@ async function runProveFlow(): Promise<void> {
     $("parity").scrollIntoView({ behavior: "smooth", block: "nearest" });
     announce("Answer parity ready: both answers shown below.");
   } catch (e) {
+    hideLoading();
+    // Restore whatever was on screen before showLoading hid the panels.
+    if (hasCompiledOnce) {
+      $("resultsSec").classList.remove("hidden");
+      $("results").classList.remove("hidden");
+    } else {
+      $("resultsSec").classList.add("hidden");
+    }
     if (e instanceof DOMException && e.name === "AbortError") return;
     fail(e instanceof Error ? e.message : String(e));
   } finally {
