@@ -165,32 +165,6 @@ function rateLimit(req: express.Request, res: express.Response, next: express.Ne
 }
 app.use("/api", rateLimit);
 
-// Optional shared door lock for a long-lived public demo. Unset = open (local
-// / short-lived judging). When CC_DEMO_TOKEN is set, every /api route except
-// GET /api/config requires the same value via X-CC-Demo-Token, Authorization:
-// Bearer, or ?token=. Not real auth — just keeps casual scrapers out.
-function demoTokenGate(req: express.Request, res: express.Response, next: express.NextFunction) {
-  const expected = process.env.CC_DEMO_TOKEN;
-  if (!expected) return next();
-  // Config must stay reachable so the UI can learn that a token is required.
-  if (req.method === "GET" && (req.path === "/config" || req.path.endsWith("/config"))) {
-    return next();
-  }
-  const bearer = req.get("authorization");
-  const fromBearer = bearer && bearer.toLowerCase().startsWith("bearer ") ? bearer.slice(7).trim() : "";
-  const got =
-    (req.get("x-cc-demo-token") ?? "").trim() ||
-    fromBearer ||
-    (typeof req.query.token === "string" ? req.query.token.trim() : "");
-  if (!got || got !== expected) {
-    return res.status(401).json({
-      error: "Demo token required. Pass header X-CC-Demo-Token (or ?token=).",
-    });
-  }
-  return next();
-}
-app.use("/api", demoTokenGate);
-
 // Opaque handle -> real upload path. The client never sees the server's
 // filesystem layout (which the old `file_path` field leaked), and can only
 // reference uploads via an unguessable id we minted, not an arbitrary path.
@@ -316,7 +290,6 @@ app.get("/api/config", (_req, res) => {
   return res.json({
     llm_available: hasLlm(),
     max_file_bytes: MAX_FILE_BYTES,
-    demo_token_required: Boolean(process.env.CC_DEMO_TOKEN),
   });
 });
 

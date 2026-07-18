@@ -51,10 +51,6 @@ services:
         value: "12"
       - key: CC_LLM_TIMEOUT_MS
         value: "30000"
-      # Optional shared door lock for a long-lived public URL. Leave unset for
-      # short-lived judging. Set in the dashboard (do not commit the value).
-      - key: CC_DEMO_TOKEN
-        sync: false
       # Do NOT set PORT here — Render injects it automatically and the app binds
       # to it. Model/endpoint overrides (CC_GEMINI_MODEL, CC_OPENROUTER_MODEL,
       # ...) can be added in the dashboard if you ever need them.

@@ -7,8 +7,8 @@ Prefer the **hosted demo + in-repo Run agent** for the recording. MCP in a codin
 
 ## Pre-recording checklist (do NOT skip)
 
-- [ ] Hosted URL open with `?token=…` if `CC_DEMO_TOKEN` is set. Local fallback:
-      `GEMINI_API_KEY=… npm run web` (optional `OPENROUTER_API_KEY` failover).
+- [ ] Hosted URL open (no access token — the public demo is open). Local
+      fallback: `GEMINI_API_KEY=… npm run web` (optional `OPENROUTER_API_KEY`).
 - [ ] Pre-warm: free Render sleeps when idle — open the URL **~1 minute early**
       (first hit can take 30–60s). Compile the hero sample once so conversion
       is cached. Say “cached” when the badge shows; it’s a feature.
@@ -94,7 +94,7 @@ Correct content appears.
 > demo, offline recall eval in CI, honest limitations in the README.
 > Stop paying for pages your agent doesn’t read."
 
-On screen: hosted URL (with token if needed) + `github.com/shenba1712/context-compiler`.
+On screen: hosted URL + `github.com/shenba1712/context-compiler`.
 
 ## Delivery notes
 

@@ -19,46 +19,11 @@ function $<T extends HTMLElement = HTMLElement>(id: string): T {
 // not a client-side guess. See samples-manifest.ts and web.ts for the source.
 let SAMPLES: Sample[] = [];
 
-// Optional shared door lock (CC_DEMO_TOKEN on the server). Not real auth —
-// just a passphrase for a long-lived public URL. Loaded from ?token=, then
-// sessionStorage, then the form field.
-const DEMO_TOKEN_KEY = "cc-demo-token";
-let demoTokenRequired = false;
-
-function getDemoToken(): string {
-  const fromUrl = new URLSearchParams(location.search).get("token");
-  if (fromUrl) {
-    sessionStorage.setItem(DEMO_TOKEN_KEY, fromUrl);
-    return fromUrl;
-  }
-  const field = document.getElementById("demoToken") as HTMLInputElement | null;
-  if (field?.value.trim()) {
-    sessionStorage.setItem(DEMO_TOKEN_KEY, field.value.trim());
-    return field.value.trim();
-  }
-  return sessionStorage.getItem(DEMO_TOKEN_KEY) ?? "";
-}
-
-function apiHeaders(extra?: HeadersInit): Headers {
-  const h = new Headers(extra);
-  const tok = getDemoToken();
-  if (tok) h.set("X-CC-Demo-Token", tok);
-  return h;
-}
-
-function apiFetch(input: string, init: RequestInit = {}): Promise<Response> {
-  const headers = apiHeaders(init.headers);
-  return fetch(input, { ...init, headers });
-}
-
 async function loadSamples(): Promise<void> {
   const wrap = $("samples");
   try {
-    const resp = await apiFetch("/api/samples");
-    if (resp.status === 401) {
-      wrap.textContent = "Enter the demo token above to load the sample library.";
-      return;
-    }
+    const resp = await fetch("/api/samples");
+    if (!resp.ok) throw new Error(`samples HTTP ${resp.status}`);
     const data: Sample[] = await resp.json();
     if (!Array.isArray(data)) throw new Error("Unexpected response shape");
     SAMPLES = data;
@@ -97,7 +62,6 @@ async function loadConfig(): Promise<void> {
     const cfg: {
       llm_available: boolean;
       max_file_bytes?: number;
-      demo_token_required?: boolean;
     } = await resp.json();
     if (typeof cfg.max_file_bytes === "number" && cfg.max_file_bytes > 0) {
       maxFileBytes = cfg.max_file_bytes;
@@ -105,15 +69,6 @@ async function loadConfig(): Promise<void> {
       if (label) {
         const mb = Math.round(maxFileBytes / (1024 * 1024));
         label.textContent = `Upload your file (pdf, docx, xlsx, pptx, html, csv, txt, md) — max ${mb} MB`;
-      }
-    }
-    demoTokenRequired = Boolean(cfg.demo_token_required);
-    const gate = document.getElementById("demoTokenGate");
-    if (gate) {
-      gate.classList.toggle("hidden", !demoTokenRequired);
-      if (demoTokenRequired) {
-        const field = $<HTMLInputElement>("demoToken");
-        field.value = getDemoToken();
       }
     }
     setLlmDependentButtons(Boolean(cfg.llm_available));
@@ -410,7 +365,7 @@ async function estimateUploadSize(f: File): Promise<void> {
   try {
     const fd = new FormData();
     fd.append("file", f);
-    const resp = await apiFetch("/api/measure", { method: "POST", body: fd });
+    const resp = await fetch("/api/measure", { method: "POST", body: fd });
     const d: MeasureApiResult = await resp.json();
     if (seq !== measureSeq) return; // a newer file was picked while this was in flight
     if (d.error) throw new Error(d.error);
@@ -559,7 +514,7 @@ $<HTMLFormElement>("compileForm").addEventListener("submit", async (e) => {
   announce("Compiling, please wait…");
   showLoading();
   try {
-    const resp = await apiFetch("/api/compile", { method: "POST", body: fd, signal: compileAbort.signal });
+    const resp = await fetch("/api/compile", { method: "POST", body: fd, signal: compileAbort.signal });
     const d: CompileApiResult = await resp
       .json()
       .catch(() => ({ error: "Compile failed." }) as CompileApiResult);
@@ -766,7 +721,7 @@ async function runAgentFlow(): Promise<void> {
   btn.textContent = "Agent working…";
   startAgentPanel();
   try {
-    const resp = await apiFetch("/api/agent", { method: "POST", body: fd, signal: agentAbort.signal });
+    const resp = await fetch("/api/agent", { method: "POST", body: fd, signal: agentAbort.signal });
     const ctype = resp.headers.get("content-type") ?? "";
     if (!ctype.includes("text/event-stream") || !resp.body) {
       // A guard rejected the request before the stream opened → JSON error body.
@@ -996,7 +951,7 @@ function makeChip(o: SectionInfo, d: CompileApiResult, exp: HTMLElement): HTMLBu
     if (b.classList.contains("done")) return;
     b.disabled = true;
     try {
-      const resp = await apiFetch("/api/expand", {
+      const resp = await fetch("/api/expand", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ handle: d.handle, section_id: o.id }),
@@ -1062,7 +1017,7 @@ $<HTMLButtonElement>("prove").onclick = async () => {
   proveBtn.textContent = "Asking the model twice…";
   announce("Asking the model twice, this can take a few seconds…");
   try {
-    const resp = await apiFetch("/api/answer", { method: "POST", body: fd, signal: proveAbort.signal });
+    const resp = await fetch("/api/answer", { method: "POST", body: fd, signal: proveAbort.signal });
     const d: AnswerApiResult = await resp
       .json()
       .catch(() => ({ error: "Parity request failed." }) as AnswerApiResult);
@@ -1095,14 +1050,4 @@ loadConfig().then(() => {
 // only on those hosts so local `npm run web` stays uncluttered.
 if (/\.onrender\.com$/i.test(location.hostname)) {
   document.getElementById("coldStartNote")?.classList.remove("hidden");
-}
-
-const demoTokenField = document.getElementById("demoToken") as HTMLInputElement | null;
-if (demoTokenField) {
-  demoTokenField.addEventListener("change", () => {
-    const v = demoTokenField.value.trim();
-    if (v) sessionStorage.setItem(DEMO_TOKEN_KEY, v);
-    else sessionStorage.removeItem(DEMO_TOKEN_KEY);
-    loadSamples();
-  });
 }
