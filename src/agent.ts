@@ -17,12 +17,13 @@ import { z } from "zod";
 
 import { complete, hasLlm } from "./llm.js";
 import { compileContext, expandSection } from "./pipeline.js";
+import { DEFAULT_TOKEN_BUDGET } from "./config.js";
 import { countTokens } from "./tokens.js";
 
 export interface AgentStep {
   n: number;
   action: "compile" | "expand" | "recompile" | "answer";
-  detail: string; // short label: "budget 1,500", "s19", or the stop reason
+  detail: string; // short label: "budget 4,000", "whole file (800 tok)", "s19", or the stop reason
   reasoning?: string; // the model's one-line rationale (expand/recompile/answer)
   section_id?: string;
   tokens_added: number; // document tokens this action pulled into context
@@ -44,9 +45,11 @@ export interface AgentResult {
 type CompleteFn = (prompt: string, opts?: { maxTokens?: number; signal?: AbortSignal }) => Promise<string>;
 
 export interface AgentOptions {
-  startBudget?: number; // first compile's budget (default 1500)
+  /** First compile budget — same user-facing ceiling as Compile (default matches Compile). */
+  startBudget?: number;
   maxSteps?: number; // max tool actions before we force an answer (default 4)
-  tokenCeiling?: number; // stop pulling more once cumulative reads pass this (default 8000)
+  /** Hard cap on cumulative document tokens read (defaults to startBudget). */
+  tokenCeiling?: number;
   sourceName?: string; // human-meaningful name for renamed temp uploads
   onStep?: (step: AgentStep) => void; // called as each step completes (for live streaming)
   complete?: CompleteFn; // injectable for tests; defaults to the real provider chain
@@ -105,7 +108,8 @@ async function decideNext(
     `Sections you have NOT read yet (fetch one by id if you need it):\n${options}\n\n` +
     `Pick your next action. If the context already lets you answer confidently, use "answer". ` +
     `Otherwise use "expand" with the section_id most likely to hold the answer, or "recompile" ` +
-    `with a larger "budget" (currently ${currentBudget}) to pull in more sections at once.\n` +
+    `with a larger "budget" up to ${currentBudget} if the current pack was smaller than the user's ceiling. ` +
+    `You may not read more than the user's token budget overall.\n` +
     `Reply with ONLY a JSON object: ` +
     `{"action":"answer"|"expand"|"recompile","section_id":"","budget":0,"reasoning":"one sentence"}.`;
 
@@ -144,9 +148,8 @@ export async function runAgent(
     throw new Error("Agent mode needs an LLM API key (GEMINI_API_KEY, OPENROUTER_API_KEY, ...).");
   }
 
-  const startBudget = opts.startBudget ?? 1500;
+  const startBudget = opts.startBudget ?? DEFAULT_TOKEN_BUDGET;
   const maxSteps = opts.maxSteps ?? 4;
-  const tokenCeiling = opts.tokenCeiling ?? 8000;
 
   const steps: AgentStep[] = [];
   let n = 0;
@@ -156,10 +159,17 @@ export async function runAgent(
   };
 
   assertNotAborted(signal);
-  // Step 1 is always a compile at the starting budget. The agent loop is the
+  // Step 1 is always a compile at the user's budget. The agent loop is the
   // reasoning layer; each compile stays cheap deterministic BM25.
   let compiled = await compileContext(filePath, task, startBudget, opts.sourceName);
   const rawTokens = compiled.raw_tokens;
+  // Ceiling defaults to the same user budget (not a hidden larger pool). Never
+  // aim past EOF.
+  const tokenCeiling = Math.min(
+    opts.tokenCeiling ?? startBudget,
+    Math.max(rawTokens, 1)
+  );
+
   let baseMarkdown = compiled.markdown;
   let baseTokens = compiled.tokens_used;
   let currentBudget = compiled.token_budget;
@@ -173,15 +183,44 @@ export async function runAgent(
   const expanded = new Map<string, string>();
   const expandedIds = new Set<string>();
   n += 1;
-  emit({ n, action: "compile", detail: `budget ${startBudget}`, tokens_added: compiled.tokens_used });
+
+  // Whole document already fits the starting budget: retrieval has nothing to
+  // do. Answer once from the full file — don't advertise a budget larger than the doc.
+  if (compiled.omitted_sections.length === 0) {
+    emit({
+      n,
+      action: "compile",
+      detail: `whole file (${rawTokens.toLocaleString()} tok)`,
+      tokens_added: compiled.tokens_used,
+    });
+    assertNotAborted(signal);
+    const answer = await answerFrom(doComplete, task, baseMarkdown, signal);
+    n += 1;
+    emit({ n, action: "answer", detail: "whole_file", tokens_added: 0 });
+    return {
+      answer,
+      steps,
+      tokens_read: tokensRead,
+      raw_tokens: rawTokens,
+      final_context_tokens: countTokens(baseMarkdown),
+      stopped_reason: "whole_file",
+      final_context: baseMarkdown,
+    };
+  }
+
+  emit({
+    n,
+    action: "compile",
+    detail: `budget ${Math.min(startBudget, rawTokens).toLocaleString()}`,
+    tokens_added: compiled.tokens_used,
+  });
 
   let stopped: StopReason = "confident";
   for (;;) {
     assertNotAborted(signal);
     if (!manifest.length) {
-      // Nothing left to fetch — either the whole file fit, or the agent already
-      // pulled everything worth pulling.
-      stopped = expanded.size === 0 && compiled.omitted_sections.length === 0 ? "whole_file" : "confident";
+      // Nothing left to fetch — agent already pulled everything worth pulling.
+      stopped = "confident";
       break;
     }
     if (n >= maxSteps) {
@@ -232,8 +271,12 @@ export async function runAgent(
     }
 
     // recompile — only if it genuinely grows the budget, else answer (prevents
-    // a no-op recompile from looping).
-    const next = Math.min(Math.max(decision.budget ?? currentBudget * 2, currentBudget + 500), tokenCeiling);
+    // a no-op recompile from looping). Cap at the document size so we don't
+    // "recompile at 8,000" when the file is 2,000 tokens.
+    const next = Math.min(
+      Math.max(decision.budget ?? currentBudget * 2, currentBudget + 500),
+      tokenCeiling
+    );
     if (next <= currentBudget) {
       stopped = "confident";
       break;
@@ -254,10 +297,15 @@ export async function runAgent(
     emit({
       n,
       action: "recompile",
-      detail: `budget ${next}`,
+      detail: `budget ${next.toLocaleString()}`,
       reasoning: decision.reasoning,
       tokens_added: added,
     });
+    // Recompile swallowed the rest of the file — stop deciding and answer.
+    if (manifest.length === 0) {
+      stopped = "whole_file";
+      break;
+    }
   }
 
   assertNotAborted(signal);

@@ -59,7 +59,9 @@ function setLlmDependentButtons(available: boolean): void {
     ? "Power path: prove from file + budget without waiting on the results view"
     : NO_LLM_TITLE;
   proveResults.title = proveTitle;
-  agentBtn.title = available ? "Let the model expand sections until it can answer" : NO_LLM_TITLE;
+  agentBtn.title = available
+    ? "Retrieve under your token budget, then answer (same slider as Compile)"
+    : NO_LLM_TITLE;
   // Results-area Prove appears after a compile (when an LLM is available).
   if (available && hasCompiledOnce) $("proveActions").classList.remove("hidden");
   else if (!available) $("proveActions").classList.add("hidden");
@@ -859,6 +861,7 @@ async function runAgentFlow(): Promise<void> {
   const fd = new FormData();
   fd.append("file", f);
   fd.append("task", task);
+  fd.append("token_budget", $<HTMLInputElement>("budget").value);
 
   agentAbort?.abort();
   agentAbort = new AbortController();

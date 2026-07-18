@@ -580,6 +580,33 @@ async function testAgentLoop() {
     assert.equal(r.stopped_reason, "confident");
     assert.ok(r.tokens_read < r.raw_tokens, "the whole point: it reads less than the full file");
 
+    // 1b. Tiny doc that fits under the start budget: no retrieval loop — answer
+    // from the whole file and label it honestly (not a fake oversized budget).
+    const tiny = join(homedir(), `cc-agent-tiny-${Date.now()}.md`);
+    writeFileSync(tiny, "# Note\n\nThe password is swordfish.\n");
+    try {
+      let decideCalls = 0;
+      const whole = await runAgent(tiny, "What is the password?", {
+        startBudget: 1500,
+        tokenCeiling: 1500,
+        complete: async (prompt) => {
+          if (/ONLY a JSON object/.test(prompt)) {
+            decideCalls += 1;
+            return JSON.stringify({ action: "expand", section_id: "s0", reasoning: "should not run" });
+          }
+          return "The password is swordfish.";
+        },
+      });
+      assert.equal(whole.stopped_reason, "whole_file");
+      assert.equal(whole.tokens_read, whole.raw_tokens, "read the whole small file once");
+      assert.equal(decideCalls, 0, "no decide steps when the whole file already fit");
+      assert.ok(whole.steps[0].detail.includes("whole file"), `compile step should say whole file, got ${whole.steps[0].detail}`);
+      assert.ok(!whole.steps.some((s) => s.action === "expand"), "no expands on a whole-file short-circuit");
+      assert.ok(whole.answer.includes("swordfish"));
+    } finally {
+      unlinkSync(tiny);
+    }
+
     // 2. Runaway model that never answers must still terminate at the step cap.
     const alwaysExpand: (p: string) => Promise<string> = async (prompt) => {
       if (/ONLY a JSON object/.test(prompt)) {

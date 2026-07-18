@@ -83,7 +83,7 @@
       <p>Asking several things at once? Separate them with <strong>?</strong> or new lines — each question is ranked on its own. Press <kbd>Enter</kbd> to compile, <kbd>Shift+Enter</kbd> for a new line.</p>
     </details>
 
-    <label for="budget">Token budget <span style="font-weight:400;color:var(--faint)">— a ceiling, not a target</span></label>
+    <label for="budget">Token budget <span style="font-weight:400;color:var(--faint)">— ceiling for Compile and Agent</span></label>
     <div class="docsizenote hidden" id="docSizeNote"></div>
     <div class="budgetbar">
       <div class="budgetnum"><span id="budgetVal">4,000</span> <span class="u">tokens</span></div>
@@ -103,7 +103,7 @@
       <button type="button" class="btn quiet" id="prove" title="Skip the results view — prove from file + budget directly">Prove…</button>
       <span class="saved hidden" id="sessionSaved" style="margin-left:auto" role="status"></span>
     </div>
-    <p class="qhint" id="agentHint"><strong>Compile</strong> or <strong>Agent</strong> first. Prove lives under Compile results (and quietly up here as a power path). Agent has its own compare after a run.</p>
+    <p class="qhint" id="agentHint"><strong>Compile</strong> packs to your budget. <strong>Agent</strong> uses that same budget as its reading ceiling (starts there, may expand under it). Prove lives under Compile results.</p>
     <details class="expectbox" id="expectBox">
       <summary>Limits &amp; free-tier notes</summary>
       <div class="expectbody" id="expectBody">
@@ -187,8 +187,8 @@
      meter climbs with tokens the agent actually read, then the answer. -->
 <section id="agentSec" class="hidden"><div class="wrap"><div class="panel">
   <h2 class="sec" id="agentHeading" tabindex="-1">Agent run</h2>
-  <p class="sub">The model drives retrieval itself — compiling a small slice, reading the omitted-sections
-    manifest, and deciding when to expand a section or answer.</p>
+  <p class="sub">Uses your token budget as a reading ceiling — compiling under it, then expanding omitted
+    sections only while staying within that ceiling (or answering from the whole file when it already fits).</p>
   <div class="ameter">
     <div class="ametertop">
       <span><strong id="aTokens">0</strong> tokens the agent read</span>

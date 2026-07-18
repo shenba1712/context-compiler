@@ -595,6 +595,8 @@ app.post("/api/agent", upload.single("file"), guardUpload, async (req, res) => {
     res.status(400).json({ error: "No task provided" });
     return;
   }
+  // Same slider as Compile: user-set ceiling for how much the agent may read.
+  const budget = clampBudget(req.body.token_budget, BUDGET_FLOORS.web);
 
   let path: string;
   try {
@@ -620,6 +622,8 @@ app.post("/api/agent", upload.single("file"), guardUpload, async (req, res) => {
   inc("agent_runs");
   try {
     const result = await runAgent(path, task, {
+      startBudget: budget,
+      tokenCeiling: budget,
       sourceName: sanitizeSourceName(req.file.originalname),
       onStep: (step) => send("step", step),
       signal: ac.signal,
