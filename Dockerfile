@@ -28,6 +28,8 @@ ENV CC_MAX_CONCURRENT_LLM=2
 ENV CC_MAX_CONCURRENT_CONVERSIONS=3
 ENV CC_MAX_QUEUED_CONVERSIONS=12
 ENV CC_LLM_TIMEOUT_MS=30000
+# Optional: set CC_DEMO_TOKEN in the host dashboard for a long-lived public URL.
+# Leave unset for local/short-lived judging (APIs stay open).
 # Do NOT set CC_TRUST_PROXY here — Render/Railway should set hop count `1` in
 # the dashboard if needed. Never `true` on a public URL.
 EXPOSE 8000

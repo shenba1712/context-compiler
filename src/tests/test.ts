@@ -21,7 +21,7 @@ import { intEnv, numEnv } from "../env.js";
 import { pack } from "../pack.js";
 import { checkPathWithin } from "../path-guard.js";
 import { compileContext, expandSection } from "../pipeline.js";
-import { bm25Scores, queryAttribution, rank, rankMulti, splitQueries } from "../rank.js";
+import { bm25Scores, queryAttribution, rank, rankMulti, splitQueries, tokenize } from "../rank.js";
 import { countTokens } from "../tokens.js";
 import { UploadRejected, validateUpload } from "../upload-guard.js";
 
@@ -943,6 +943,66 @@ function testEnvParsingFailsSafe() {
   console.log("  env parsing ok: NaN/blank/out-of-range all fall back safely");
 }
 
+function testTokenizeCjkAndStem() {
+  const zh = tokenize("退款需要多少天");
+  assert.ok(zh.includes("退款"), "CJK bigrams include 退款");
+  assert.ok(zh.includes("款需"), "CJK bigrams overlap across the run");
+  assert.ok(zh.includes("退"), "CJK unigrams are emitted too");
+
+  const en = tokenize("returning refunds processed");
+  assert.ok(en.includes("return"), "light stem: returning → return");
+  assert.ok(en.includes("refund"), "light stem: refunds → refund");
+  assert.ok(en.includes("process"), "light stem: processed → process");
+  console.log("  tokenize ok: CJK bigrams + light English stem");
+}
+
+async function testRecallEval() {
+  const { runRecallEval } = await import("../eval/recall.js");
+  const report = await runRecallEval(1);
+  assert.equal(report.failed.length, 0, `all recall fixtures must pass: ${JSON.stringify(report.failed)}`);
+  assert.ok(report.total >= 8, "fixture set should stay large enough to catch regressions");
+  console.log(`  recall eval ok: ${report.passed}/${report.total} hit@budget`);
+}
+
+async function testDemoTokenGate() {
+  delete process.env.CC_DEMO_TOKEN;
+  const { app } = await import("../web.js");
+  const server = app.listen(0);
+  await new Promise<void>((r) => server.once("listening", () => r()));
+  const port = (server.address() as { port: number }).port;
+  try {
+    // Open by default (short-lived judging).
+    const openCfg = await fetch(`http://127.0.0.1:${port}/api/config`);
+    const openBody = (await openCfg.json()) as { demo_token_required: boolean };
+    assert.equal(openBody.demo_token_required, false);
+    const openSamples = await fetch(`http://127.0.0.1:${port}/api/samples`);
+    assert.equal(openSamples.status, 200, "samples open when no door lock");
+
+    process.env.CC_DEMO_TOKEN = "judge-secret";
+    const lockedCfg = await fetch(`http://127.0.0.1:${port}/api/config`);
+    const lockedBody = (await lockedCfg.json()) as { demo_token_required: boolean };
+    assert.equal(lockedBody.demo_token_required, true, "config advertises the lock without requiring the token");
+
+    const denied = await fetch(`http://127.0.0.1:${port}/api/samples`);
+    assert.equal(denied.status, 401, "samples locked without token");
+
+    const ok = await fetch(`http://127.0.0.1:${port}/api/samples`, {
+      headers: { "x-cc-demo-token": "judge-secret" },
+    });
+    assert.equal(ok.status, 200, "correct header unlocks samples");
+
+    const viaQuery = await fetch(`http://127.0.0.1:${port}/api/samples?token=judge-secret`);
+    assert.equal(viaQuery.status, 200, "query token also works");
+
+    const health = await fetch(`http://127.0.0.1:${port}/healthz`);
+    assert.equal(health.status, 200, "healthz stays public for platform probes");
+    console.log("  demo token ok: optional door lock on /api, config+healthz remain reachable");
+  } finally {
+    delete process.env.CC_DEMO_TOKEN;
+    server.close();
+  }
+}
+
 for (const fn of [
   testChunking,
   testRankAndPack,
@@ -970,6 +1030,9 @@ for (const fn of [
   testCompileIncrementsCounter,
   testNoStdoutInMcpPath,
   testSmallFilePassthrough,
+  testTokenizeCjkAndStem,
+  testRecallEval,
+  testDemoTokenGate,
 ]) {
   console.log(fn.name);
   await fn();

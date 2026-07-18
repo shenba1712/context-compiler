@@ -1,0 +1,72 @@
+[
+  {
+    "id": "en-refund-lexical",
+    "doc": "policy.md",
+    "task": "How many business days for a refund?",
+    "budget": 700,
+    "must_include": ["14 business days"]
+  },
+  {
+    "id": "en-refund-paraphrase",
+    "doc": "policy.md",
+    "task": "How long do I wait to get my money back after returning an item?",
+    "budget": 800,
+    "must_include": ["14 business days"]
+  },
+  {
+    "id": "en-termination",
+    "doc": "policy.md",
+    "task": "What notice is required to end the agreement?",
+    "budget": 700,
+    "must_include": ["90 days written notice"]
+  },
+  {
+    "id": "en-warranty",
+    "doc": "manual.md",
+    "task": "What voids the warranty?",
+    "budget": 600,
+    "must_include": ["water voids the warranty"]
+  },
+  {
+    "id": "en-rain-flight",
+    "doc": "manual.md",
+    "task": "Can it fly in rain?",
+    "budget": 600,
+    "must_include": ["not be flown in rain"]
+  },
+  {
+    "id": "en-battery-travel",
+    "doc": "manual.md",
+    "task": "May I take spare lithium batteries on a plane?",
+    "budget": 700,
+    "must_include": ["cabin luggage"]
+  },
+  {
+    "id": "en-multi-query",
+    "doc": "manual.md",
+    "task": "What voids the warranty? Can it fly in rain?",
+    "budget": 1200,
+    "must_include": ["water voids the warranty", "not be flown in rain"]
+  },
+  {
+    "id": "zh-refund",
+    "doc": "policy-zh.md",
+    "task": "退款需要多少天？",
+    "budget": 800,
+    "must_include": ["14个工作日"]
+  },
+  {
+    "id": "zh-termination",
+    "doc": "policy-zh.md",
+    "task": "如何终止协议？",
+    "budget": 800,
+    "must_include": ["九十天书面通知"]
+  },
+  {
+    "id": "hi-refund",
+    "doc": "policy-hi.md",
+    "task": "धनवापसी में कितने दिन लगते हैं?",
+    "budget": 700,
+    "must_include": ["14 कार्य दिवसों"]
+  }
+]
