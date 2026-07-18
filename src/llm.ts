@@ -25,7 +25,7 @@ import { intEnv } from "./env.js";
 import { log } from "./log.js";
 import { inc } from "./metrics.js";
 
-const GEMINI_DEFAULT = "gemini-3.5-flash";
+const GEMINI_DEFAULT = "gemini-3.1-flash-lite";
 const OPENROUTER_DEFAULT = "meta-llama/llama-3.3-70b-instruct:free";
 const ANTHROPIC_DEFAULT = "claude-haiku-4-5-20251001";
 const OPENAI_DEFAULT = "gpt-4o-mini";
@@ -52,6 +52,7 @@ function isGeminiCompat(p: OpenAICompatProvider): boolean {
  * Gemini 2.5/3.x spend hidden "thinking" tokens from the same max_tokens budget.
  * With a small ceiling (e.g. 500) the visible answer truncates mid-sentence.
  * Dial thinking down for demo Q&A; 2.5 Flash can disable it entirely.
+ * Default model is gemini-3.1-flash-lite (override with CC_GEMINI_MODEL).
  */
 function geminiReasoningEffort(model: string): "none" | "minimal" | "low" {
   if (/gemini-2\.5/i.test(model) && !/pro/i.test(model)) return "none";

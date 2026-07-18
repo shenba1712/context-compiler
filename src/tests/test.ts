@@ -518,7 +518,7 @@ async function testProviderFailover() {
     const { complete, answerModel } = await import("../llm.js");
     // Primary (Gemini) label is what the UI shows, even though this call
     // fails over to the fallback under the hood.
-    assert.equal(answerModel(), "gemini-3.5-flash");
+    assert.equal(answerModel(), "gemini-3.1-flash-lite");
     assert.equal(await complete("ping"), "fallback-answer", "should fail over to the healthy provider");
 
     // Now knock out the fallback too: every provider down → complete() throws.
