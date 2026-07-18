@@ -5,3 +5,5 @@ public/types.js
 .env
 .DS_Store
 .idea/
+.test-tmp/
+

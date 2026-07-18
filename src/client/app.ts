@@ -587,11 +587,11 @@ function refreshExpandBudgetNote(): void {
   el.innerHTML =
     "Prove context ≈ <strong>" +
     lastCompiledTokens.toLocaleString() +
-    "</strong> + <strong>" +
+    "</strong> compiled + <strong>" +
     expandSum.toLocaleString() +
-    "</strong> expands → <strong>" +
+    "</strong> from expands → <strong>" +
     total.toLocaleString() +
-    "</strong> tokens (slider unchanged).";
+    "</strong> tokens effective (slider budget was the compile ceiling only — expands add on top).";
   el.classList.remove("hidden");
 }
 
@@ -710,9 +710,10 @@ $<HTMLFormElement>("compileForm").addEventListener("submit", async (e) => {
 });
 
 // ---- Agent mode ----------------------------------------------------------
-// "Run agent" streams a live trace from /api/agent: the model compiles a small
-// slice, reads the manifest, and expands sections on its own until it can
-// answer. We render each step as it arrives, not after the whole run.
+// "Run agent" streams a live trace from /api/agent: the model compiles under
+// the user's token-budget slider (same control as Compile), reads the omitted-
+// sections manifest, and may expand while under a soft reading ceiling until
+// it can answer. We render each step as it arrives, not after the whole run.
 let agentAbort: AbortController | null = null;
 let agentTokens = 0;
 /** Opaque handle from the last successful agent `done` event (for opt-in compare). */
@@ -729,7 +730,7 @@ const AGENT_ACTIONS: Record<AgentStep["action"], { icon: string; cls: string; la
 const STOP_TEXT: Record<AgentRunResult["stopped_reason"], string> = {
   confident: "Stopped when the agent was confident it could answer",
   max_steps: "Hit the step limit and answered with what it had",
-  token_ceiling: "Hit the token ceiling and answered with what it had",
+  token_ceiling: "Hit the soft token ceiling and answered with what it had",
   whole_file: "The whole file fit, so the agent read all of it",
 };
 
@@ -788,18 +789,26 @@ function onAgentDone(r: AgentRunResult): void {
   $("aTokens").textContent = r.tokens_read.toLocaleString();
   $("aWhole").textContent = r.raw_tokens.toLocaleString() + " if you dumped the whole file";
   const pct = Math.round((100 * r.tokens_read) / r.raw_tokens);
+  const ceiling = Number($<HTMLInputElement>("budget").value) || 0;
   requestAnimationFrame(() => {
     $("aBar").style.width = Math.max(3, Math.min(100, pct)) + "%";
   });
   $("aAnswer").textContent = r.answer;
   applyLang($("aAnswer"), r.answer);
+  const over =
+    ceiling > 0 && r.tokens_read > ceiling
+      ? " Soft ceiling was " +
+        ceiling.toLocaleString() +
+        " — last expand finished slightly over (expected)."
+      : "";
   $("aStopped").textContent =
     STOP_TEXT[r.stopped_reason] +
     " — reading " +
     r.tokens_read.toLocaleString() +
     " tokens (" +
     pct +
-    "% of the file).";
+    "% of the file)." +
+    over;
   $("aAnswerWrap").classList.remove("hidden");
   agentParityHandle = r.parity_handle ?? null;
   if (agentParityHandle && llmAvailable) {

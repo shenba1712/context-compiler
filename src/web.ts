@@ -1,9 +1,11 @@
 /**
  * Hosted demo: upload a file, ask a question, watch tokens and cost drop.
- * /api/answer runs the answer-parity proof: Claude answers the same question
- * from the FULL file and from the COMPILED context, side by side.
+ * /api/answer runs the answer-parity proof: the configured LLM answers the same
+ * question from the FULL file and from the COMPILED context (+ optional UI
+ * expands), side by side.
  * /api/agent-parity optionally compares full file vs the agent's final context
- * after a successful agent run (opt-in via opaque parity_handle).
+ * after a successful agent run (opt-in via opaque one-shot parity_handle).
+ * /api/config and /api/measure support the demo UI (limits + raw token count).
  *
  * Run: npm run web   ->  http://localhost:8000
  */
@@ -595,7 +597,7 @@ app.post("/api/agent", upload.single("file"), guardUpload, async (req, res) => {
     res.status(400).json({ error: "No task provided" });
     return;
   }
-  // Same slider as Compile: user-set ceiling for how much the agent may read.
+  // Same slider as Compile: starting compile budget and soft reading ceiling.
   const budget = clampBudget(req.body.token_budget, BUDGET_FLOORS.web);
 
   let path: string;
@@ -722,6 +724,9 @@ app.post("/api/agent-parity", express.json({ limit: "4kb" }), async (req, res) =
         );
 
       const [answerFull, answerAgent] = await Promise.all([ask(full), ask(entry.agentContext)]);
+      // One-shot: consume the handle only after a successful compare so a
+      // stolen/replayed handle cannot burn another 2× complete().
+      agentParity.delete(handle);
       inc("parity_runs");
       return res.json({
         model: answerModel(),

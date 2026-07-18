@@ -176,8 +176,21 @@ export function hasLlm(): boolean {
   return providerChain().length > 0;
 }
 
+/** Model id from the last successful complete() call (process-local). */
+let lastSuccessfulModel: string | null = null;
+
+/**
+ * Model label for UI badges. Prefer the model that actually answered the most
+ * recent complete() when it still appears in the current provider chain;
+ * otherwise the primary chain entry (or CC_ANSWER_MODEL).
+ */
 export function answerModel(): string {
-  return process.env.CC_ANSWER_MODEL ?? providerChain()[0]?.model ?? OPENAI_DEFAULT;
+  if (process.env.CC_ANSWER_MODEL?.trim()) return process.env.CC_ANSWER_MODEL.trim();
+  const chain = providerChain();
+  if (lastSuccessfulModel && chain.some((p) => p.model === lastSuccessfulModel)) {
+    return lastSuccessfulModel;
+  }
+  return chain[0]?.model ?? OPENAI_DEFAULT;
 }
 
 let anthropicClient: Anthropic | null = null;
@@ -270,7 +283,9 @@ export async function complete(
   for (const p of chain) {
     if (signal.aborted) throw new Error("LLM request aborted");
     try {
-      return await callProvider(p, prompt, maxTokens, signal);
+      const text = await callProvider(p, prompt, maxTokens, signal);
+      lastSuccessfulModel = p.model;
+      return text;
     } catch (e) {
       if (signal.aborted) throw new Error("LLM request aborted");
       const msg = e instanceof Error ? e.message : String(e);

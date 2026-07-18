@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   realpathSync,
@@ -10,10 +11,69 @@ import {
   writeFileSync,
   unlinkSync,
 } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+// Force a high demo rate budget before any dynamic import of web.ts — LLM-heavy
+// tests (agent + parity + answer) share one in-process limiter. Use `=` not
+// `??=` so a dirty shell (e.g. CC_RATE_LIMIT=1) cannot starve those routes.
+process.env.CC_RATE_LIMIT = "200";
+
 const FIXTURES_DIR = join(process.cwd(), "src", "tests", "fixtures");
+/** Writable under the workspace (sandbox-safe) and still under ~/… so CC_ROOT checks pass. */
+const TEST_TMP = join(process.cwd(), ".test-tmp");
+
+function testTmpPath(name: string): string {
+  mkdirSync(TEST_TMP, { recursive: true });
+  return join(TEST_TMP, name);
+}
+
+/** Provider keys that select which LLM backends are active. */
+const LLM_PROVIDER_KEYS = [
+  "ANTHROPIC_API_KEY",
+  "GEMINI_API_KEY",
+  "GOOGLE_API_KEY",
+  "OPENROUTER_API_KEY",
+  "OPENAI_API_KEY",
+  "CC_LLM_API_KEY",
+] as const;
+
+/** Model-id overrides that leak from a real demo shell into assertions. */
+const LLM_MODEL_KEYS = [
+  "CC_GEMINI_MODEL",
+  "CC_GEMINI_MODELS",
+  "CC_OPENROUTER_MODEL",
+  "CC_ANSWER_MODEL",
+  "CC_LLM_MODEL",
+  "CC_ANTHROPIC_MODEL",
+] as const;
+
+/**
+ * Clear (and optionally patch) env keys for the duration of `fn`, then restore
+ * the caller's values — including keys that were unset. Prefer this over
+ * `process.env = { ...saved }` so we never clobber unrelated vars mid-suite.
+ */
+async function withCleanEnv(
+  keys: readonly string[],
+  fn: () => Promise<void>,
+  patch?: Record<string, string>
+): Promise<void> {
+  const all = new Set<string>([...keys, ...Object.keys(patch ?? {})]);
+  const saved: Record<string, string | undefined> = {};
+  for (const k of all) saved[k] = process.env[k];
+  for (const k of keys) delete process.env[k];
+  if (patch) {
+    for (const [k, v] of Object.entries(patch)) process.env[k] = v;
+  }
+  try {
+    await fn();
+  } finally {
+    for (const k of all) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+  }
+}
 
 import { nextSectionHint } from "../budget-hint.js";
 import { chunkMarkdown } from "../chunk.js";
@@ -80,7 +140,7 @@ async function testRankAndPack() {
 }
 
 async function testEndToEnd() {
-  const path = join(homedir(), `cc-test-${Date.now()}.md`);
+  const path = testTmpPath(`cc-test-${Date.now()}.md`);
   writeFileSync(path, makeTestDoc());
   try {
     const r = await compileContext(path, "termination notice period", 1500);
@@ -456,29 +516,22 @@ async function testOpenAICompatClient() {
   await new Promise<void>((r) => server.listen(0, r));
   const port = (server.address() as { port: number }).port;
 
-  const saved = { ...process.env };
-  // Clear every higher-priority provider so this test exercises the generic
-  // OpenAI-compatible path in isolation, regardless of what keys the dev/CI
-  // machine happens to have exported.
-  for (const k of [
-    "ANTHROPIC_API_KEY",
-    "GEMINI_API_KEY",
-    "GOOGLE_API_KEY",
-    "OPENROUTER_API_KEY",
-    "OPENAI_API_KEY",
-  ]) {
-    delete process.env[k];
-  }
-  process.env.CC_LLM_API_KEY = "test-key";
-  process.env.CC_LLM_BASE_URL = `http://127.0.0.1:${port}/v1`;
+  // Clear every higher-priority provider + model overrides so this test
+  // exercises the generic OpenAI-compatible path in isolation.
   try {
-    const { complete, hasLlm, answerModel } = await import("../llm.js");
-    assert.equal(hasLlm(), true);
-    assert.equal(answerModel(), "gpt-4o-mini"); // openai-compat default
-    assert.equal(await complete("ping"), "mock-answer");
-    console.log("  openai-compat ok: generic provider path works");
+    await withCleanEnv(
+      [...LLM_PROVIDER_KEYS, ...LLM_MODEL_KEYS, "CC_LLM_BASE_URL"],
+      async () => {
+        process.env.CC_LLM_API_KEY = "test-key";
+        process.env.CC_LLM_BASE_URL = `http://127.0.0.1:${port}/v1`;
+        const { complete, hasLlm, answerModel } = await import("../llm.js");
+        assert.equal(hasLlm(), true);
+        assert.equal(answerModel(), "gpt-4o-mini"); // openai-compat default
+        assert.equal(await complete("ping"), "mock-answer");
+        console.log("  openai-compat ok: generic provider path works");
+      }
+    );
   } finally {
-    process.env = saved as NodeJS.ProcessEnv;
     server.close();
   }
 }
@@ -506,40 +559,43 @@ async function testProviderFailover() {
   const pPort = (primary.address() as { port: number }).port;
   const fPort = (fallback.address() as { port: number }).port;
 
-  const saved = { ...process.env };
-  for (const k of ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "CC_LLM_API_KEY", "GOOGLE_API_KEY"]) {
-    delete process.env[k];
-  }
-  process.env.GEMINI_API_KEY = "gem-key";
-  process.env.CC_GEMINI_BASE_URL = `http://127.0.0.1:${pPort}`;
-  process.env.OPENROUTER_API_KEY = "or-key";
-  process.env.CC_OPENROUTER_BASE_URL = `http://127.0.0.1:${fPort}`;
   try {
-    const { complete, answerModel } = await import("../llm.js");
-    // Primary (Gemini) label is what the UI shows, even though this call
-    // fails over to the fallback under the hood.
-    assert.equal(answerModel(), "gemini-flash-lite-latest");
-    assert.equal(await complete("ping"), "fallback-answer", "should fail over to the healthy provider");
+    await withCleanEnv(
+      [...LLM_PROVIDER_KEYS, ...LLM_MODEL_KEYS, "CC_GEMINI_BASE_URL", "CC_OPENROUTER_BASE_URL"],
+      async () => {
+        process.env.GEMINI_API_KEY = "gem-key";
+        process.env.CC_GEMINI_BASE_URL = `http://127.0.0.1:${pPort}`;
+        process.env.OPENROUTER_API_KEY = "or-key";
+        process.env.CC_OPENROUTER_BASE_URL = `http://127.0.0.1:${fPort}`;
+        const { complete, answerModel, geminiModels } = await import("../llm.js");
+        // Before any success on this chain, the badge shows the primary id.
+        assert.equal(answerModel(), geminiModels()[0]);
+        assert.equal(await complete("ping"), "fallback-answer", "should fail over to the healthy provider");
+        // After failover, the badge must show the model that actually answered.
+        assert.equal(answerModel(), "meta-llama/llama-3.3-70b-instruct:free");
 
-    // Now knock out the fallback too: every provider down → complete() throws.
-    process.env.CC_OPENROUTER_BASE_URL = `http://127.0.0.1:${pPort}`;
-    const { LlmUnavailableError } = await import("../llm.js");
-    await assert.rejects(
-      () => complete("ping"),
-      (e: unknown) => {
-        assert.ok(e instanceof LlmUnavailableError, "should be LlmUnavailableError");
-        assert.match((e as Error).message, /All LLM providers failed/);
-        assert.match(
-          (e as { publicMessage: string }).publicMessage,
-          /AI provider is unavailable/i,
-          "public message stays generic"
+        // Now knock out the fallback too: every provider down → complete() throws.
+        process.env.CC_OPENROUTER_BASE_URL = `http://127.0.0.1:${pPort}`;
+        const { LlmUnavailableError } = await import("../llm.js");
+        await assert.rejects(
+          () => complete("ping"),
+          (e: unknown) => {
+            assert.ok(e instanceof LlmUnavailableError, "should be LlmUnavailableError");
+            assert.match((e as Error).message, /All LLM providers failed/);
+            assert.match(
+              (e as { publicMessage: string }).publicMessage,
+              /AI provider is unavailable/i,
+              "public message stays generic"
+            );
+            return true;
+          }
         );
-        return true;
+        console.log(
+          "  provider failover ok: primary down → fallback used; badge follows success; all down → throws"
+        );
       }
     );
-    console.log("  provider failover ok: primary down → fallback used; all down → throws");
   } finally {
-    process.env = saved as NodeJS.ProcessEnv;
     primary.close();
     fallback.close();
   }
@@ -557,7 +613,7 @@ async function testGeminiModelFailover() {
       const model = (JSON.parse(body) as { model?: string }).model ?? "?";
       seen.push(model);
       res.setHeader("content-type", "application/json");
-      if (model === "gemini-flash-lite-latest") {
+      if (model === "gemini-flash-lite-latest" || model === "model-a") {
         res.statusCode = 404;
         res.end(JSON.stringify({ error: "model not found" }));
         return;
@@ -568,32 +624,57 @@ async function testGeminiModelFailover() {
   await new Promise<void>((r) => server.listen(0, r));
   const port = (server.address() as { port: number }).port;
 
-  const saved = { ...process.env };
-  for (const k of [
-    "ANTHROPIC_API_KEY",
-    "OPENAI_API_KEY",
-    "CC_LLM_API_KEY",
-    "OPENROUTER_API_KEY",
-    "GOOGLE_API_KEY",
-    "CC_GEMINI_MODEL",
-    "CC_GEMINI_MODELS",
-  ]) {
-    delete process.env[k];
-  }
-  process.env.GEMINI_API_KEY = "gem-key";
-  process.env.CC_GEMINI_BASE_URL = `http://127.0.0.1:${port}`;
   try {
-    const { complete, geminiModels } = await import("../llm.js");
-    assert.deepEqual(geminiModels(), [
-      "gemini-flash-lite-latest",
-      "gemini-3-flash-preview",
-      "gemini-flash-latest",
-    ]);
-    assert.equal(await complete("ping"), "ok:gemini-3-flash-preview");
-    assert.deepEqual(seen, ["gemini-flash-lite-latest", "gemini-3-flash-preview"]);
-    console.log("  gemini model failover ok: retired id → next Gemini model on same key");
+    await withCleanEnv(
+      [...LLM_PROVIDER_KEYS, ...LLM_MODEL_KEYS, "CC_GEMINI_BASE_URL", "CC_OPENROUTER_BASE_URL"],
+      async () => {
+        process.env.GEMINI_API_KEY = "gem-key";
+        process.env.CC_GEMINI_BASE_URL = `http://127.0.0.1:${port}`;
+        const { complete, geminiModels, answerModel } = await import("../llm.js");
+        assert.deepEqual(geminiModels(), [
+          "gemini-flash-lite-latest",
+          "gemini-3-flash-preview",
+          "gemini-flash-latest",
+        ]);
+        assert.equal(await complete("ping"), "ok:gemini-3-flash-preview");
+        assert.deepEqual(seen, ["gemini-flash-lite-latest", "gemini-3-flash-preview"]);
+        assert.equal(
+          answerModel(),
+          "gemini-3-flash-preview",
+          "badge follows the Gemini model that succeeded"
+        );
+
+        // CC_GEMINI_MODELS override: custom list, first 404 → second 200; OpenRouter never hit.
+        seen.length = 0;
+        let openRouterHits = 0;
+        const orServer = http.createServer((_req, res) => {
+          openRouterHits += 1;
+          res.statusCode = 200;
+          res.setHeader("content-type", "application/json");
+          res.end(JSON.stringify({ choices: [{ message: { content: "should-not-run" } }] }));
+        });
+        await new Promise<void>((r) => orServer.listen(0, r));
+        const orPort = (orServer.address() as { port: number }).port;
+        process.env.CC_GEMINI_MODELS = "model-a,model-b";
+        process.env.OPENROUTER_API_KEY = "or-key";
+        process.env.CC_OPENROUTER_BASE_URL = `http://127.0.0.1:${orPort}`;
+        try {
+          const { complete: complete2, geminiModels: geminiModels2, answerModel: answerModel2 } =
+            await import("../llm.js");
+          assert.deepEqual(geminiModels2(), ["model-a", "model-b"]);
+          assert.equal(await complete2("ping"), "ok:model-b");
+          assert.deepEqual(seen, ["model-a", "model-b"]);
+          assert.equal(openRouterHits, 0, "OpenRouter must not be called when a Gemini model succeeds");
+          assert.equal(answerModel2(), "model-b");
+          console.log(
+            "  gemini model failover ok: defaults + CC_GEMINI_MODELS override; OpenRouter unused"
+          );
+        } finally {
+          orServer.close();
+        }
+      }
+    );
   } finally {
-    process.env = saved as NodeJS.ProcessEnv;
     server.close();
   }
 }
@@ -603,7 +684,7 @@ async function testAgentLoop() {
   // with NO model or network — the mock plays the model's part. Three scripted
   // behaviours, all against the same fixture document.
   const { runAgent } = await import("../agent.js");
-  const path = join(homedir(), `cc-agent-${Date.now()}.md`);
+  const path = testTmpPath(`cc-agent-${Date.now()}.md`);
   writeFileSync(path, makeTestDoc());
   try {
     // 1. Happy path: expand one offered section, then answer.
@@ -635,7 +716,7 @@ async function testAgentLoop() {
 
     // 1b. Tiny doc that fits under the start budget: no retrieval loop — answer
     // from the whole file and label it honestly (not a fake oversized budget).
-    const tiny = join(homedir(), `cc-agent-tiny-${Date.now()}.md`);
+    const tiny = testTmpPath(`cc-agent-tiny-${Date.now()}.md`);
     writeFileSync(tiny, "# Note\n\nThe password is swordfish.\n");
     try {
       let decideCalls = 0;
@@ -691,7 +772,73 @@ async function testAgentLoop() {
     assert.equal(safe.stopped_reason, "confident", "malformed decision → answer, not a loop");
     assert.ok(safe.answer.length > 0);
 
-    console.log("  agent loop ok: expand→answer, step-cap terminates, bad JSON falls back safely");
+    // 4. Soft token ceiling: always-expand with start === ceiling. Loop stops
+    // starting new expands once tokens_read >= ceiling; an in-flight expand
+    // may push tokens_read past the ceiling (intentional soft bound).
+    const softCeiling = 1500;
+    const alwaysExpandCeiling: (p: string) => Promise<string> = async (prompt) => {
+      if (/ONLY a JSON object/.test(prompt)) {
+        assert.match(prompt, /"answer" \| "expand"/, "web-equal ceiling omits recompile from decide prompt");
+        assert.doesNotMatch(prompt, /"recompile"/, "recompile must not be offered when ceiling ≤ current budget");
+        const id = (prompt.match(/- (s\d+)/) ?? [])[1];
+        return JSON.stringify({ action: "expand", section_id: id, reasoning: "more" });
+      }
+      return "ceiling answer";
+    };
+    const ceilingHit = await runAgent(path, "termination", {
+      startBudget: softCeiling,
+      tokenCeiling: softCeiling,
+      maxSteps: 8,
+      complete: (p) => alwaysExpandCeiling(p),
+    });
+    assert.equal(
+      ceilingHit.stopped_reason,
+      "token_ceiling",
+      "always-expand under equal start/ceiling stops with token_ceiling"
+    );
+    assert.ok(
+      ceilingHit.tokens_read >= softCeiling ||
+        ceilingHit.steps.some((s) => s.action === "expand"),
+      `should hit soft ceiling or expand at least once (tokens_read=${ceilingHit.tokens_read})`
+    );
+    // Soft overshoot is allowed: last expand can finish past the ceiling.
+    assert.ok(
+      ceilingHit.steps.filter((s) => s.action === "expand").length < 8,
+      "soft ceiling bounds expand count"
+    );
+    if (ceilingHit.tokens_read > softCeiling) {
+      assert.ok(ceilingHit.steps.some((s) => s.action === "expand"), "overshoot comes from an expand");
+    }
+
+    // 5. Equal start/ceiling: inject recompile → schema rejects it → answer
+    // (no second compile). Use a large budget so relevance floor leaves
+    // headroom and decide actually runs.
+    const equalBudget = 4000;
+    let decideCalls = 0;
+    const injectRecompile: (p: string) => Promise<string> = async (prompt) => {
+      if (/ONLY a JSON object/.test(prompt)) {
+        decideCalls += 1;
+        assert.doesNotMatch(prompt, /"recompile"/, "recompile omitted from decide when at ceiling");
+        return JSON.stringify({
+          action: "recompile",
+          budget: equalBudget * 2,
+          reasoning: "want more room",
+        });
+      }
+      return "noop recompile answer";
+    };
+    const noop = await runAgent(path, "termination", {
+      startBudget: equalBudget,
+      tokenCeiling: equalBudget,
+      complete: (p) => injectRecompile(p),
+    });
+    assert.ok(decideCalls >= 1, "decide should run when compile left headroom under ceiling");
+    assert.equal(noop.stopped_reason, "confident", "rejected recompile collapses to answer");
+    assert.ok(!noop.steps.some((s) => s.action === "recompile"), "no recompile step when ceiling equals start");
+
+    console.log(
+      "  agent loop ok: expand→answer, step-cap, bad JSON, soft ceiling, recompile omitted at equal ceiling"
+    );
   } finally {
     unlinkSync(path);
   }
@@ -699,7 +846,8 @@ async function testAgentLoop() {
 
 async function testAgentSseEndpoint() {
   // End-to-end through the real Express app: a mock LLM server plays the model,
-  // and we assert the /api/agent route streams step events then a done event.
+  // and we assert the /api/agent route streams step events then a done event,
+  // respects token_budget, and that /api/agent-parity is one-shot.
   const http = await import("node:http");
   let decisionCount = 0;
   const chat = http.createServer((req, res) => {
@@ -726,67 +874,230 @@ async function testAgentSseEndpoint() {
   await new Promise<void>((r) => chat.listen(0, r));
   const chatPort = (chat.address() as { port: number }).port;
 
-  const saved = { ...process.env };
-  for (const k of [
-    "ANTHROPIC_API_KEY",
-    "GEMINI_API_KEY",
-    "GOOGLE_API_KEY",
-    "OPENROUTER_API_KEY",
-    "OPENAI_API_KEY",
-  ]) {
-    delete process.env[k];
-  }
-  process.env.CC_LLM_API_KEY = "test-key";
-  process.env.CC_LLM_BASE_URL = `http://127.0.0.1:${chatPort}/v1`;
+  await withCleanEnv(
+    [...LLM_PROVIDER_KEYS, ...LLM_MODEL_KEYS, "CC_LLM_BASE_URL"],
+    async () => {
+      process.env.CC_LLM_API_KEY = "test-key";
+      process.env.CC_LLM_BASE_URL = `http://127.0.0.1:${chatPort}/v1`;
 
+      const { app } = await import("../web.js");
+      const server = app.listen(0);
+      await new Promise<void>((r) => server.once("listening", () => r()));
+      const appPort = (server.address() as { port: number }).port;
+
+      try {
+        const form = new FormData();
+        form.append("task", "termination notice period");
+        form.append("token_budget", "1200");
+        form.append("file", new Blob([makeTestDoc()], { type: "text/markdown" }), "doc.md");
+        const res = await fetch(`http://127.0.0.1:${appPort}/api/agent`, { method: "POST", body: form });
+        assert.equal(res.headers.get("content-type"), "text/event-stream", "agent route streams SSE");
+
+        // Parse the buffered event stream into {event, data} records.
+        const raw = await res.text();
+        const events = raw
+          .split("\n\n")
+          .filter(Boolean)
+          .map((block) => {
+            const event = (block.match(/^event: (.*)$/m) ?? [])[1];
+            const data = (block.match(/^data: (.*)$/m) ?? [])[1];
+            return { event, data: data ? JSON.parse(data) : null };
+          });
+
+        const steps = events.filter((e) => e.event === "step");
+        const done = events.find((e) => e.event === "done");
+        assert.ok(steps.length >= 2, "should stream at least a compile and one more step");
+        assert.equal(steps[0].data.action, "compile", "first streamed step is the compile");
+        assert.equal(
+          String(steps[0].data.detail).replace(/[^\d]/g, ""),
+          "1200",
+          `first compile should respect token_budget=1200, got ${steps[0].data.detail}`
+        );
+        assert.ok(
+          steps[0].data.tokens_added <= 1200,
+          "compile pack must stay under the requested budget"
+        );
+        assert.ok(
+          steps.some((s) => s.data.action === "expand"),
+          "the agent expanded a section over the wire"
+        );
+        assert.ok(done, "a done event closes the stream");
+        assert.ok(done!.data.answer.includes("90 days"), "final answer arrives in the done event");
+        assert.ok(done!.data.tokens_read < done!.data.raw_tokens, "reads less than the whole file");
+        assert.ok(
+          done!.data.tokens_read <= 1200 + 2500,
+          "tokens_read stays near the soft ceiling (compile + at most one expand overshoot)"
+        );
+        const handle = done!.data.parity_handle as string;
+        assert.ok(typeof handle === "string" && /^[a-f0-9]{32}$/.test(handle), "opaque parity_handle on done");
+        assert.equal(
+          done!.data.final_context,
+          undefined,
+          "agent context must not be sent over SSE (only the handle)"
+        );
+
+        // POST /api/agent-parity: happy path, then one-shot 410, invalid → 400.
+        const parityOk = await fetch(`http://127.0.0.1:${appPort}/api/agent-parity`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ parity_handle: handle }),
+        });
+        assert.equal(parityOk.status, 200, "agent-parity succeeds with a fresh handle");
+        const parityBody = (await parityOk.json()) as {
+          full?: { answer?: string; context_tokens?: number };
+          agent?: { answer?: string; context_tokens?: number };
+          model?: string;
+        };
+        assert.ok(parityBody.full?.answer, "parity returns full-file answer");
+        assert.ok(parityBody.agent?.answer, "parity returns agent-context answer");
+        assert.ok(typeof parityBody.full?.context_tokens === "number");
+        assert.ok(typeof parityBody.agent?.context_tokens === "number");
+        assert.ok(
+          (parityBody.full!.context_tokens as number) >= (parityBody.agent!.context_tokens as number),
+          "full context is at least as large as agent context"
+        );
+
+        const parityReuse = await fetch(`http://127.0.0.1:${appPort}/api/agent-parity`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ parity_handle: handle }),
+        });
+        assert.equal(parityReuse.status, 410, "parity handle is one-shot — second call is gone");
+
+        const parityBad = await fetch(`http://127.0.0.1:${appPort}/api/agent-parity`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ parity_handle: "not-a-valid-handle" }),
+        });
+        assert.equal(parityBad.status, 400, "invalid parity_handle → 400");
+
+        const parityMissing = await fetch(`http://127.0.0.1:${appPort}/api/agent-parity`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ parity_handle: "a".repeat(32) }),
+        });
+        assert.equal(parityMissing.status, 410, "unknown handle → 410");
+
+        console.log("  agent SSE ok: token_budget, live steps, agent-parity 200/400/410 one-shot");
+      } finally {
+        server.close();
+        chat.close();
+      }
+    }
+  );
+}
+
+async function testAnswerExpandedIds() {
+  // Prove path: omit a section at a tight budget, then pass its id via
+  // expanded_ids so the compiled side grows and includes that needle.
+  const http = await import("node:http");
+  const chat = http.createServer((req, res) => {
+    let body = "";
+    req.on("data", (d) => (body += d));
+    req.on("end", () => {
+      const content = JSON.parse(body).messages[0].content as string;
+      const hasNeedle = content.includes("UNIQUE_EXPAND_NEEDLE_XYZ");
+      res.setHeader("content-type", "application/json");
+      res.end(
+        JSON.stringify({
+          choices: [{ message: { content: hasNeedle ? "found-needle" : "no-needle" } }],
+        })
+      );
+    });
+  });
+  await new Promise<void>((r) => chat.listen(0, r));
+  const chatPort = (chat.address() as { port: number }).port;
+
+  const doc =
+    "# Doc\n\n## Alpha\n\n" +
+    "alpha filler text. ".repeat(80) +
+    "\n\n## Beta needle\n\nUNIQUE_EXPAND_NEEDLE_XYZ lives only here.\n\n" +
+    "## Gamma\n\n" +
+    "gamma filler text. ".repeat(80);
+
+  // Find an omitted section id that contains the needle. Ask about Alpha so
+  // BM25 keeps that section and leaves the needle section in the manifest.
+  const tmp = testTmpPath(`cc-expand-ids-${Date.now()}.md`);
+  writeFileSync(tmp, doc);
+  let omittedId: string | null = null;
+  let baseTokens = 0;
+  try {
+    const compiled = await compileContext(tmp, "alpha filler text", 400);
+    baseTokens = compiled.tokens_used;
+    assert.ok(
+      !compiled.markdown.includes("UNIQUE_EXPAND_NEEDLE_XYZ"),
+      "needle should be omitted when the query targets Alpha"
+    );
+    for (const s of compiled.omitted_sections) {
+      const e = await expandSection(tmp, s.id);
+      if (!("error" in e) && e.markdown.includes("UNIQUE_EXPAND_NEEDLE_XYZ")) {
+        omittedId = s.id;
+        break;
+      }
+    }
+    assert.ok(omittedId, "should find an omitted section holding the needle");
+  } finally {
+    unlinkSync(tmp);
+  }
+
+  await withCleanEnv(
+    [...LLM_PROVIDER_KEYS, ...LLM_MODEL_KEYS, "CC_LLM_BASE_URL"],
+    async () => {
+      process.env.CC_LLM_API_KEY = "test-key";
+      process.env.CC_LLM_BASE_URL = `http://127.0.0.1:${chatPort}/v1`;
+
+      const { app } = await import("../web.js");
+      const server = app.listen(0);
+      await new Promise<void>((r) => server.once("listening", () => r()));
+      const appPort = (server.address() as { port: number }).port;
+
+      try {
+        const form = new FormData();
+        form.append("task", "alpha filler text");
+        form.append("token_budget", "400");
+        form.append("expanded_ids", JSON.stringify([omittedId]));
+        form.append("file", new Blob([doc], { type: "text/markdown" }), "doc.md");
+        const res = await fetch(`http://127.0.0.1:${appPort}/api/answer`, { method: "POST", body: form });
+        assert.equal(res.status, 200, "answer with expanded_ids succeeds");
+        const body = (await res.json()) as {
+          compiled?: { answer?: string; context_tokens?: number; expanded_ids?: string[] };
+          full?: { answer?: string };
+        };
+        assert.deepEqual(body.compiled?.expanded_ids, [omittedId], "expanded_ids echoed on compiled side");
+        assert.ok(
+          (body.compiled!.context_tokens as number) > baseTokens,
+          `compiled context should grow with expand (${body.compiled!.context_tokens} vs base ${baseTokens})`
+        );
+        assert.equal(body.compiled?.answer, "found-needle", "compiled prompt must include the expanded needle");
+        console.log("  answer expanded_ids ok: omitted needle merged into Prove context");
+      } finally {
+        server.close();
+        chat.close();
+      }
+    }
+  );
+}
+
+async function testRateCostsInConfig() {
+  // Sanity: /api/config exposes the heavier LLM route costs the UI documents.
   const { app } = await import("../web.js");
   const server = app.listen(0);
   await new Promise<void>((r) => server.once("listening", () => r()));
-  const appPort = (server.address() as { port: number }).port;
-
+  const port = (server.address() as { port: number }).port;
   try {
-    const form = new FormData();
-    form.append("task", "termination notice period");
-    form.append("file", new Blob([makeTestDoc()], { type: "text/markdown" }), "doc.md");
-    const res = await fetch(`http://127.0.0.1:${appPort}/api/agent`, { method: "POST", body: form });
-    assert.equal(res.headers.get("content-type"), "text/event-stream", "agent route streams SSE");
-
-    // Parse the buffered event stream into {event, data} records.
-    const raw = await res.text();
-    const events = raw
-      .split("\n\n")
-      .filter(Boolean)
-      .map((block) => {
-        const event = (block.match(/^event: (.*)$/m) ?? [])[1];
-        const data = (block.match(/^data: (.*)$/m) ?? [])[1];
-        return { event, data: data ? JSON.parse(data) : null };
-      });
-
-    const steps = events.filter((e) => e.event === "step");
-    const done = events.find((e) => e.event === "done");
-    assert.ok(steps.length >= 2, "should stream at least a compile and one more step");
-    assert.equal(steps[0].data.action, "compile", "first streamed step is the compile");
-    assert.ok(
-      steps.some((s) => s.data.action === "expand"),
-      "the agent expanded a section over the wire"
-    );
-    assert.ok(done, "a done event closes the stream");
-    assert.ok(done!.data.answer.includes("90 days"), "final answer arrives in the done event");
-    assert.ok(done!.data.tokens_read < done!.data.raw_tokens, "reads less than the whole file");
-    assert.ok(
-      typeof done!.data.parity_handle === "string" && /^[a-f0-9]{32}$/.test(done!.data.parity_handle),
-      "done event includes an opaque parity_handle for optional compare"
-    );
-    assert.equal(
-      done!.data.final_context,
-      undefined,
-      "agent context must not be sent over SSE (only the handle)"
-    );
-    console.log("  agent SSE ok: /api/agent streams live steps then the final answer");
+    const res = await fetch(`http://127.0.0.1:${port}/api/config`);
+    assert.equal(res.status, 200);
+    const cfg = (await res.json()) as {
+      rate_limit?: number;
+      rate_cost_answer?: number;
+      rate_cost_agent?: number;
+    };
+    assert.equal(cfg.rate_cost_agent, 8, "agent costs 8 rate points");
+    assert.equal(cfg.rate_cost_answer, 4, "answer/parity cost 4 rate points");
+    assert.ok((cfg.rate_limit as number) >= 8, "window can fit at least one agent run");
+    console.log("  rate costs ok: /api/config reports agent=8 answer=4");
   } finally {
     server.close();
-    chat.close();
-    process.env = saved as NodeJS.ProcessEnv;
   }
 }
 
@@ -890,91 +1201,107 @@ async function testMetricsCounters() {
 }
 
 async function testHealthzEndpoint() {
-  const { app } = await import("../web.js");
-  const server = app.listen(0);
-  await new Promise<void>((r) => server.once("listening", () => r()));
-  const port = (server.address() as { port: number }).port;
-  try {
-    const res = await fetch(`http://127.0.0.1:${port}/healthz`);
-    const body = (await res.json()) as {
-      status: string;
-      uptime_s: number;
-      converter_available?: unknown;
-      counters?: unknown;
-      llm_configured?: unknown;
-    };
-    assert.equal(res.status, 200, "healthz is always 200 (cheap liveness)");
-    assert.equal(body.status, "ok");
-    assert.equal(typeof body.uptime_s, "number");
-    assert.equal(body.converter_available, undefined, "converter check must not run on healthz");
-    assert.equal(body.counters, undefined, "public healthz must not expose counters");
-    assert.equal(body.llm_configured, undefined, "public healthz must not expose llm_configured");
+  // Isolate from a developer shell that may already export CC_METRICS_TOKEN
+  // (same class of leak as CC_GEMINI_MODEL). web.ts reads the token at request
+  // time, so clearing before the dark assertion is enough — restore in finally.
+  await withCleanEnv(["CC_METRICS_TOKEN"], async () => {
+    const { app } = await import("../web.js");
+    const server = app.listen(0);
+    await new Promise<void>((r) => server.once("listening", () => r()));
+    const port = (server.address() as { port: number }).port;
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/healthz`);
+      const body = (await res.json()) as {
+        status: string;
+        uptime_s: number;
+        converter_available?: unknown;
+        counters?: unknown;
+        llm_configured?: unknown;
+      };
+      assert.equal(res.status, 200, "healthz is always 200 (cheap liveness)");
+      assert.equal(body.status, "ok");
+      assert.equal(typeof body.uptime_s, "number");
+      assert.equal(body.converter_available, undefined, "converter check must not run on healthz");
+      assert.equal(body.counters, undefined, "public healthz must not expose counters");
+      assert.equal(body.llm_configured, undefined, "public healthz must not expose llm_configured");
 
-    // /metrics stays dark without a token.
-    const dark = await fetch(`http://127.0.0.1:${port}/metrics`);
-    assert.equal(dark.status, 404);
+      // /metrics stays dark without a token.
+      const dark = await fetch(`http://127.0.0.1:${port}/metrics`);
+      assert.equal(dark.status, 404);
 
-    process.env.CC_METRICS_TOKEN = "test-metrics-token";
-    const denied = await fetch(`http://127.0.0.1:${port}/metrics`);
-    assert.equal(denied.status, 401);
-    const { inc } = await import("../metrics.js");
-    const probe = `healthz_probe_${Date.now()}`;
-    inc(probe, 7);
-    const ok = await fetch(`http://127.0.0.1:${port}/metrics`, {
-      headers: { authorization: "Bearer test-metrics-token" },
-    });
-    assert.equal(ok.status, 200);
-    const metrics = (await ok.json()) as {
-      counters: Record<string, number>;
-      llm_configured: boolean;
-      converter_available: boolean;
-    };
-    assert.equal(metrics.counters[probe], 7);
-    assert.equal(typeof metrics.llm_configured, "boolean");
-    assert.equal(typeof metrics.converter_available, "boolean", "converter lives on /metrics");
-    console.log("  healthz ok: cheap public probe; metrics gated by token");
-  } finally {
-    delete process.env.CC_METRICS_TOKEN;
-    server.close();
-  }
+      process.env.CC_METRICS_TOKEN = "test-metrics-token";
+      const denied = await fetch(`http://127.0.0.1:${port}/metrics`);
+      assert.equal(denied.status, 401);
+      const { inc } = await import("../metrics.js");
+      const probe = `healthz_probe_${Date.now()}`;
+      inc(probe, 7);
+      const ok = await fetch(`http://127.0.0.1:${port}/metrics`, {
+        headers: { authorization: "Bearer test-metrics-token" },
+      });
+      assert.equal(ok.status, 200);
+      const metrics = (await ok.json()) as {
+        counters: Record<string, number>;
+        llm_configured: boolean;
+        converter_available: boolean;
+      };
+      assert.equal(metrics.counters[probe], 7);
+      assert.equal(typeof metrics.llm_configured, "boolean");
+      assert.equal(typeof metrics.converter_available, "boolean", "converter lives on /metrics");
+      console.log("  healthz ok: cheap public probe; metrics gated by token");
+    } finally {
+      server.close();
+    }
+  });
 }
 
 async function testCompileIncrementsCounter() {
   // End-to-end: a successful /api/compile bumps the `compiles` counter that
-  // /metrics exposes when authorized.
-  process.env.CC_METRICS_TOKEN = "test-metrics-token";
-  const { app } = await import("../web.js");
-  const server = app.listen(0);
-  await new Promise<void>((r) => server.once("listening", () => r()));
-  const port = (server.address() as { port: number }).port;
-  const metricsHeaders = { authorization: "Bearer test-metrics-token" };
-  try {
-    const before =
-      (
-        (await (await fetch(`http://127.0.0.1:${port}/metrics`, { headers: metricsHeaders })).json()) as {
-          counters: Record<string, number>;
-        }
-      ).counters.compiles ?? 0;
+  // /metrics exposes when authorized. Save/restore so we do not clobber a
+  // developer shell token (and so a wrong pre-set token cannot fail auth).
+  await withCleanEnv(
+    ["CC_METRICS_TOKEN"],
+    async () => {
+      const { app } = await import("../web.js");
+      const server = app.listen(0);
+      await new Promise<void>((r) => server.once("listening", () => r()));
+      const port = (server.address() as { port: number }).port;
+      const metricsHeaders = { authorization: "Bearer test-metrics-token" };
+      try {
+        const before =
+          (
+            (await (
+              await fetch(`http://127.0.0.1:${port}/metrics`, { headers: metricsHeaders })
+            ).json()) as {
+              counters: Record<string, number>;
+            }
+          ).counters.compiles ?? 0;
 
-    const fd = new FormData();
-    fd.append("file", new Blob(["# Tiny\n\nHello world."], { type: "text/markdown" }), "tiny.md");
-    fd.append("task", "What does it say?");
-    fd.append("token_budget", "2000");
-    const compileRes = await fetch(`http://127.0.0.1:${port}/api/compile`, { method: "POST", body: fd });
-    assert.equal(compileRes.status, 200, "compile succeeds for a tiny markdown upload");
+        const fd = new FormData();
+        fd.append("file", new Blob(["# Tiny\n\nHello world."], { type: "text/markdown" }), "tiny.md");
+        fd.append("task", "What does it say?");
+        fd.append("token_budget", "2000");
+        const compileRes = await fetch(`http://127.0.0.1:${port}/api/compile`, {
+          method: "POST",
+          body: fd,
+        });
+        assert.equal(compileRes.status, 200, "compile succeeds for a tiny markdown upload");
 
-    const after =
-      (
-        (await (await fetch(`http://127.0.0.1:${port}/metrics`, { headers: metricsHeaders })).json()) as {
-          counters: Record<string, number>;
-        }
-      ).counters.compiles ?? 0;
-    assert.equal(after, before + 1, "compiles counter increments on success");
-    console.log("  compile counter ok: /api/compile bumps compiles visible on /metrics");
-  } finally {
-    delete process.env.CC_METRICS_TOKEN;
-    server.close();
-  }
+        const after =
+          (
+            (await (
+              await fetch(`http://127.0.0.1:${port}/metrics`, { headers: metricsHeaders })
+            ).json()) as {
+              counters: Record<string, number>;
+            }
+          ).counters.compiles ?? 0;
+        assert.equal(after, before + 1, "compiles counter increments on success");
+        console.log("  compile counter ok: /api/compile bumps compiles visible on /metrics");
+      } finally {
+        server.close();
+      }
+    },
+    { CC_METRICS_TOKEN: "test-metrics-token" }
+  );
 }
 
 /**
@@ -1042,7 +1369,7 @@ async function testNoStdoutInMcpPath() {
 }
 
 async function testSmallFilePassthrough() {
-  const path = join(homedir(), `cc-tiny-${Date.now()}.md`);
+  const path = testTmpPath(`cc-tiny-${Date.now()}.md`);
   writeFileSync(path, "# Tiny\n\nJust a small note about nothing.");
   try {
     const r = await compileContext(path, "anything", 4000);
@@ -1295,6 +1622,8 @@ for (const fn of [
   testGeminiModelFailover,
   testAgentLoop,
   testAgentSseEndpoint,
+  testAnswerExpandedIds,
+  testRateCostsInConfig,
   testLogger,
   testMetricsCounters,
   testHealthzEndpoint,

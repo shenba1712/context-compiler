@@ -8,20 +8,27 @@ Prefer the **hosted demo + in-repo Run agent** for the recording. MCP in a codin
 ## Pre-recording checklist (do NOT skip)
 
 - [ ] Hosted URL open (no access token — the public demo is open). Local
-      fallback: `GEMINI_API_KEY=… npm run web` (optional `OPENROUTER_API_KEY`).
+      fallback: `GEMINI_API_KEY=… npm run web` (optional `OPENROUTER_API_KEY`
+      for failover when Gemini free tier hiccups).
 - [ ] Pre-warm: free Render sleeps when idle — open the URL **~1 minute early**
       (first hit can take 30–60s). Compile the hero sample once so conversion
       is cached. Say “cached” when the badge shows; it’s a feature.
 - [ ] **Prove answer parity** and **Run agent** both work on the hero sample
-      (needs a server-side LLM key — Gemini free tier is enough).
+      (needs a server-side LLM key — Gemini free tier is enough; OpenRouter is
+      the automatic backup).
 - [ ] Hero setup (rehearse numbers so you don’t invent them live):
       - Sample: **Pride and Prejudice** (or Kestrel K2 / Meridian report).
       - Question: *What does Mr. Darcy say about Elizabeth at the Meryton assembly?*
       - Budget: **2,000** (or leave the default ~4,000 — still a huge cut).
+        Same slider = Compile pack budget **and** Agent soft reading ceiling.
       - Expect ~90%+ fewer tokens with the answer still in the compiled markdown.
-- [ ] Rehearse a **controlled miss**: tiny budget (e.g. 800) or a vague question
-      so the gold section lands in **Omitted**. Expand that section once and
-      confirm recovery. Do this twice before you hit record.
+- [ ] Rehearse a **controlled miss**: tiny budget (e.g. 800) or a vague /
+      paraphrased question so the gold section lands in **Omitted**. Expand
+      that section once — note the Prove budget warning — and confirm recovery.
+      Do this twice before you hit record.
+- [ ] Know the two Prove buttons: quiet **Prove…** next to Compile (skip the
+      results view), and **Prove answer parity** under results (includes any
+      expands you clicked).
 - [ ] Close other tabs. 1080p. Cursor highlighting on if you have it.
 
 ## Script
@@ -39,6 +46,8 @@ Actions: pick **Pride and Prejudice** (or upload your hero file) → paste the
 rehearsed question → budget **2,000** → **Compile**.
 
 > "I pick a classic novel, ask a real question, and set a token budget.
+> That slider is the hard pack ceiling for Compile — and later, the Agent’s
+> soft reading ceiling. Same control.
 > The whole file is tens of thousands of tokens. The compiled context — only
 > the sections that look relevant — is a few thousand. That’s a ninety-plus
 > percent cut, and the cost meter shows what that means per read. Ask again
@@ -48,47 +57,55 @@ rehearsed question → budget **2,000** → **Compile**.
 Point at: red/green bars, cost meter, session savings, `⚡ conversion cached`
 on the second run if you show one.
 
-### 0:55–1:25 — Answer parity (the proof)
+### 0:55–1:20 — Expand + Prove (the proof)
 
-Action: click **Prove answer parity**.
+Actions: if an important section is omitted, click it to expand (optional) —
+watch the note that expands raise effective Prove context above the slider.
+Then **Prove answer parity** (results button), or the quiet top **Prove…**.
 
 > "Cheap context is worthless if the answer changes. So we ask the model the
 > same question twice — once from the full converted file, once from the
-> compiled slice — side by side. Same facts. A fraction of the tokens.
+> compiled slice, including any sections I expanded. Side by side. Same
+> facts. A fraction of the tokens.
 > Judges: this button is live. Try to break it."
 
 If wording differs slightly: *“not identical words — identical facts.”*
 Never claim byte-identical prose.
 
-### 1:25–2:05 — The model at the center (Run agent)
+If you expanded: briefly point at the expand budget note — *“Compile stayed
+under the slider; expands add on top so Prove doesn’t miss what I fetched.”*
 
-Action: same file + a question whose answer sits deeper in the doc →
-**Run agent ▸** (not Compile). Watch the SSE trace: compile → expand (with a
-one-line reason) → answer. Token meter climbs next to the crossed-out whole-file count.
+### 1:20–2:00 — The model at the center (Run agent)
 
-> "I don’t pick the budget here. The model compiles a small slice, reads the
-> omitted-sections manifest, decides what to expand, and answers — having
-> read a fraction of the file. That loop is bounded on purpose: step cap,
-> token ceiling, and bad decisions fall back to ‘answer with what we have’
-> instead of spinning. Same two tools an MCP agent would call:
-> `compile_context` and `expand_section`."
+Action: same file + question → set budget (e.g. **2,000**) → **Run agent ▸**
+(not Compile). Watch the SSE trace: compile → expand (with a one-line reason)
+→ answer. Token meter climbs next to the crossed-out whole-file count.
+Optional: **Compare to full file** (uses the one-shot `parity_handle`).
+
+> "Same budget slider — Agent starts compiling there, and treats it as a soft
+> reading ceiling. It reads the omitted-sections manifest, decides what to
+> expand, and answers — having read a fraction of the file. It stops starting
+> new expands once it hits the ceiling; a last expand may finish slightly
+> over. If the whole file already fits, it short-circuits and answers once.
+> Live steps over SSE. Same two tools an MCP agent would call:
+> `compile_context` and `expand_section`. Gemini first, OpenRouter if free
+> tier flakes."
 
 This is the dependable “model drives it” shot. Keep it.
 
-### 2:05–2:35 — Controlled failure (credibility)
+### 2:00–2:30 — Controlled failure (credibility)
 
-Action: vague question and/or budget **~800**. Compile. Scroll to
-**Omitted**. Click expand (or narrate `expand_section` on the flagged id).
-Correct content appears.
+Action: vague or paraphrased question and/or budget **~800**. Compile. Scroll
+to **Omitted**. Click expand (or narrate `expand_section` on the flagged id).
+Correct content appears. Prove again if you want the recovery on camera.
 
-> "Now I’ll break my own product. Tiny budget — and the section that matters
-> is omitted. Here’s the design: every compile ends with a manifest of what
-> was left out. Failure is visible. Expand recovers it. Trimming is
-> transparent, never silent. That’s the difference between a demo and
-> infrastructure. Same story if someone feeds an injected PDF — markers
-> mitigate; the manifest is how you recover."
+> "Now I’ll break my own product. Tiny budget — or a paraphrase BM25 misses —
+> and the section that matters is omitted. Here’s the design: every compile
+> ends with a manifest of what was left out. Failure is visible. Expand
+> recovers it. Agent walks that same manifest. Trimming is transparent, never
+> silent. That’s the difference between a demo and infrastructure."
 
-### 2:35–2:50 — Close
+### 2:30–2:50 — Close
 
 > "Context Compiler. Local-first TypeScript pipeline, MCP server, hosted
 > demo, offline recall eval in CI, honest limitations in the README.
@@ -101,11 +118,14 @@ On screen: hosted URL + `github.com/shenba1712/context-compiler`.
 - Record screen and voice separately if take one stumbles; sync later.
 - Never wait on camera: cut latency in the edit, or pre-warm cold start + cache.
 - The miss → expand beat is the riskiest and the most memorable — rehearse
-  until it’s boring.
+  until it’s boring. Lexical paraphrase misses are real; expand/agent recovery
+  is the product answer — say that out loud if judges ask.
 - Ranking is BM25 (local, free). Don’t oversell embeddings or an LLM rerank
   you don’t ship — those are possible later, not today.
 - Free-tier host still waking up? Wait for the in-page cold-start note / `/healthz`
   before you start talking over a blank spinner.
+- Dual Prove: top quiet button for a fast skip-results proof; results button
+  when you want expands included. Don’t confuse Prove with Agent.
 
 ## Appendix — optional MCP credibility cut
 
@@ -117,7 +137,8 @@ flaky on camera, skip it — **Run agent** already makes the point.
    - Claude Code: `claude mcp add context-compiler -- node /abs/path/dist/server.js`
    - Cursor / Claude Desktop / Codex: JSON or TOML from the README MCP section
 3. Set `CC_ROOT` to a folder the agent may read; put the hero file there.
-   Put `GEMINI_API_KEY` in the env the server process inherits.
+   Put `GEMINI_API_KEY` (and optionally `OPENROUTER_API_KEY`) in the env the
+   server process inherits.
 4. Prompt on screen:
    `Using the context-compiler tools, answer from <hero>: <specific question>`
 5. Hold on the autonomous `compile_context` tool call — few thousand tokens
@@ -133,3 +154,4 @@ flaky on camera, skip it — **Run agent** already makes the point.
 | Meridian Annual Report | What are the three risks management worries about? | Business prose + tables |
 | Meridian Financials | What was net profit in FY25? | Spreadsheet path through markitdown |
 | Origin of Species | What is natural selection? | Dense PDF; expect slower first convert |
+| Paraphrase miss (eval) | falling ill / wet through style | Shows BM25 miss → expand/agent recovery |
