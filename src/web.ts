@@ -304,6 +304,12 @@ app.get("/api/config", (_req, res) => {
   return res.json({
     llm_available: hasLlm(),
     max_file_bytes: MAX_FILE_BYTES,
+    rate_limit: RATE_LIMIT,
+    rate_window_minutes: Math.round(WINDOW_MS / 60_000),
+    rate_cost_answer: RATE_COST_ANSWER,
+    rate_cost_agent: RATE_COST_AGENT,
+    max_concurrent_llm: intEnv("CC_MAX_CONCURRENT_LLM", 2, 1, 32),
+    answer_context_cap: intEnv("CC_ANSWER_CONTEXT_CAP", 60_000, 1000),
   });
 });
 

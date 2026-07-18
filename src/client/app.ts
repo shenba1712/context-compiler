@@ -62,6 +62,12 @@ async function loadConfig(): Promise<void> {
     const cfg: {
       llm_available: boolean;
       max_file_bytes?: number;
+      rate_limit?: number;
+      rate_window_minutes?: number;
+      rate_cost_answer?: number;
+      rate_cost_agent?: number;
+      max_concurrent_llm?: number;
+      answer_context_cap?: number;
     } = await resp.json();
     if (typeof cfg.max_file_bytes === "number" && cfg.max_file_bytes > 0) {
       maxFileBytes = cfg.max_file_bytes;
@@ -72,9 +78,46 @@ async function loadConfig(): Promise<void> {
       }
     }
     setLlmDependentButtons(Boolean(cfg.llm_available));
+    fillExpectPanel(cfg);
   } catch (e) {
     console.warn("Could not load server config:", e);
     // Leave the buttons enabled — worst case a click surfaces the real error.
+  }
+}
+
+/** Fill the “what to expect” panel from live server limits (falls back to HTML defaults). */
+function fillExpectPanel(cfg: {
+  llm_available: boolean;
+  rate_limit?: number;
+  rate_window_minutes?: number;
+  rate_cost_answer?: number;
+  rate_cost_agent?: number;
+  max_concurrent_llm?: number;
+  answer_context_cap?: number;
+}): void {
+  const pool = cfg.rate_limit ?? 30;
+  const windowMin = cfg.rate_window_minutes ?? 5;
+  const costAnswer = cfg.rate_cost_answer ?? 4;
+  const costAgent = cfg.rate_cost_agent ?? 8;
+  const setAll = (key: string, text: string) => {
+    document.querySelectorAll(`[data-k="${key}"]`).forEach((el) => {
+      el.textContent = text;
+    });
+  };
+  setAll("compile_n", pool.toLocaleString());
+  setAll("window", String(windowMin));
+  setAll("cost_answer", String(costAnswer));
+  setAll("cost_agent", String(costAgent));
+  setAll("prove_n", String(Math.max(1, Math.floor(pool / costAnswer))));
+  setAll("agent_n", String(Math.max(1, Math.floor(pool / costAgent))));
+  setAll("llm_conc", String(cfg.max_concurrent_llm ?? 2));
+  setAll("answer_cap", (cfg.answer_context_cap ?? 60_000).toLocaleString());
+
+  const llmLine = document.getElementById("expectLlmLine");
+  if (llmLine) {
+    llmLine.innerHTML = cfg.llm_available
+      ? "If Gemini/OpenRouter <strong>free-tier quota</strong> is exhausted, Prove and Agent may return 429/503 even when our rate limit still has room — wait a few minutes and retry."
+      : "<strong>Prove</strong> and <strong>Run agent</strong> are disabled here — this server has no LLM API key. Compile and expand still work fully offline.";
   }
 }
 
