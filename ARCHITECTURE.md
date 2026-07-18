@@ -120,6 +120,16 @@ Conversion dominates latency and happens once per content hash. Chunk and BM25 a
 
 A Docker image with Node and markitdown is enough for the demo. Stateless app plus content-addressed cache means N replicas need nothing shared except, eventually, a shared cache volume if duplicate conversions bother you. The honest scale path, in order, is shared cache, the rate limits we already have, a conversion worker pool if CPU becomes the bottleneck, then corpus mode with a persistent chunk index. None of that is required at demo traffic. Observability today is stderr, an optional error webhook, `/healthz`, and token-gated `/metrics`; tomorrow it would be the same events pushed to a real metrics backend once more than one replica matters.
 
+### Disaster recovery
+
+The recovery story is the deployment story, said plainly. GitHub is the source of truth; the Docker image and the Render blueprint are how you rebuild. API keys and other secrets live in the host dashboard, never in the repo — a wiped instance comes back with the same code and the same keys you re-attach, not with anything scraped from git history.
+
+What does not survive a crash or a redeploy is everything the process was holding for convenience: uploads under the demo’s tmp directory (TTL-swept anyway), one-shot parity handles, in-memory rate-limit counters and metrics, and the instance-local conversion cache. Those are ephemeral by design. After a restart, the next compile converts again on a cache miss; a judge who had a file mid-session re-uploads. Code and dashboard secrets are the durable pieces; session residue is not.
+
+If every LLM provider in the chain is down, answer parity and the agent loop go quiet, but the product does not. Compile and MCP still run offline — conversion, BM25 ranking, packing, and expand — because ranking never required a key. Failover across Gemini, OpenRouter, Anthropic, and a generic OpenAI-compatible endpoint is how we ride out a single free-tier melt, not how we claim five-nines on someone else’s API.
+
+We are not multi-region HA, and there is no backup database, because there is no database. That is intentional demo scope, not an oversight we paper over with fake RTO/RPO numbers. If the host dies, you redeploy from the blueprint; if a key burns, you rotate it in the dashboard; if you care about conversion cache across restarts, attach a volume — the same scale path already named above.
+
 ## Formats and clients
 
 DOCX and XLSX are the happiest paths — headings and tables survive. PPTX keeps slide text and loses layout. Text-layer PDFs often arrive heading-less and fall back to paragraph windows. Scanned PDFs and bare images without OCR are out of scope and fail clearly. HTML, markdown, CSV, and plain text are near-lossless. Video and audio would be a transcription head on the same pipeline when we choose to spend that complexity.
