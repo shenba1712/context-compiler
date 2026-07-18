@@ -12,7 +12,9 @@
  * markers (prompt-injection mitigation).
  */
 import { Chunk } from "./chunk.js";
+import { relevanceFloor } from "./config.js";
 import { countTokens } from "./tokens.js";
+import { maxOf } from "./util.js";
 
 const MANIFEST_MAX_LINES = 40;
 const MANIFEST_DEGRADE_STEPS = [MANIFEST_MAX_LINES, 20, 10, 5, 0];
@@ -39,11 +41,22 @@ function previewOf(c: Chunk): string {
   return p ? `“${p}…”` : "";
 }
 
+// pack()'s eviction loop below calls assemble() -> manifestLines() -> this,
+// once per remaining omitted chunk, on every iteration it removes just ONE
+// selected chunk and retries. A chunk's label never changes between those
+// retries, so it's cached per-chunk instead of re-parsed from its text every
+// time — cheap win, since only the loop's iteration count actually needs the
+// recomputation, not the manifest content of chunks nothing changed about.
+const labelCache = new WeakMap<Chunk, string>();
 function shortLabel(c: Chunk): string {
+  const cached = labelCache.get(c);
+  if (cached !== undefined) return cached;
   const h = headingOf(c);
   const p = previewOf(c);
-  if (h && p) return `${h.length > 36 ? h.slice(0, 35) + "…" : h} — ${p}`;
-  return h || p || "(untitled section)";
+  const label =
+    h && p ? `${h.length > 36 ? h.slice(0, 35) + "…" : h} — ${p}` : h || p || "(untitled section)";
+  labelCache.set(c, label);
+  return label;
 }
 
 /**
@@ -183,13 +196,21 @@ export function pack(
   const WRAPPER_RESERVE = countTokens(wrapperText) + countTokens("<!-- END UNTRUSTED DOCUMENT CONTENT -->");
   const manifestReserve = ranked.length ? countTokens(manifestLines(ranked, 0).join("\n")) : 0;
   const usable = Math.max(budget - WRAPPER_RESERVE - manifestReserve, 150);
-  const floor = Number(process.env.CC_RELEVANCE_FLOOR ?? 0.15);
-  const top = scores ? Math.max(0, ...ranked.map((c) => scores.get(c.id) ?? 0)) : 0;
+  const floor = relevanceFloor();
+  const top = scores ? maxOf(ranked.map((c) => scores.get(c.id) ?? 0)) : 0;
 
-  let selected: Chunk[] = [];
+  const selected: Chunk[] = [];
   let used = 0;
   for (const chunk of ranked) {
-    if (scores && top > 0 && selected.length > 0 && floor > 0) {
+    // Apply the floor to every candidate, not just after something has been
+    // selected. It used to skip this check while `selected` was still empty,
+    // which was meant to always let the top chunk through — but if the top
+    // chunk (and maybe several after it) are too BIG to fit the budget, that
+    // same exemption applied to whatever chunk came next, even an irrelevant
+    // one. Now a below-floor chunk is never let in, no matter what came
+    // before it; if nothing survives, pack() below reports that plainly
+    // instead of quietly shipping the wrong section.
+    if (scores && top > 0 && floor > 0) {
       const s = scores.get(chunk.id) ?? 0;
       if (s < floor * top) continue; // below the relevance floor: omit
     }

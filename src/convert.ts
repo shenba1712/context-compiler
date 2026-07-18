@@ -16,9 +16,9 @@
 import { execFile } from "node:child_process";
 import { statSync } from "node:fs";
 
+import { MAX_FILE_BYTES } from "./config.js";
 import { intEnv } from "./env.js";
 
-const MAX_FILE_BYTES = intEnv("CC_MAX_FILE_BYTES", 50 * 1024 * 1024, 1);
 const CONVERT_TIMEOUT_MS = intEnv("CC_CONVERT_TIMEOUT_S", 120, 1) * 1000;
 const MARKITDOWN = process.env.CC_MARKITDOWN_CMD ?? "markitdown";
 // Virtual-memory ceiling for a single conversion (KB). 1.5 GB comfortably
@@ -66,10 +66,7 @@ function spawnArgs(path: string): [string, string[]] {
   // The command and path are passed as positional args ($0, $1), never
   // interpolated into the script string, so there is no shell injection.
   if (MEM_CAP_KB > 0 && process.platform === "linux") {
-    return [
-      "bash",
-      ["-c", `ulimit -v ${MEM_CAP_KB} 2>/dev/null; exec "$0" "$1"`, MARKITDOWN, path],
-    ];
+    return ["bash", ["-c", `ulimit -v ${MEM_CAP_KB} 2>/dev/null; exec "$0" "$1"`, MARKITDOWN, path]];
   }
   return [MARKITDOWN, [path]];
 }
@@ -82,9 +79,7 @@ export async function convertToMarkdown(path: string): Promise<string> {
     throw new ConversionError(`Not a file: ${path}`);
   }
   if (size > MAX_FILE_BYTES) {
-    throw new ConversionError(
-      `File is ${size} bytes; limit is ${MAX_FILE_BYTES}. Refusing to parse.`
-    );
+    throw new ConversionError(`File is ${size} bytes; limit is ${MAX_FILE_BYTES}. Refusing to parse.`);
   }
 
   await acquire();
@@ -106,11 +101,13 @@ export async function convertToMarkdown(path: string): Promise<string> {
               : "the file may be corrupt, password-protected, or an unsupported variant";
             reject(new ConversionError(`Conversion failed: ${reason}.`));
           } else if (!stdout.trim()) {
-            reject(new ConversionError(
-              "Conversion produced empty output. For plain images, this usually means no " +
-                "OCR/captioning backend is configured (needs an LLM key) — text formats and " +
-                "documents with embedded text don't need one and aren't affected."
-            ));
+            reject(
+              new ConversionError(
+                "Conversion produced empty output. For plain images, this usually means no " +
+                  "OCR/captioning backend is configured (needs an LLM key) — text formats and " +
+                  "documents with embedded text don't need one and aren't affected."
+              )
+            );
           } else {
             resolve(stdout);
           }

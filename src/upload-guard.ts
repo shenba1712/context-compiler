@@ -26,7 +26,16 @@ export class UploadRejected extends Error {
 }
 
 export const ALLOWED_EXTENSIONS = [
-  ".docx", ".pdf", ".xlsx", ".pptx", ".csv", ".md", ".markdown", ".txt", ".html", ".htm",
+  ".docx",
+  ".pdf",
+  ".xlsx",
+  ".pptx",
+  ".csv",
+  ".md",
+  ".markdown",
+  ".txt",
+  ".html",
+  ".htm",
 ];
 
 const ZIP_EXTS = new Set([".docx", ".xlsx", ".pptx"]);
@@ -44,8 +53,12 @@ function extname(name: string): string {
 
 /** Looks like a ZIP local-file header ("PK\x03\x04") or an empty archive. */
 function isZip(buf: Buffer): boolean {
-  return buf.length >= 4 && buf[0] === 0x50 && buf[1] === 0x4b &&
-    (buf[2] === 0x03 || buf[2] === 0x05 || buf[2] === 0x07);
+  return (
+    buf.length >= 4 &&
+    buf[0] === 0x50 &&
+    buf[1] === 0x4b &&
+    (buf[2] === 0x03 || buf[2] === 0x05 || buf[2] === 0x07)
+  );
 }
 
 function isPdf(buf: Buffer): boolean {
@@ -72,7 +85,10 @@ function zipUncompressedTotal(buf: Buffer): number | null {
   const from = Math.max(0, buf.length - (0xffff + 22));
   let eocd = -1;
   for (let i = buf.length - 22; i >= from; i--) {
-    if (buf.readUInt32LE(i) === EOCD_SIG) { eocd = i; break; }
+    if (buf.readUInt32LE(i) === EOCD_SIG) {
+      eocd = i;
+      break;
+    }
   }
   if (eocd < 0) return null;
 

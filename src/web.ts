@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { BUDGET_FLOORS, MAX_FILE_BYTES, clampBudget } from "./config.js";
 import { ConversionError, ConverterBusyError } from "./convert.js";
 import { intEnv, numEnv, trustProxyFromEnv } from "./env.js";
 import { answerModel, complete, hasLlm } from "./llm.js";
@@ -35,7 +36,7 @@ app.disable("x-powered-by"); // don't advertise the framework
 // client X-Forwarded-For here lets anyone bypass the per-IP rate limit by
 // rotating the header. Operators behind a proxy set CC_TRUST_PROXY. See env.ts.
 app.set("trust proxy", trustProxyFromEnv());
-const upload = multer({ limits: { fileSize: 50 * 1024 * 1024, files: 1 } });
+const upload = multer({ limits: { fileSize: MAX_FILE_BYTES, files: 1 } });
 
 // Baseline security headers (hand-rolled to keep the dependency footprint
 // small, consistent with the rest of this project). CSP allows the Google
@@ -71,7 +72,9 @@ app.use(express.static(STATIC_DIR));
 // literal paths only (no user input involved), so there's no traversal risk.
 const REPO_ROOT = join(STATIC_DIR, "..");
 app.get("/README.md", (_req, res) => res.type("text/markdown").sendFile(join(REPO_ROOT, "README.md")));
-app.get("/ARCHITECTURE.md", (_req, res) => res.type("text/markdown").sendFile(join(REPO_ROOT, "ARCHITECTURE.md")));
+app.get("/ARCHITECTURE.md", (_req, res) =>
+  res.type("text/markdown").sendFile(join(REPO_ROOT, "ARCHITECTURE.md"))
+);
 
 // Minimal per-IP rate limit: protects the hosted demo (and the API bill)
 // from accidental or hostile hammering. In-memory is fine for one replica
@@ -87,7 +90,7 @@ function rateLimit(req: express.Request, res: express.Response, next: express.Ne
   }
   arr.push(now);
   hits.set(req.ip ?? "?", arr);
-  next();
+  return next();
 }
 app.use("/api", rateLimit);
 
@@ -119,10 +122,16 @@ function sweepUploads() {
       const p = join(UPLOAD_DIR, name);
       const st = statSync(p, { throwIfNoEntry: false });
       if (st && st.mtimeMs < cutoff) {
-        try { unlinkSync(p); } catch { /* already gone */ }
+        try {
+          unlinkSync(p);
+        } catch {
+          /* already gone */
+        }
       }
     }
-  } catch { /* dir not created yet */ }
+  } catch {
+    /* dir not created yet */
+  }
   for (const [h, v] of handles) if (v.ts < cutoff) handles.delete(h);
 }
 setInterval(sweepUploads, Math.min(UPLOAD_TTL_MS, 10 * 60_000)).unref();
@@ -133,17 +142,18 @@ function guardUpload(req: express.Request, res: express.Response, next: express.
   if (!req.file) return next();
   try {
     validateUpload(req.file.originalname, req.file.buffer);
-    next();
+    return next();
   } catch (e) {
     if (e instanceof UploadRejected) return res.status(e.status).json({ error: e.message });
-    next(e);
+    return next(e);
   }
 }
 
 // Map any thrown error to a safe (status, message) pair. Internal details —
 // stack traces, server paths, dependency versions — are logged, never sent.
+// (UploadRejected isn't handled here: guardUpload above always catches it
+// itself, before a route handler ever runs.)
 function errorResponse(res: express.Response, e: unknown, context: string) {
-  if (e instanceof UploadRejected) return res.status(e.status).json({ error: e.message });
   if (e instanceof ConverterBusyError) {
     res.setHeader("Retry-After", "5");
     return res.status(503).json({ error: e.message });
@@ -156,11 +166,6 @@ function errorResponse(res: express.Response, e: unknown, context: string) {
   return res.status(500).json({ error: "Internal server error." });
 }
 
-// Floor must stay at/below the UI slider minimum, or a requested budget gets
-// silently raised and the "whole file fit" note contradicts the slider.
-const clampBudget = (v: unknown) =>
-  Math.max(100, Math.min(Number(v) || 4000, 200_000));
-
 // Real, measured token counts for the sample library — computed through the
 // exact same convert+cache pipeline a real compile uses (fullMarkdown), never
 // hardcoded. A hardcoded guess can silently drift from the truth the moment a
@@ -168,14 +173,22 @@ const clampBudget = (v: unknown) =>
 // it's derived fresh from the actual file every time this route is hit.
 // Memoized in-process (sample files don't change during a server's lifetime)
 // so repeat page loads don't even pay for a disk-cache lookup.
-let samplesCache: Array<{ key: string; file: string; fmt: string; nm: string; mt: string; q: string[]; tok: number | null }> | null = null;
+let samplesCache: Array<{
+  key: string;
+  file: string;
+  fmt: string;
+  nm: string;
+  mt: string;
+  q: string[];
+  tok: number | null;
+}> | null = null;
 
 // Lets the client know up front whether "Prove answer parity" will work,
 // instead of only finding out after a failed click (or, worse, showing it
 // fully enabled on the keyless default deploy this project's headline is
 // built around). Fetched once on page load alongside /api/samples.
 app.get("/api/config", (_req, res) => {
-  res.json({ llm_available: hasLlm() });
+  return res.json({ llm_available: hasLlm() });
 });
 
 app.get("/api/samples", async (_req, res) => {
@@ -195,9 +208,9 @@ app.get("/api/samples", async (_req, res) => {
         })
       );
     }
-    res.json(samplesCache);
+    return res.json(samplesCache);
   } catch (e) {
-    res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+    return res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
   }
 });
 
@@ -212,9 +225,9 @@ app.post("/api/measure", upload.single("file"), guardUpload, async (req, res) =>
     if (!req.file) return res.status(400).json({ error: "No file uploaded" });
     const { path, handle } = saveUpload(req.file);
     const markdown = await fullMarkdown(path);
-    res.json({ raw_tokens: countTokens(markdown), handle });
+    return res.json({ raw_tokens: countTokens(markdown), handle });
   } catch (e) {
-    errorResponse(res, e, "measure");
+    return errorResponse(res, e, "measure");
   }
 });
 
@@ -225,9 +238,13 @@ app.post("/api/compile", upload.single("file"), guardUpload, async (req, res) =>
     if (!task) return res.status(400).json({ error: "No task provided" });
     const { path, handle } = saveUpload(req.file);
     const result = await compileContext(
-      path, task, clampBudget(req.body.token_budget), undefined, req.file.originalname
+      path,
+      task,
+      clampBudget(req.body.token_budget, BUDGET_FLOORS.web),
+      undefined,
+      req.file.originalname
     );
-    res.json({
+    return res.json({
       ...result,
       cost_raw_usd: (result.raw_tokens / 1e6) * PRICE_PER_MTOK,
       cost_compiled_usd: (result.tokens_used / 1e6) * PRICE_PER_MTOK,
@@ -236,7 +253,7 @@ app.post("/api/compile", upload.single("file"), guardUpload, async (req, res) =>
       llm_available: hasLlm(),
     });
   } catch (e) {
-    errorResponse(res, e, "compile");
+    return errorResponse(res, e, "compile");
   }
 });
 
@@ -255,9 +272,9 @@ app.post("/api/expand", express.json({ limit: "16kb" }), async (req, res) => {
     if (p !== resolve(UPLOAD_DIR) && !p.startsWith(resolve(UPLOAD_DIR) + sep)) {
       return res.status(403).json({ error: "Access denied." });
     }
-    res.json(await expandSection(p, section_id, 2000));
+    return res.json(await expandSection(p, section_id, 2000));
   } catch (e) {
-    errorResponse(res, e, "expand");
+    return errorResponse(res, e, "expand");
   }
 });
 
@@ -265,7 +282,9 @@ app.post("/api/answer", upload.single("file"), guardUpload, async (req, res) => 
   try {
     if (!hasLlm()) {
       return res.status(400).json({
-        error: "Set ANTHROPIC_API_KEY or OPENAI_API_KEY (or CC_LLM_API_KEY + CC_LLM_BASE_URL) to enable the answer panel",
+        error:
+          "Set an LLM API key to enable the answer panel — GEMINI_API_KEY (free), OPENROUTER_API_KEY, " +
+          "ANTHROPIC_API_KEY, OPENAI_API_KEY, or CC_LLM_API_KEY + CC_LLM_BASE_URL",
       });
     }
     if (!req.file) return res.status(400).json({ error: "No file uploaded" });
@@ -279,10 +298,11 @@ app.post("/api/answer", upload.single("file"), guardUpload, async (req, res) => 
     let full = await fullMarkdown(path);
     const fullTokens = countTokens(full);
     if (fullTokens > CAP) {
-      full = full.slice(0, Math.floor((full.length * CAP) / fullTokens)) +
+      full =
+        full.slice(0, Math.floor((full.length * CAP) / fullTokens)) +
         "\n\n<!-- truncated for the demo's cost cap -->";
     }
-    const compiled = await compileContext(path, task, clampBudget(req.body.token_budget));
+    const compiled = await compileContext(path, task, clampBudget(req.body.token_budget, BUDGET_FLOORS.web));
 
     const ask = (context: string) =>
       complete(
@@ -293,7 +313,7 @@ app.post("/api/answer", upload.single("file"), guardUpload, async (req, res) => 
       );
 
     const [answerFull, answerCompiled] = await Promise.all([ask(full), ask(compiled.markdown)]);
-    res.json({
+    return res.json({
       model: answerModel(),
       full: { answer: answerFull, context_tokens: countTokens(full) },
       compiled: {
@@ -304,7 +324,7 @@ app.post("/api/answer", upload.single("file"), guardUpload, async (req, res) => 
     });
   } catch (e) {
     const status = e instanceof ConversionError ? 422 : 500;
-    res.status(status).json({ error: e instanceof Error ? e.message : String(e) });
+    return res.status(status).json({ error: e instanceof Error ? e.message : String(e) });
   }
 });
 
@@ -318,7 +338,7 @@ app.use((err: unknown, _req: express.Request, res: express.Response, next: expre
     return res.status(413).json({ error: `Upload rejected: ${err.message}` });
   }
   console.error("Unhandled error:", err);
-  res.status(500).json({ error: "Internal server error" });
+  return res.status(500).json({ error: "Internal server error" });
 });
 
 app.listen(PORT, () => console.log(`Context Compiler demo on http://localhost:${PORT}`));

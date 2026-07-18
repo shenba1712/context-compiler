@@ -68,7 +68,12 @@ function announce(msg: string, assertive = false): void {
 }
 
 const esc = (s: unknown): string =>
-  String(s).replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c] as string));
+  String(s).replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" })[c] as string);
+
+// Section breadcrumbs look like "Contract > Termination > Notice". Most of
+// the UI only wants that last, most-specific part — this pulls it out (or
+// falls back to the full breadcrumb if there's no " > " to split on).
+const lastCrumb = (section: string): string => section.split(" > ").pop() || section;
 
 // Copy the referenced <pre> config to the clipboard.
 document.querySelectorAll<HTMLButtonElement>(".copybtn").forEach((btn) => {
@@ -132,7 +137,9 @@ async function selectSample(s: Sample, card: HTMLButtonElement): Promise<void> {
   try {
     blobCache[s.key] ??= await (await fetch("/samples/" + s.file)).blob();
     const dt = new DataTransfer();
-    dt.items.add(new File([blobCache[s.key]], s.file, { type: blobCache[s.key].type || "application/octet-stream" }));
+    dt.items.add(
+      new File([blobCache[s.key]], s.file, { type: blobCache[s.key].type || "application/octet-stream" })
+    );
     $<HTMLInputElement>("file").files = dt.files;
   } catch (e) {
     fail("Could not load sample: " + (e instanceof Error ? e.message : String(e)));
@@ -150,8 +157,10 @@ async function selectSample(s: Sample, card: HTMLButtonElement): Promise<void> {
   applyPresets(presets, "standard");
   renderDocSizeNote(s.tok, presets !== DEFAULT_PRESETS);
   announce(
-    s.nm + (s.tok ? " loaded (~" + s.tok.toLocaleString() + " tokens). " : " loaded. ") +
-    s.q.length + " suggested questions available below the question field."
+    s.nm +
+      (s.tok ? " loaded (~" + s.tok.toLocaleString() + " tokens). " : " loaded. ") +
+      s.q.length +
+      " suggested questions available below the question field."
   );
 }
 
@@ -179,7 +188,9 @@ function renderQChips(questions: string[]): void {
 // Highlight whichever chip matches the current text (if any).
 function syncQChips(): void {
   const v = $<HTMLTextAreaElement>("task").value.trim();
-  document.querySelectorAll<HTMLButtonElement>(".qchip").forEach((c) => c.classList.toggle("active", c.dataset.q === v));
+  document
+    .querySelectorAll<HTMLButtonElement>(".qchip")
+    .forEach((c) => c.classList.toggle("active", c.dataset.q === v));
 }
 $<HTMLTextAreaElement>("task").addEventListener("input", syncQChips);
 
@@ -231,6 +242,9 @@ syncBudget();
 // fact", so all three presets silently become "return the whole file" with
 // no real choice. Below the default "deep dive" ceiling, scale all three
 // presets to the document's own size so they stay meaningfully different.
+// "standard" (4000) intentionally matches DEFAULT_TOKEN_BUDGET in
+// src/config.ts — this file is a separately-built client bundle with no
+// import path to the server code, so the number is copied, not shared.
 const DEFAULT_PRESETS: BudgetPresets = { quick: 1000, standard: 4000, deep: 8000 };
 
 function computePresets(rawTokens: number | null): BudgetPresets {
@@ -320,9 +334,10 @@ async function estimateUploadSize(f: File): Promise<void> {
     // Formats markitdown can't read at all (e.g. a plain image with no
     // OCR/captioning backend configured) surface their real reason here
     // instead of a generic fallback, so the note stays honest either way.
-    el.textContent = e instanceof Error && e.message
-      ? `Couldn't pre-measure this file: ${e.message}`
-      : "Size will be shown after you compile.";
+    el.textContent =
+      e instanceof Error && e.message
+        ? `Couldn't pre-measure this file: ${e.message}`
+        : "Size will be shown after you compile.";
   }
 }
 
@@ -341,7 +356,8 @@ $<HTMLInputElement>("file").addEventListener("change", () => {
   const f = $<HTMLInputElement>("file").files?.[0];
   $("fileErr").classList.add("hidden");
   if (f && f.size > MAX_FILE_BYTES) {
-    $("fileErr").textContent = `"${f.name}" is ${(f.size / 1e6).toFixed(1)} MB — over the 50 MB limit. Pick a smaller file.`;
+    $("fileErr").textContent =
+      `"${f.name}" is ${(f.size / 1e6).toFixed(1)} MB — over the 50 MB limit. Pick a smaller file.`;
     $("fileErr").classList.remove("hidden");
     $<HTMLInputElement>("file").value = "";
     return;
@@ -369,14 +385,6 @@ $<HTMLInputElement>("file").addEventListener("change", () => {
   }
 });
 
-// The GitHub links are placeholders until this repo is public — warn in
-// the console rather than ship a silently dead link to judges.
-document.querySelectorAll("[data-placeholder]").forEach((a) => {
-  a.addEventListener("click", () => {
-    console.warn("Repo link is a placeholder — set the real GitHub URL before sharing this page.");
-  });
-});
-
 function countUp(el: HTMLElement, to: number, suffix = "", dur = 650): void {
   const start = performance.now();
   const step = (now: number) => {
@@ -397,8 +405,13 @@ function bumpSavings(d: CompileApiResult): void {
   const el = $("sessionSaved");
   el.classList.remove("hidden");
   el.innerHTML =
-    "saved this session: $" + savedUsd.toFixed(4) +
-    "<small>" + savedTok.toLocaleString() + " tokens · ~$" + (savedUsd * 1000).toFixed(0) + " per 1,000 reads</small>";
+    "saved this session: $" +
+    savedUsd.toFixed(4) +
+    "<small>" +
+    savedTok.toLocaleString() +
+    " tokens · ~$" +
+    (savedUsd * 1000).toFixed(0) +
+    " per 1,000 reads</small>";
 }
 
 function formData(): FormData | null {
@@ -486,8 +499,8 @@ $<HTMLFormElement>("compileForm").addEventListener("submit", async (e) => {
       ? "This file was already converted, so we reused the cached markdown and skipped conversion."
       : "First time we saw this file, so we converted it and cached the result.";
     $("cacheNote").innerHTML = d.cache_hit
-      ? "⚡ <b>Conversion cached.</b> We recognised this exact file (matched by content hash), so we reused the markdown from a previous run instead of re-converting it. Only the file→markdown step is cached — your question was still ranked fresh just now."
-      : "<b>Converted fresh.</b> First time we've seen this exact file, so we converted it to markdown and cached it by content hash. Ask another question on the same file and this step is skipped (you'll see “⚡ conversion cached”). Edit the file and it converts again.";
+      ? "⚡ <strong>Conversion cached.</strong> We recognised this exact file (matched by content hash), so we reused the markdown from a previous run instead of re-converting it. Only the file→markdown step is cached — your question was still ranked fresh just now."
+      : "<strong>Converted fresh.</strong> First time we've seen this exact file, so we converted it to markdown and cached it by content hash. Ask another question on the same file and this step is skipped (you'll see “⚡ conversion cached”). Edit the file and it converts again.";
     $("rerankBadge").textContent = d.rerank_used ? "llm rerank" : "bm25 ranking";
     $("omitBadge").textContent = d.omitted_sections.length + " sections omitted";
     $("out").textContent = d.markdown;
@@ -529,7 +542,7 @@ function renderSections(d: CompileApiResult): void {
   cards.forEach((s, i) => {
     const el = document.createElement("div");
     el.className = "seccard";
-    const nmText = s.section.split(" > ").pop() || s.section;
+    const nmText = lastCrumb(s.section);
     const h = document.createElement("div");
     h.className = "h";
     const nmSpan = document.createElement("span");
@@ -553,7 +566,8 @@ function renderSections(d: CompileApiResult): void {
     }
     const meta = document.createElement("span");
     meta.className = "meta";
-    meta.textContent = (s.relevance != null ? "relevance " + s.relevance + "% · " : "") + s.tokens + " tokens";
+    meta.textContent =
+      (s.relevance != null ? "relevance " + s.relevance + "% · " : "") + s.tokens + " tokens";
     h.append(nmSpan, meta);
     el.appendChild(h);
     if (s.relevance != null) {
@@ -585,10 +599,14 @@ function renderMultiNote(d: CompileApiResult): void {
     .map((q, i) => '<li><span class="qtag">Q' + (i + 1) + "</span> " + esc(q) + "</li>")
     .join("");
   el.innerHTML =
-    "<b>Detected " + d.queries.length + " questions.</b> Each was ranked on its own and the " +
+    "<strong>Detected " +
+    d.queries.length +
+    " questions.</strong> Each was ranked on its own and the " +
     "top sections merged (round-robin), so every question is represented rather than the keyword-heaviest one " +
     "crowding out the rest. The tag on each section below shows which question it best answers." +
-    '<ol style="margin:6px 0 0;padding-left:20px;list-style:none">' + items + "</ol>";
+    '<ol style="margin:6px 0 0;padding-left:20px;list-style:none">' +
+    items +
+    "</ol>";
   el.classList.remove("hidden");
 }
 
@@ -607,8 +625,11 @@ function renderFloorNote(d: CompileApiResult): void {
     // Whole file fit under the budget — this is the "deep dive looks the same"
     // case. Say so, so it doesn't read as a no-op.
     el.innerHTML =
-      "<b>Whole file fit your budget.</b> The document is " + d.raw_tokens.toLocaleString() +
-      " tokens, under your " + budget.toLocaleString() + "-token budget, so it was returned in full — " +
+      "<strong>Whole file fit your budget.</strong> The document is " +
+      d.raw_tokens.toLocaleString() +
+      " tokens, under your " +
+      budget.toLocaleString() +
+      "-token budget, so it was returned in full — " +
       "nothing to leave out. Lower the budget (try “quick fact”) to see compilation kick in.";
     el.classList.remove("hidden");
     return;
@@ -624,11 +645,21 @@ function renderFloorNote(d: CompileApiResult): void {
   if (topOmit && d.selected_sections.length === 0) {
     const need = Math.ceil((topOmit.tokens + 80) / 100) * 100;
     el.innerHTML =
-      "<b>Nothing fit your budget.</b> Even the best match — “" + esc(topOmit.section.split(" > ").pop()) +
-      "” (" + topOmit.relevance + "% relevant, " + topOmit.tokens.toLocaleString() + " tokens) — is larger than your " +
-      budget.toLocaleString() + "-token budget, so no section is shown below. " +
-      "Raise the budget to about " + need.toLocaleString() + " tokens, or fetch it directly with " +
-      "<code>expand_section</code> (<code>" + topOmit.id + "</code>).";
+      "<strong>Nothing fit your budget.</strong> Even the best match — “" +
+      esc(lastCrumb(topOmit.section)) +
+      "” (" +
+      topOmit.relevance +
+      "% relevant, " +
+      topOmit.tokens.toLocaleString() +
+      " tokens) — is larger than your " +
+      budget.toLocaleString() +
+      "-token budget, so no section is shown below. " +
+      "Raise the budget to about " +
+      need.toLocaleString() +
+      " tokens, or fetch it directly with " +
+      "<code>expand_section</code> (<code>" +
+      topOmit.id +
+      "</code>).";
     el.classList.remove("hidden");
     return;
   }
@@ -639,11 +670,21 @@ function renderFloorNote(d: CompileApiResult): void {
   if (topOmit && (topOmit.relevance || 0) > selRel) {
     const need = Math.ceil((topOmit.tokens + 80) / 100) * 100;
     el.innerHTML =
-      "<b>The most relevant section didn’t fit.</b> “" + esc(topOmit.section.split(" > ").pop()) +
-      "” (" + topOmit.relevance + "% relevant, " + topOmit.tokens.toLocaleString() + " tokens) is larger than your " +
-      budget.toLocaleString() + "-token budget, so lower-relevance sections are shown instead. " +
-      "Raise the budget to about " + need.toLocaleString() + " tokens, or fetch it directly below with " +
-      "<code>expand_section</code> (<code>" + topOmit.id + "</code>).";
+      "<strong>The most relevant section didn’t fit.</strong> “" +
+      esc(lastCrumb(topOmit.section)) +
+      "” (" +
+      topOmit.relevance +
+      "% relevant, " +
+      topOmit.tokens.toLocaleString() +
+      " tokens) is larger than your " +
+      budget.toLocaleString() +
+      "-token budget, so lower-relevance sections are shown instead. " +
+      "Raise the budget to about " +
+      need.toLocaleString() +
+      " tokens, or fetch it directly below with " +
+      "<code>expand_section</code> (<code>" +
+      topOmit.id +
+      "</code>).";
     el.classList.remove("hidden");
     return;
   }
@@ -652,21 +693,29 @@ function renderFloorNote(d: CompileApiResult): void {
   if (d.rerank_used) {
     if (budgetBound) {
       el.innerHTML =
-        "<b>Budget-bound.</b> The compiled context nearly fills your " +
-        budget.toLocaleString() + "-token budget — raising it would let more sections in.";
+        "<strong>Budget-bound.</strong> The compiled context nearly fills your " +
+        budget.toLocaleString() +
+        "-token budget — raising it would let more sections in.";
     } else {
       return;
     }
   } else if (budgetBound) {
     el.innerHTML =
-      "<b>Budget-bound.</b> Selection stopped because it hit your " +
-      budget.toLocaleString() + "-token ceiling, not the relevance floor. A larger budget would pull in more sections.";
+      "<strong>Budget-bound.</strong> Selection stopped because it hit your " +
+      budget.toLocaleString() +
+      "-token ceiling, not the relevance floor. A larger budget would pull in more sections.";
   } else {
     el.innerHTML =
-      "<b>Relevance-bound, not budget-bound.</b> Only <b>" + d.selected_sections.length +
-      "</b> section" + (d.selected_sections.length === 1 ? "" : "s") + " cleared the 15% relevance floor — " +
-      "the rest scored too low to matter for this question. Used <b>" + d.tokens_used.toLocaleString() +
-      "</b> of your " + budget.toLocaleString() + "-token budget, so a bigger budget (e.g. “deep dive”) adds nothing here. " +
+      "<strong>Relevance-bound, not budget-bound.</strong> Only <strong>" +
+      d.selected_sections.length +
+      "</strong> section" +
+      (d.selected_sections.length === 1 ? "" : "s") +
+      " cleared the 15% relevance floor — " +
+      "the rest scored too low to matter for this question. Used <strong>" +
+      d.tokens_used.toLocaleString() +
+      "</strong> of your " +
+      budget.toLocaleString() +
+      "-token budget, so a bigger budget (e.g. “deep dive”) adds nothing here. " +
       "That’s the point: the tool sends what’s relevant, not whatever fills the budget.";
   }
   el.classList.remove("hidden");
@@ -679,9 +728,14 @@ function makeChip(o: SectionInfo, d: CompileApiResult, exp: HTMLElement): HTMLBu
   b.type = "button";
   b.className = "ochip";
   b.textContent =
-    o.id + " · " + (o.section.split(" > ").pop() || o.section) +
-    (o.relevance != null ? " · rel " + o.relevance + "%" : "") + " (~" + o.tokens + " tok)";
-  b.setAttribute("aria-label", "Fetch omitted section: " + (o.section.split(" > ").pop() || o.section));
+    o.id +
+    " · " +
+    lastCrumb(o.section) +
+    (o.relevance != null ? " · rel " + o.relevance + "%" : "") +
+    " (~" +
+    o.tokens +
+    " tok)";
+  b.setAttribute("aria-label", "Fetch omitted section: " + lastCrumb(o.section));
   b.onclick = async () => {
     if (b.classList.contains("done")) return;
     b.disabled = true;
@@ -695,13 +749,14 @@ function makeChip(o: SectionInfo, d: CompileApiResult, exp: HTMLElement): HTMLBu
       if (e.error) throw new Error(e.error);
       const blk = document.createElement("div");
       blk.className = "expblk";
-      blk.innerHTML = '<div class="t">expand_section("' + o.id + '") → ' + (e.tokens_used || "?") + " tokens</div>";
+      blk.innerHTML =
+        '<div class="t">expand_section("' + o.id + '") → ' + (e.tokens_used || "?") + " tokens</div>";
       const pre = document.createElement("pre");
       pre.textContent = e.markdown;
       blk.appendChild(pre);
       exp.appendChild(blk);
       b.classList.add("done");
-      announce("Fetched section: " + (o.section.split(" > ").pop() || o.section));
+      announce("Fetched section: " + lastCrumb(o.section));
     } catch (err) {
       fail(err instanceof Error ? err.message : String(err));
     } finally {

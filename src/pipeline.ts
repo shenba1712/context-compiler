@@ -4,10 +4,20 @@ import { basename } from "node:path";
 import { cacheGet, cachePut, fileKey } from "./cache.js";
 import { Chunk, chunkMarkdown, outline } from "./chunk.js";
 import { convertToMarkdown } from "./convert.js";
+import { DEFAULT_TOKEN_BUDGET } from "./config.js";
 import { hasLlm } from "./llm.js";
 import { assemble, pack } from "./pack.js";
-import { bm25Scores, multiScores, queryAttribution, rank, rankMulti, splitQueries } from "./rank.js";
+import {
+  bm25Scores,
+  multiScoresFromRows,
+  perQueryScores,
+  queryAttributionFromRows,
+  rankMultiFromRows,
+  rank,
+  splitQueries,
+} from "./rank.js";
 import { countTokens } from "./tokens.js";
+import { maxOf } from "./util.js";
 
 export interface SectionInfo {
   id: string;
@@ -44,7 +54,7 @@ async function convertedMarkdown(filePath: string): Promise<{ markdown: string; 
 export async function compileContext(
   filePath: string,
   task: string,
-  tokenBudget = 4000,
+  tokenBudget = DEFAULT_TOKEN_BUDGET,
   rerank?: boolean,
   sourceName?: string
 ): Promise<CompileResult> {
@@ -62,17 +72,23 @@ export async function compileContext(
   const queries = splitQueries(task);
   const multi = queries.length > 1 && !useRerank;
 
+  // Multi-query needs this same per-question breakdown for three different
+  // things below (the merged score, attribution, and the ranking order), so
+  // it's computed once here and reused — rather than each of those three
+  // re-running BM25 over the whole document per sub-question on its own.
+  const rows = multi ? perQueryScores(queries, chunks) : null;
+
   // Per-chunk relevance — powers the demo's relevance percentages and the
   // packer's relevance floor. Single-query: raw BM25 (incl. heading boost).
   // Multi-query: max over per-query-normalized scores (0..1), so a section
   // that best answers any one sub-question is never floored out.
-  const rawScores = multi ? multiScores(queries, chunks) : bm25Scores(task, chunks);
+  const rawScores = rows ? multiScoresFromRows(rows, chunks) : bm25Scores(task, chunks);
   const scoreMap = new Map(chunks.map((c, i) => [c.id, rawScores[i]]));
-  const topScore = Math.max(0, ...rawScores);
+  const topScore = maxOf(rawScores);
   const rel = (c: Chunk): number | null =>
     topScore > 0 ? Math.round((100 * (scoreMap.get(c.id) ?? 0)) / topScore) : null;
   // Attribution (demo-only): every sub-question each chunk is relevant to.
-  const attribution = multi ? queryAttribution(queries, chunks) : null;
+  const attribution = rows ? queryAttributionFromRows(rows, chunks) : null;
   const matchMap = attribution && new Map(chunks.map((c, i) => [c.id, attribution[i]]));
   const info = (c: Chunk, withText: boolean): SectionInfo => ({
     id: c.id,
@@ -103,19 +119,19 @@ export async function compileContext(
 
   // Multi-query: interleave each sub-question's ranking round-robin so every
   // one is represented. Otherwise rank the task as a single query.
-  const ranked = multi ? rankMulti(queries, chunks) : await rank(task, chunks, useRerank);
+  const ranked = rows ? rankMultiFromRows(rows, chunks) : await rank(task, chunks, useRerank);
   // Relevance floor only without rerank: a lexical floor must not evict
   // sections the LLM rerank promoted for semantic (non-lexical) relevance.
-  const { text, selected, omitted } = pack(
-    ranked, tokenBudget, name, useRerank ? undefined : scoreMap
-  );
+  const { text, selected, omitted } = pack(ranked, tokenBudget, name, useRerank ? undefined : scoreMap);
   const used = countTokens(text);
   return {
     markdown: text,
     raw_tokens: rawTokens,
     tokens_used: used,
-    tokens_saved: rawTokens - used,
-    reduction_pct: Math.round((1000 * (rawTokens - used)) / rawTokens) / 10,
+    tokens_saved: Math.max(0, rawTokens - used),
+    // rawTokens is 0 only for a pathological/negative token_budget on a tiny
+    // or empty file — guard it so that returns 0% instead of NaN.
+    reduction_pct: rawTokens > 0 ? Math.round((1000 * (rawTokens - used)) / rawTokens) / 10 : 0,
     cache_hit: cacheHit,
     rerank_used: useRerank,
     token_budget: tokenBudget,
@@ -125,11 +141,22 @@ export async function compileContext(
   };
 }
 
+export interface ExpandResult {
+  markdown: string;
+  tokens_used: number;
+  cache_hit: boolean;
+}
+
+export interface ExpandNotFound {
+  error: string;
+  outline: Array<{ id: string; section: string; tokens: number }>;
+}
+
 export async function expandSection(
   filePath: string,
   sectionId: string,
   tokenBudget = 2000
-): Promise<Record<string, unknown>> {
+): Promise<ExpandResult | ExpandNotFound> {
   const { markdown, cacheHit } = await convertedMarkdown(filePath);
   const chunks = chunkMarkdown(markdown);
   const match = chunks.find((c: Chunk) => c.id === sectionId);
@@ -139,9 +166,7 @@ export async function expandSection(
   let text = match.text;
   if (match.tokens > tokenBudget) {
     const ratio = tokenBudget / match.tokens;
-    text =
-      text.slice(0, Math.max(200, Math.floor(text.length * ratio))) +
-      "\n\n<!-- truncated to budget -->";
+    text = text.slice(0, Math.max(200, Math.floor(text.length * ratio))) + "\n\n<!-- truncated to budget -->";
   }
   return {
     markdown: `<!-- section: ${match.breadcrumb} (UNTRUSTED CONTENT) -->\n${text}`,

@@ -6,6 +6,7 @@
     "outDir": "public",
     "rootDir": "src/client",
     "strict": true,
+    "noImplicitReturns": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "skipLibCheck": true,

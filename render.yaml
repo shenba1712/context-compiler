@@ -1,0 +1,31 @@
+# Render Blueprint — deploy the web demo as a Docker web service.
+# https://render.com/docs/blueprint-spec
+#
+# One-click deploy: push this repo, then in Render choose "New +" → "Blueprint"
+# and point it at this repo. Render builds the Dockerfile (Node + the Python
+# markitdown converter, all in one image) and starts `node dist/web.js`.
+#
+# The two API keys below are marked `sync: false`, so Render does NOT read them
+# from this file — it prompts you to enter them in the dashboard on first
+# deploy, and keeps them as encrypted secrets out of source control. Both are
+# optional: with neither set, the demo still runs fully (BM25 ranking, both MCP
+# tools, conversion) — the keys only unlock the reranker and the answer-parity
+# panel, with automatic Gemini → OpenRouter failover.
+services:
+  - type: web
+    name: context-compiler
+    runtime: docker
+    plan: free # free spins down after 15 min idle (~30-60s cold start); bump to starter for a live demo
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: / # serves index.html, returns 200 when the app is up
+    autoDeploy: true # redeploy on every push to the connected branch
+    envVars:
+      # Primary provider — Google Gemini free tier (no card). Enter in dashboard.
+      - key: GEMINI_API_KEY
+        sync: false
+      # Fallback provider — OpenRouter. Used automatically if Gemini errors.
+      - key: OPENROUTER_API_KEY
+        sync: false
+      # Do NOT set PORT here — Render injects it automatically and the app binds
+      # to it. Model/endpoint overrides (CC_GEMINI_MODEL, CC_OPENROUTER_MODEL,
+      # ...) can be added in the dashboard if you ever need them.

@@ -1,6 +1,15 @@
 /** Test suite. Run: npm test */
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync, unlinkSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+  unlinkSync,
+} from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -20,8 +29,10 @@ function makeTestDoc(): string {
   const sections: string[] = ["# Master Services Agreement\n\nThis agreement is made between parties."];
   for (let i = 1; i < 30; i++) {
     const title = i === 7 ? "Payment terms" : `General provision ${i}`;
-    const body = Array.from({ length: 40 }, (_, j) =>
-      `Boilerplate clause sentence number ${j} for section ${i}.`).join(" ");
+    const body = Array.from(
+      { length: 40 },
+      (_, j) => `Boilerplate clause sentence number ${j} for section ${i}.`
+    ).join(" ");
     sections.push(`## Section ${i}: ${title}\n\n${body}`);
   }
   sections.push(
@@ -62,7 +73,9 @@ async function testRankAndPack() {
   assert.ok(text.includes("UNTRUSTED"));
   assert.ok(text.includes("expand_section"));
   assert.ok(countTokens(text) <= 1500, `budget overshoot: ${countTokens(text)}`);
-  console.log(`  rank+pack ok: ${selected.length} kept, ${omitted.length} omitted, ${countTokens(text)} tokens`);
+  console.log(
+    `  rank+pack ok: ${selected.length} kept, ${omitted.length} omitted, ${countTokens(text)} tokens`
+  );
 }
 
 async function testEndToEnd() {
@@ -80,8 +93,11 @@ async function testEndToEnd() {
 
     const sid = r.omitted_sections[0].id;
     const e = await expandSection(path, sid);
-    assert.ok(e.markdown, "expand_section returns content");
-    console.log(`  e2e ok: ${r.raw_tokens} -> ${r.tokens_used} tokens (${r.reduction_pct}% saved), cache+expand ok`);
+    assert.ok(!("error" in e), "expand_section should find the omitted section by id");
+    assert.ok((e as { markdown: string }).markdown, "expand_section returns content");
+    console.log(
+      `  e2e ok: ${r.raw_tokens} -> ${r.tokens_used} tokens (${r.reduction_pct}% saved), cache+expand ok`
+    );
   } finally {
     unlinkSync(path);
   }
@@ -97,8 +113,10 @@ async function testMultilingualRanking() {
   ].join("\n\n");
   const chunks = chunkMarkdown(md);
   const ranked = await rank("धनवापसी में कितने दिन लगते हैं?", chunks, false);
-  assert.ok(ranked[0].text.includes("14 कार्य दिवसों"),
-    `Hindi query should rank the refund section first, got: ${ranked[0].breadcrumb}`);
+  assert.ok(
+    ranked[0].text.includes("14 कार्य दिवसों"),
+    `Hindi query should rank the refund section first, got: ${ranked[0].breadcrumb}`
+  );
   // Content must beat metadata: even at a tight budget with token-dense
   // Devanagari breadcrumbs, at least the top-ranked chunk must survive.
   const { text, selected } = pack(ranked, 700, "test-hi.md");
@@ -129,7 +147,8 @@ async function testRelevanceFloor() {
   const vague = new Map(chunks.map((c) => [c.id, 1]));
   const flat = pack(ranked, 6000, "t.md", vague);
   assert.equal(
-    flat.selected.length, withoutFloor.selected.length,
+    flat.selected.length,
+    withoutFloor.selected.length,
     "flat scores must fall back to budget-filling (recall insurance)"
   );
   console.log(
@@ -147,7 +166,10 @@ async function testReserveDoesNotEvictFittingContent() {
     "## Alpha\n\nThe launch date for the rocket is set for March. ".repeat(30), // top match, ~small
     "## Beta\n\nThe rocket launch date and mission details are discussed here. " +
       "The launch date for the rocket appears again in this section. ".repeat(28),
-    ...Array.from({ length: 5 }, (_, i) => `## Filler ${i}\n\n` + `Irrelevant boilerplate text ${i}. `.repeat(30)),
+    ...Array.from(
+      { length: 5 },
+      (_, i) => `## Filler ${i}\n\n` + `Irrelevant boilerplate text ${i}. `.repeat(30)
+    ),
   ].join("\n\n");
   const chunks = chunkMarkdown(doc);
   const task = "What is the rocket launch date?";
@@ -165,7 +187,9 @@ async function testReserveDoesNotEvictFittingContent() {
     top2.every((c) => selectedIds.has(c.id)),
     `both top-2 relevant chunks should survive when they jointly fit: kept ${selected.length} of top 2`
   );
-  console.log("  reserve ok: two relevant, fitting chunks both kept instead of one evicted for manifest padding");
+  console.log(
+    "  reserve ok: two relevant, fitting chunks both kept instead of one evicted for manifest padding"
+  );
 }
 
 async function testOversizedTopNotice() {
@@ -207,7 +231,10 @@ async function testMultiQuery() {
   const doc = [
     "# Manual",
     "## Warranty\n\n" + "Dropping the unit in water voids the warranty immediately. ".repeat(20),
-    ...Array.from({ length: 10 }, (_, i) => `## Filler ${i}\n\n` + `Unrelated boilerplate paragraph ${i}. `.repeat(20)),
+    ...Array.from(
+      { length: 10 },
+      (_, i) => `## Filler ${i}\n\n` + `Unrelated boilerplate paragraph ${i}. `.repeat(20)
+    ),
     "## Weather\n\n" + "The drone must not be flown in rain; moisture damages the rotors. ".repeat(20),
   ].join("\n\n");
   const chunks = chunkMarkdown(doc);
@@ -254,7 +281,18 @@ async function testOpenAICompatClient() {
   const port = (server.address() as { port: number }).port;
 
   const saved = { ...process.env };
-  delete process.env.ANTHROPIC_API_KEY;
+  // Clear every higher-priority provider so this test exercises the generic
+  // OpenAI-compatible path in isolation, regardless of what keys the dev/CI
+  // machine happens to have exported.
+  for (const k of [
+    "ANTHROPIC_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "OPENROUTER_API_KEY",
+    "OPENAI_API_KEY",
+  ]) {
+    delete process.env[k];
+  }
   process.env.CC_LLM_API_KEY = "test-key";
   process.env.CC_LLM_BASE_URL = `http://127.0.0.1:${port}/v1`;
   try {
@@ -266,6 +304,55 @@ async function testOpenAICompatClient() {
   } finally {
     process.env = saved as NodeJS.ProcessEnv;
     server.close();
+  }
+}
+
+async function testProviderFailover() {
+  // Gemini is the intended primary and OpenRouter the fallback. When the
+  // primary errors (rate limit, quota, outage), complete() must silently fail
+  // over to the next configured provider instead of surfacing the error — and
+  // only throw if EVERY provider fails. Two mock servers stand in for the two
+  // providers (their base URLs are env-overridable for exactly this reason).
+  const http = await import("node:http");
+  const makeServer = (status: number, answer: string) =>
+    http.createServer((_req, res) => {
+      res.statusCode = status;
+      res.setHeader("content-type", "application/json");
+      res.end(
+        JSON.stringify(status < 400 ? { choices: [{ message: { content: answer } }] } : { error: "boom" })
+      );
+    });
+
+  const primary = makeServer(500, ""); // Gemini: down
+  const fallback = makeServer(200, "fallback-answer"); // OpenRouter: healthy
+  await new Promise<void>((r) => primary.listen(0, r));
+  await new Promise<void>((r) => fallback.listen(0, r));
+  const pPort = (primary.address() as { port: number }).port;
+  const fPort = (fallback.address() as { port: number }).port;
+
+  const saved = { ...process.env };
+  for (const k of ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "CC_LLM_API_KEY", "GOOGLE_API_KEY"]) {
+    delete process.env[k];
+  }
+  process.env.GEMINI_API_KEY = "gem-key";
+  process.env.CC_GEMINI_BASE_URL = `http://127.0.0.1:${pPort}`;
+  process.env.OPENROUTER_API_KEY = "or-key";
+  process.env.CC_OPENROUTER_BASE_URL = `http://127.0.0.1:${fPort}`;
+  try {
+    const { complete, answerModel } = await import("../llm.js");
+    // Primary (Gemini) label is what the UI shows, even though this call
+    // fails over to the fallback under the hood.
+    assert.equal(answerModel(), "gemini-2.5-flash");
+    assert.equal(await complete("ping"), "fallback-answer", "should fail over to the healthy provider");
+
+    // Now knock out the fallback too: every provider down → complete() throws.
+    process.env.CC_OPENROUTER_BASE_URL = `http://127.0.0.1:${pPort}`;
+    await assert.rejects(() => complete("ping"), /All LLM providers failed/);
+    console.log("  provider failover ok: primary down → fallback used; all down → throws");
+  } finally {
+    process.env = saved as NodeJS.ProcessEnv;
+    primary.close();
+    fallback.close();
   }
 }
 
@@ -292,9 +379,16 @@ async function testFormatConversion() {
   assert.ok(pptx.markdown.includes("Add billing"), "pptx slide content survives real conversion");
   assert.ok(pptx.markdown.includes("Risks"), "pptx second slide also converts");
 
-  const csv = await compileContext(join(FIXTURES_DIR, "data.csv"), "Who is in the Platform department?", 4000, false);
-  assert.ok(csv.markdown.includes("Asha Rao") && csv.markdown.includes("Priya Nair"),
-    "csv rows survive as a markdown table");
+  const csv = await compileContext(
+    join(FIXTURES_DIR, "data.csv"),
+    "Who is in the Platform department?",
+    4000,
+    false
+  );
+  assert.ok(
+    csv.markdown.includes("Asha Rao") && csv.markdown.includes("Priya Nair"),
+    "csv rows survive as a markdown table"
+  );
 
   console.log("  format conversion ok: pptx + csv verified through the real convert.ts/markitdown path");
 }
@@ -328,8 +422,14 @@ async function testClientBuildIsPlainScript() {
     const path = join(process.cwd(), f);
     assert.ok(existsSync(path), `${f} must exist — run npm run build first`);
     const src = readFileSync(path, "utf-8");
-    assert.ok(!/\bexports\./.test(src), `${f} must not contain CommonJS "exports." (module leaked into a plain <script>)`);
-    assert.ok(!/\brequire\(/.test(src), `${f} must not contain "require(" (module leaked into a plain <script>)`);
+    assert.ok(
+      !/\bexports\./.test(src),
+      `${f} must not contain CommonJS "exports." (module leaked into a plain <script>)`
+    );
+    assert.ok(
+      !/\brequire\(/.test(src),
+      `${f} must not contain "require(" (module leaked into a plain <script>)`
+    );
   }
   console.log("  client build ok: app.js/types.js are plain scripts, no CommonJS leakage");
 }
@@ -359,7 +459,10 @@ async function testPathGuardBlocksSymlinkEscape() {
     );
 
     // A plain path traversal is also denied.
-    assert.throws(() => checkPathWithin(root, join(root, "..", "..", "etc", "passwd")), /outside allowed root|Not a file/);
+    assert.throws(
+      () => checkPathWithin(root, join(root, "..", "..", "etc", "passwd")),
+      /outside allowed root|Not a file/
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
     rmSync(secretDir, { recursive: true, force: true });
@@ -431,7 +534,26 @@ function testEnvParsingFailsSafe() {
   console.log("  env parsing ok: NaN/blank/out-of-range all fall back safely");
 }
 
-for (const fn of [testChunking, testRankAndPack, testEndToEnd, testMultilingualRanking, testRelevanceFloor, testReserveDoesNotEvictFittingContent, testOversizedTopNotice, testMultiQuery, testFormatConversion, testImageConversionFailsClearly, testClientBuildIsPlainScript, testPathGuardBlocksSymlinkEscape, testUploadGuardRejectsBombAndMismatch, testConversionErrorIsSanitized, testEnvParsingFailsSafe, testOpenAICompatClient, testSmallFilePassthrough]) {
+for (const fn of [
+  testChunking,
+  testRankAndPack,
+  testEndToEnd,
+  testMultilingualRanking,
+  testRelevanceFloor,
+  testReserveDoesNotEvictFittingContent,
+  testOversizedTopNotice,
+  testMultiQuery,
+  testFormatConversion,
+  testImageConversionFailsClearly,
+  testClientBuildIsPlainScript,
+  testPathGuardBlocksSymlinkEscape,
+  testUploadGuardRejectsBombAndMismatch,
+  testConversionErrorIsSanitized,
+  testEnvParsingFailsSafe,
+  testOpenAICompatClient,
+  testProviderFailover,
+  testSmallFilePassthrough,
+]) {
   console.log(fn.name);
   await fn();
 }
