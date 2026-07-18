@@ -12,23 +12,29 @@ Prefer the **hosted demo + in-repo Run agent** for the recording. MCP in a codin
       for failover when Gemini free tier hiccups).
 - [ ] Pre-warm: free Render sleeps when idle — open the URL **~1 minute early**
       (first hit can take 30–60s). Compile the hero sample once so conversion
-      is cached. Say “cached” when the badge shows; it’s a feature.
+      is cached. Say “cached” when the badge shows; it’s a feature. Expect a
+      **spinner banner** while Compile / Prove / Agent wait — not buried status
+      text.
 - [ ] **Prove answer parity** and **Run agent** both work on the hero sample
       (needs a server-side LLM key — Gemini free tier is enough; OpenRouter is
-      the automatic backup).
+      the automatic backup; dead-model 404s are cached briefly; soft 429s pause
+      before the next chain entry).
 - [ ] Hero setup (rehearse numbers so you don’t invent them live):
       - Sample: **Pride and Prejudice** (or Kestrel K2 / Meridian report).
       - Question: *What does Mr. Darcy say about Elizabeth at the Meryton assembly?*
       - Budget: **2,000** (or leave the default ~4,000 — still a huge cut).
-        Same slider = Compile pack budget **and** Agent soft reading ceiling.
+        Same slider = Compile hard pack ceiling **and** Agent soft reading ceiling.
       - Expect ~90%+ fewer tokens with the answer still in the compiled markdown.
 - [ ] Rehearse a **controlled miss**: tiny budget (e.g. 800) or a vague /
-      paraphrased question so the gold section lands in **Omitted**. Expand
-      that section once — note the Prove budget warning — and confirm recovery.
-      Do this twice before you hit record.
-- [ ] Know the two Prove buttons: quiet **Prove…** next to Compile (skip the
-      results view), and **Prove answer parity** under results (includes any
-      expands you clicked).
+      paraphrased question so the gold section lands in **Omitted**. Click to
+      **peek** (does not change Prove tokens). Optionally check **Include in
+      Prove** — only then does the effective Prove context grow — and confirm
+      recovery. Dismiss × closes a peek without including it. Do this twice
+      before you hit record.
+- [ ] Know the two Prove buttons: quiet **Prove…** next to Compile (file +
+      budget only; skip results), and **Prove answer parity** under results
+      (compile + any **Include in Prove** expands). Peeks alone do not count.
+      Prove is not Agent.
 - [ ] Close other tabs. 1080p. Cursor highlighting on if you have it.
 
 ## Script
@@ -43,7 +49,8 @@ Prefer the **hosted demo + in-repo Run agent** for the recording. MCP in a codin
 ### 0:20–0:55 — The money demo (Compile)
 
 Actions: pick **Pride and Prejudice** (or upload your hero file) → paste the
-rehearsed question → budget **2,000** → **Compile**.
+rehearsed question → budget **2,000** → **Compile**. Watch the spinner banner
+while it runs.
 
 > "I pick a classic novel, ask a real question, and set a token budget.
 > That slider is the hard pack ceiling for Compile — and later, the Agent’s
@@ -57,30 +64,33 @@ rehearsed question → budget **2,000** → **Compile**.
 Point at: red/green bars, cost meter, session savings, `⚡ conversion cached`
 on the second run if you show one.
 
-### 0:55–1:20 — Expand + Prove (the proof)
+### 0:55–1:20 — Peek + Prove (the proof)
 
-Actions: if an important section is omitted, click it to expand (optional) —
-watch the note that expands raise effective Prove context above the slider.
-Then **Prove answer parity** (results button), or the quiet top **Prove…**.
+Actions: if an important section is omitted, click it to **peek** (optional).
+If you want it in the parity prompt, check **Include in Prove** — watch the
+note that only included expands raise effective Prove context. Dismiss × if
+you were only looking. Then **Prove answer parity** (results button), or the
+quiet top **Prove…** for a no-expand proof.
 
 > "Cheap context is worthless if the answer changes. So we ask the model the
 > same question twice — once from the full converted file, once from the
-> compiled slice, including any sections I expanded. Side by side. Same
-> facts. A fraction of the tokens.
+> compiled slice, plus only the sections I chose to Include in Prove. Side
+> by side. Same facts. A fraction of the tokens.
 > Judges: this button is live. Try to break it."
 
 If wording differs slightly: *“not identical words — identical facts.”*
 Never claim byte-identical prose.
 
-If you expanded: briefly point at the expand budget note — *“Compile stayed
-under the slider; expands add on top so Prove doesn’t miss what I fetched.”*
+If you peeked or included: briefly point at the expand budget note — *“Compile
+stayed under the slider; peeks are free to look; only Include in Prove adds
+tokens so parity doesn’t miss what I opted in.”*
 
 ### 1:20–2:00 — The model at the center (Run agent)
 
 Action: same file + question → set budget (e.g. **2,000**) → **Run agent ▸**
-(not Compile). Watch the SSE trace: compile → expand (with a one-line reason)
-→ answer. Token meter climbs next to the crossed-out whole-file count.
-Optional: **Compare to full file** (uses the one-shot `parity_handle`).
+(not Compile). Spinner banner, then SSE trace: compile → expand (with a
+one-line reason) → answer. Token meter climbs next to the crossed-out
+whole-file count. Optional: **Compare to full file** (one-shot `parity_handle`).
 
 > "Same budget slider — Agent starts compiling there, and treats it as a soft
 > reading ceiling. It reads the omitted-sections manifest, decides what to
@@ -96,14 +106,15 @@ This is the dependable “model drives it” shot. Keep it.
 ### 2:00–2:30 — Controlled failure (credibility)
 
 Action: vague or paraphrased question and/or budget **~800**. Compile. Scroll
-to **Omitted**. Click expand (or narrate `expand_section` on the flagged id).
-Correct content appears. Prove again if you want the recovery on camera.
+to **Omitted**. Click to peek (or narrate `expand_section` on the flagged id).
+Correct content appears. Check Include in Prove and Prove again if you want
+the recovery on camera — or let Agent walk the same manifest.
 
 > "Now I’ll break my own product. Tiny budget — or a paraphrase BM25 misses —
 > and the section that matters is omitted. Here’s the design: every compile
-> ends with a manifest of what was left out. Failure is visible. Expand
-> recovers it. Agent walks that same manifest. Trimming is transparent, never
-> silent. That’s the difference between a demo and infrastructure."
+> ends with a manifest of what was left out. Failure is visible. Peek or
+> expand recovers it. Agent walks that same manifest. Trimming is transparent,
+> never silent. That’s the difference between a demo and infrastructure."
 
 ### 2:30–2:50 — Close
 
@@ -117,15 +128,20 @@ On screen: hosted URL + `github.com/shenba1712/context-compiler`.
 
 - Record screen and voice separately if take one stumbles; sync later.
 - Never wait on camera: cut latency in the edit, or pre-warm cold start + cache.
-- The miss → expand beat is the riskiest and the most memorable — rehearse
+- The miss → peek/expand beat is the riskiest and the most memorable — rehearse
   until it’s boring. Lexical paraphrase misses are real; expand/agent recovery
   is the product answer — say that out loud if judges ask.
-- Ranking is BM25 (local, free). Don’t oversell embeddings or an LLM rerank
-  you don’t ship — those are possible later, not today.
+- Ranking is BM25 (local, free) with query stopword/filler cleanup and
+  honorific expansion. Don’t oversell embeddings or an LLM rerank you don’t
+  ship — those are possible later, not today.
 - Free-tier host still waking up? Wait for the in-page cold-start note / `/healthz`
   before you start talking over a blank spinner.
 - Dual Prove: top quiet button for a fast skip-results proof; results button
-  when you want expands included. Don’t confuse Prove with Agent.
+  when you want **included** expands. Peeks do not add to Prove. Don’t confuse
+  Prove with Agent.
+- Rate-limit reality on the public demo: pool ~30 / 5 min; Prove costs 4;
+  Agent costs 12; at most 2 LLM jobs at once. Don’t burn the pool rehearsing
+  live on the hosted instance.
 
 ## Appendix — optional MCP credibility cut
 
