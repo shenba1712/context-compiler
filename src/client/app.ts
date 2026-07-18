@@ -266,11 +266,46 @@ function syncBudget(): void {
     b.setAttribute("aria-pressed", String(on));
   });
 }
-$<HTMLInputElement>("budget").oninput = syncBudget;
+
+/** Budget the last successful compile used — for stale detection when the slider moves. */
+let lastCompiledBudget: number | null = null;
+
+function clearResultsStale(): void {
+  const el = $("budgetStaleNote");
+  el.classList.add("hidden");
+  el.innerHTML = "";
+}
+
+/** Slider/preset changed after a compile: drop expands + parity, ask them to recompile. */
+function onBudgetUserChange(): void {
+  if (!hasCompiledOnce || lastCompiledBudget === null) return;
+  const v = +$<HTMLInputElement>("budget").value;
+  if (v === lastCompiledBudget) {
+    // Back to the budget that produced the results on screen — still valid.
+    clearResultsStale();
+    return;
+  }
+  clearProveExpands();
+  $("parity").classList.add("hidden");
+  const el = $("budgetStaleNote");
+  el.innerHTML =
+    "<strong>Budget changed.</strong> Results below are from the previous " +
+    lastCompiledBudget.toLocaleString() +
+    "-token compile (expands cleared). Click <strong>Compile once</strong> to refresh at " +
+    v.toLocaleString() +
+    " tokens.";
+  el.classList.remove("hidden");
+}
+
+$<HTMLInputElement>("budget").oninput = () => {
+  syncBudget();
+  onBudgetUserChange();
+};
 document.querySelectorAll<HTMLButtonElement>(".bpre").forEach((b) => {
   b.onclick = () => {
     $<HTMLInputElement>("budget").value = b.dataset.v ?? "4000";
     syncBudget();
+    onBudgetUserChange();
   };
 });
 syncBudget();
@@ -302,8 +337,13 @@ function applyPresets(p: BudgetPresets, selectTier: keyof BudgetPresets | null):
     const small = b.querySelector("small");
     if (small) small.textContent = "~" + p[tier].toLocaleString();
   });
-  if (selectTier) $<HTMLInputElement>("budget").value = String(p[selectTier]);
-  syncBudget();
+  if (selectTier) {
+    $<HTMLInputElement>("budget").value = String(p[selectTier]);
+    syncBudget();
+    onBudgetUserChange();
+  } else {
+    syncBudget();
+  }
 }
 
 function renderDocSizeNote(rawTokens: number | null, scaled: boolean): void {
@@ -473,6 +513,49 @@ let compileAbort: AbortController | null = null;
 // failed/cancelled attempt should hide the (empty) results panel again or
 // leave a previous successful result visible underneath the error.
 let hasCompiledOnce = false;
+/** Omitted-section ids the user expanded in the UI — sent to Prove only. */
+const proveExpandedIds = new Set<string>();
+/** Tokens added by each UI expand (for the “effective Prove context” note). */
+const proveExpandedTokens = new Map<string, number>();
+/** Compiled tokens from the last successful compile (slider budget result). */
+let lastCompiledTokens = 0;
+
+function refreshExpandBudgetNote(): void {
+  const el = $("expandBudgetNote");
+  let expandSum = 0;
+  for (const t of proveExpandedTokens.values()) expandSum += t;
+  if (!el || expandSum <= 0 || lastCompiledTokens <= 0) {
+    if (el) {
+      el.classList.add("hidden");
+      el.innerHTML = "";
+    }
+    return;
+  }
+  const total = lastCompiledTokens + expandSum;
+  const n = proveExpandedIds.size;
+  el.innerHTML =
+    "<strong>Prove context is now larger than the slider.</strong> Compile used <strong>" +
+    lastCompiledTokens.toLocaleString() +
+    "</strong> tokens; " +
+    n +
+    " expand" +
+    (n === 1 ? "" : "s") +
+    " add <strong>+" +
+    expandSum.toLocaleString() +
+    "</strong> → about <strong>" +
+    total.toLocaleString() +
+    "</strong> tokens when you Prove answer parity. " +
+    "The budget slider stays put — it only controls Compile / Agent start, not these manual expands.";
+  el.classList.remove("hidden");
+}
+
+function clearProveExpands(): void {
+  proveExpandedIds.clear();
+  proveExpandedTokens.clear();
+  const exp = $("expanded");
+  if (exp) exp.innerHTML = "";
+  refreshExpandBudgetNote();
+}
 
 // The only feedback during a compile used to be the button reading
 // "Compiling…" — nothing near where the answer lands, on an operation that
@@ -520,6 +603,10 @@ $<HTMLFormElement>("compileForm").addEventListener("submit", async (e) => {
       .catch(() => ({ error: "Compile failed." }) as CompileApiResult);
     if (!resp.ok || d.error) throw new Error(await apiFailureMessage(resp, d));
     hideLoading();
+    clearProveExpands();
+    lastCompiledTokens = d.tokens_used;
+    lastCompiledBudget = d.token_budget;
+    clearResultsStale();
     // Now that the real size is known (for an upload, this is the FIRST time
     // it's known at all), refresh the presets to match — without moving the
     // slider off the value just used for this result.
@@ -820,7 +907,7 @@ function renderMultiNote(d: CompileApiResult): void {
 }
 
 // Explain WHY a bigger budget sometimes changes nothing: on a focused
-// question only a few sections clear the 15% relevance floor, so the packer
+// question only a few sections clear the 40% relevance floor, so the packer
 // stops well short of the budget. Without this note, "quick fact" and "deep
 // dive" look identical for no visible reason.
 function renderFloorNote(d: CompileApiResult): void {
@@ -914,6 +1001,29 @@ function renderFloorNote(d: CompileApiResult): void {
   }
   const spare = budget - d.tokens_used;
   const budgetBound = spare < budget * 0.12; // used almost the whole budget
+  const hint = d.next_section_hint;
+  if (hint) {
+    // Server already decided we're budget-bound with a strong omitted section
+    // that wouldn't fit beside the selection — name it and give a concrete
+    // next budget (keep current compile + add that section).
+    el.innerHTML =
+      "<strong>Budget-bound.</strong> Selection stopped at your " +
+      budget.toLocaleString() +
+      "-token ceiling. Also left out: “" +
+      esc(lastCrumb(hint.section)) +
+      "” (" +
+      hint.relevance +
+      "% relevant, " +
+      hint.tokens.toLocaleString() +
+      " tokens). Raise the budget to about " +
+      hint.suggested_budget.toLocaleString() +
+      " tokens to keep what’s selected and add it, or fetch it below with " +
+      "<code>expand_section</code> (<code>" +
+      esc(hint.id) +
+      "</code>).";
+    el.classList.remove("hidden");
+    return;
+  }
   if (budgetBound) {
     el.innerHTML =
       "<strong>Budget-bound.</strong> Selection stopped because it hit your " +
@@ -925,7 +1035,7 @@ function renderFloorNote(d: CompileApiResult): void {
       d.selected_sections.length +
       "</strong> section" +
       (d.selected_sections.length === 1 ? "" : "s") +
-      " cleared the 15% relevance floor — " +
+      " cleared the 40% relevance floor — " +
       "the rest scored too low to matter for this question. Used <strong>" +
       d.tokens_used.toLocaleString() +
       "</strong> of your " +
@@ -971,7 +1081,16 @@ function makeChip(o: SectionInfo, d: CompileApiResult, exp: HTMLElement): HTMLBu
       blk.appendChild(pre);
       exp.appendChild(blk);
       b.classList.add("done");
-      announce("Fetched section: " + lastCrumb(o.section));
+      proveExpandedIds.add(o.id);
+      proveExpandedTokens.set(o.id, e.tokens_used || o.tokens || 0);
+      refreshExpandBudgetNote();
+      announce(
+        "Fetched section: " +
+          lastCrumb(o.section) +
+          ". Prove context is now about " +
+          (lastCompiledTokens + [...proveExpandedTokens.values()].reduce((a, b) => a + b, 0)).toLocaleString() +
+          " tokens."
+      );
     } catch (err) {
       fail(err instanceof Error ? err.message : String(err));
     } finally {
@@ -1014,6 +1133,9 @@ $<HTMLButtonElement>("prove").onclick = async () => {
   clearErr();
   const fd = formData();
   if (!fd) return fail("Pick a file and enter a question first.");
+  if (proveExpandedIds.size) {
+    fd.append("expanded_ids", JSON.stringify([...proveExpandedIds]));
+  }
   proveAbort?.abort();
   proveAbort = new AbortController();
   const proveBtn = $<HTMLButtonElement>("prove");
@@ -1033,8 +1155,30 @@ $<HTMLButtonElement>("prove").onclick = async () => {
     $("ansFullCost").textContent = d.full.context_tokens.toLocaleString() + " context tokens";
     $("ansCompiled").textContent = d.compiled.answer;
     applyLang($("ansCompiled"), d.compiled.answer);
+    const expandedN = d.compiled.expanded_ids?.length ?? 0;
+    $("ansCompiledHeading").textContent =
+      expandedN > 0
+        ? `From the COMPILED context (+ ${expandedN} expand${expandedN === 1 ? "" : "s"})`
+        : "From the COMPILED context";
     $("ansCompiledCost").textContent =
-      d.compiled.context_tokens.toLocaleString() + " context tokens (" + d.compiled.reduction_pct + "% less)";
+      d.compiled.context_tokens.toLocaleString() +
+      " context tokens (" +
+      d.compiled.reduction_pct +
+      "% less)" +
+      (expandedN > 0 ? " · includes " + d.compiled.expanded_ids!.join(", ") : "");
+    const budget = Number($<HTMLInputElement>("budget").value);
+    $("parityBudgetNote").innerHTML =
+      expandedN > 0
+        ? "The <strong>compiled</strong> answer used your <strong>" +
+          budget.toLocaleString() +
+          "-token</strong> compile plus the omitted section" +
+          (expandedN === 1 ? "" : "s") +
+          " you expanded (<code>" +
+          esc(d.compiled.expanded_ids!.join(", ")) +
+          "</code>). Raise the budget to fold more in automatically, or expand other chips and prove again."
+        : "The <strong>compiled</strong> answer is based only on what fit your <strong>" +
+          budget.toLocaleString() +
+          "-token</strong> budget. If it looks thinner than the full-file answer, raise the budget and prove again — or expand omitted sections below, then prove again.";
     $("parity").scrollIntoView({ behavior: "smooth", block: "nearest" });
     announce("Answer parity ready: both answers shown below.");
   } catch (e) {

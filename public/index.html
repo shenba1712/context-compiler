@@ -119,6 +119,7 @@
   <div class="panel" id="results">
     <h2 class="sec" id="resultsHeading" tabindex="-1">Your compiled context</h2>
     <div id="loadingNote" class="floornote hidden" role="status"></div>
+    <div id="budgetStaleNote" class="floornote hidden" role="status"></div>
     <div class="stats">
       <div class="stat"><div class="v" id="sRaw" style="color:var(--muted)">–</div><div class="l">raw tokens</div></div>
       <div class="stat"><div class="v" id="sUsed" style="color:var(--green)">–</div><div class="l">compiled tokens <span aria-hidden="true" style="color:var(--faint);font-weight:400">ⓘ</span></div></div>
@@ -151,6 +152,7 @@
       <strong style="font-size:13px">Omitted sections</strong>
       <span class="badge">click any to fetch it live — this is the <code>expand_section</code> tool</span>
       <div id="omitChips" style="margin-top:8px"></div>
+      <p class="qhint hidden" id="expandBudgetNote" style="margin-top:10px"></p>
       <div id="expanded"></div>
     </div>
   </div>
@@ -160,8 +162,11 @@
     <p class="sub" style="margin:6px 0 0">The same question, answered from the full file vs the compiled context.</p>
     <div class="duo">
       <div><h3>From the FULL file</h3><pre id="ansFull"></pre><div class="cost full" id="ansFullCost"></div></div>
-      <div><h3>From the COMPILED context</h3><pre id="ansCompiled"></pre><div class="cost small" id="ansCompiledCost"></div></div>
+      <div><h3 id="ansCompiledHeading">From the COMPILED context</h3><pre id="ansCompiled"></pre><div class="cost small" id="ansCompiledCost"></div></div>
     </div>
+    <p class="qhint" id="parityBudgetNote" style="margin-top:12px">
+      The compiled answer only sees what fit your token budget (plus any omitted sections you expanded below). If it looks thinner than the full-file answer, raise the budget and prove again — or expand the omitted sections that look relevant, then prove again.
+    </p>
   </div>
 </div></section>
 

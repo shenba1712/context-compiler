@@ -34,6 +34,20 @@ import { countTokens } from "./tokens.js";
 import { UploadRejected, validateUpload } from "./upload-guard.js";
 import { sanitizeSourceName } from "./util.js";
 
+/** Optional section ids the demo user expanded before Prove — merged into the
+ *  compiled side of answer parity. Capped and id-shaped to bound cost/abuse. */
+function parseExpandedIds(raw: unknown): string[] {
+  if (typeof raw !== "string" || !raw.trim()) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    const ids = parsed.filter((x): x is string => typeof x === "string" && /^s\d+$/.test(x));
+    return [...new Set(ids)].slice(0, 12);
+  } catch {
+    return [];
+  }
+}
+
 const PRICE_PER_MTOK = numEnv("CC_DEMO_PRICE_PER_MTOK", 3.0, 0);
 const PORT = intEnv("PORT", 8000, 0, 65535);
 const UPLOAD_DIR = join(tmpdir(), "cc-demo-uploads");
@@ -442,6 +456,30 @@ app.post("/api/answer", upload.single("file"), guardUpload, async (req, res) => 
         sanitizeSourceName(req.file.originalname)
       );
 
+      // Demo UI expands: fetch those sections and append to the compiled
+      // context so Prove reflects "compile + what you expanded". Agent mode
+      // does not use this path — it expands on its own.
+      const selectedIds = new Set(compiled.selected_sections.map((s) => s.id));
+      const expandExtras: string[] = [];
+      const expandedApplied: string[] = [];
+      for (const id of parseExpandedIds(req.body.expanded_ids)) {
+        if (selectedIds.has(id)) continue;
+        const got = await expandSection(path, id, 2000);
+        if ("error" in got) continue;
+        expandExtras.push(got.markdown);
+        expandedApplied.push(id);
+      }
+      const compiledContext =
+        expandExtras.length > 0
+          ? compiled.markdown + "\n\n" + expandExtras.join("\n\n")
+          : compiled.markdown;
+      const compiledContextTokens = countTokens(compiledContext);
+      const fullTok = countTokens(full);
+      const reductionPct =
+        fullTok > 0
+          ? Math.round((1000 * Math.max(0, fullTok - compiledContextTokens)) / fullTok) / 10
+          : compiled.reduction_pct;
+
       const ac = new AbortController();
       req.on("close", () => ac.abort());
 
@@ -456,15 +494,16 @@ app.post("/api/answer", upload.single("file"), guardUpload, async (req, res) => 
           { maxTokens: 2048, signal: ac.signal }
         );
 
-      const [answerFull, answerCompiled] = await Promise.all([ask(full), ask(compiled.markdown)]);
+      const [answerFull, answerCompiled] = await Promise.all([ask(full), ask(compiledContext)]);
       inc("parity_runs");
       return res.json({
         model: answerModel(),
         full: { answer: answerFull, context_tokens: countTokens(full) },
         compiled: {
           answer: answerCompiled,
-          context_tokens: compiled.tokens_used,
-          reduction_pct: compiled.reduction_pct,
+          context_tokens: compiledContextTokens,
+          reduction_pct: reductionPct,
+          expanded_ids: expandedApplied,
         },
       });
     } finally {

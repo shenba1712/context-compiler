@@ -34,7 +34,7 @@ export function clampBudget(v: unknown, floor: number, ceiling = MAX_TOKEN_BUDGE
  * chunk scores about the same won't trigger it.
  */
 export function relevanceFloor(): number {
-  return numEnv("CC_RELEVANCE_FLOOR", 0.15, 0, 1);
+  return numEnv("CC_RELEVANCE_FLOOR", 0.4, 0, 1);
 }
 
 // Kept in one place so raising it can't accidentally lift the file-picker's

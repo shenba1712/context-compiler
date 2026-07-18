@@ -6,6 +6,7 @@ import { Chunk, chunkMarkdown, outline } from "./chunk.js";
 import { convertToMarkdown } from "./convert.js";
 import { DEFAULT_TOKEN_BUDGET } from "./config.js";
 import { assemble, pack } from "./pack.js";
+import { nextSectionHint, type NextSectionHint } from "./budget-hint.js";
 import {
   bm25Scores,
   multiScoresFromRows,
@@ -38,6 +39,8 @@ export interface CompileResult {
   queries: string[]; // sub-questions the task was split into (length 1 = single)
   selected_sections: SectionInfo[];
   omitted_sections: SectionInfo[];
+  /** Present when budget-bound and a strong omitted section still didn't fit. */
+  next_section_hint: NextSectionHint | null;
 }
 
 async function convertedMarkdown(filePath: string): Promise<{ markdown: string; cacheHit: boolean }> {
@@ -108,6 +111,7 @@ export async function compileContext(
       queries,
       selected_sections: all.map((c) => info(c, true)),
       omitted_sections: [],
+      next_section_hint: null,
     };
   }
 
@@ -116,6 +120,8 @@ export async function compileContext(
   const ranked = rows ? rankMultiFromRows(rows, chunks) : rank(task, chunks);
   const { text, selected, omitted } = pack(ranked, tokenBudget, name, scoreMap);
   const used = countTokens(text);
+  const selectedInfos = selected.map((c) => info(c, true));
+  const omittedInfos = omitted.map((c) => info(c, false));
   return {
     markdown: text,
     raw_tokens: rawTokens,
@@ -127,8 +133,9 @@ export async function compileContext(
     cache_hit: cacheHit,
     token_budget: tokenBudget,
     queries,
-    selected_sections: selected.map((c) => info(c, true)),
-    omitted_sections: omitted.map((c) => info(c, false)),
+    selected_sections: selectedInfos,
+    omitted_sections: omittedInfos,
+    next_section_hint: nextSectionHint(tokenBudget, used, omittedInfos),
   };
 }
 

@@ -53,6 +53,14 @@ interface CompileApiResult {
   queries: string[];
   selected_sections: SectionInfo[];
   omitted_sections: SectionInfo[];
+  /** Set when budget-bound and a strong omitted section still didn't fit. */
+  next_section_hint: {
+    id: string;
+    section: string;
+    tokens: number;
+    relevance: number;
+    suggested_budget: number;
+  } | null;
   cost_raw_usd: number;
   cost_compiled_usd: number;
   price_per_mtok: number;
@@ -86,7 +94,13 @@ interface ExpandApiResult {
 interface AnswerApiResult {
   model: string;
   full: { answer: string; context_tokens: number };
-  compiled: { answer: string; context_tokens: number; reduction_pct: number };
+  compiled: {
+    answer: string;
+    context_tokens: number;
+    reduction_pct: number;
+    /** Section ids from the demo UI that were merged into the compiled side. */
+    expanded_ids?: string[];
+  };
   error?: string;
 }
 

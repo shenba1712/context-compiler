@@ -99,7 +99,7 @@ Separately, any real coding agent over MCP can call the same two tools in its ow
 
 Budget by question breadth, not file size. A factual lookup is happy around a thousand tokens. Synthesis across a few sections wants something like four thousand. “Summarize everything” needs a budget at least as large as the file — at which point the compiler returns the whole document as lossless passthrough.
 
-The budget is a ceiling, not a target. When ranking shows a clear relevance drop-off, packing stops early and returns less than you allowed (`CC_RELEVANCE_FLOOR`, default 0.15 × the top score). On vague questions with no clear signal, the packer fills the budget as recall insurance. Leaving the slider at four thousand is almost always fine.
+The budget is a ceiling, not a target. When ranking shows a clear relevance drop-off, packing stops early and returns less than you allowed (`CC_RELEVANCE_FLOOR`, default 0.4 × the top score). On vague questions with no clear signal, the packer fills the budget as recall insurance. Leaving the slider at four thousand is almost always fine.
 
 Compound questions (“What voids the warranty? Can it fly in rain?”) get split into sub-queries for BM25 and interleaved round-robin so each facet gets a fair shot at the budget.
 

@@ -15,6 +15,7 @@ import { join } from "node:path";
 
 const FIXTURES_DIR = join(process.cwd(), "src", "tests", "fixtures");
 
+import { nextSectionHint } from "../budget-hint.js";
 import { chunkMarkdown } from "../chunk.js";
 import { convertToMarkdown, ConversionError } from "../convert.js";
 import { intEnv, numEnv } from "../env.js";
@@ -311,6 +312,83 @@ async function testBm25FirstPackingDespiteDemotion() {
     "BM25-first pack order must keep the top-scoring section when it fits"
   );
   console.log("  bm25-first pack ok: demoted top hit still selected when it fits the budget");
+}
+
+async function testNextSectionHint() {
+  // Spare room left → not budget-bound → no hint.
+  assert.equal(
+    nextSectionHint(2000, 1000, [{ id: "s1", section: "A > B", tokens: 500, relevance: 80 }]),
+    null,
+    "plenty of spare budget → no hint"
+  );
+
+  // Budget-bound but only weak leftovers → no hint.
+  assert.equal(
+    nextSectionHint(1150, 1130, [{ id: "s1", section: "A > B", tokens: 500, relevance: 29 }]),
+    null,
+    "weak omitted section → no hint"
+  );
+
+  // Budget-bound + strong omitted that doesn't fit → concrete suggested budget.
+  const hint = nextSectionHint(1150, 1137, [
+    { id: "s18", section: "Doc > I", tokens: 773, relevance: 81 },
+    { id: "s31", section: "Doc > Ii", tokens: 748, relevance: 79 },
+  ]);
+  assert.ok(hint, "expected a next-section hint");
+  assert.equal(hint!.id, "s18");
+  assert.equal(hint!.relevance, 81);
+  assert.equal(hint!.suggested_budget, 2000);
+
+  // End-to-end: Sherlock @ 1150 should surface s18 (or similar strong omit).
+  const sherlock = join(process.cwd(), "public", "samples", "sherlock-holmes.docx");
+  if (existsSync(sherlock)) {
+    const r = await compileContext(
+      sherlock,
+      "Why does the King of Bohemia come to Sherlock Holmes?",
+      1150
+    );
+    assert.ok(r.next_section_hint, "Sherlock@1150 should hint at the next strong omitted section");
+    assert.ok(
+      (r.next_section_hint!.relevance ?? 0) >= 40,
+      "hinted section should be high-relevance"
+    );
+    assert.ok(
+      r.next_section_hint!.suggested_budget > r.token_budget,
+      "suggested budget must exceed the current one"
+    );
+    console.log(
+    `  next-section hint ok: unit + Sherlock@1150 → ${r.next_section_hint!.id} ` +
+      `(raise to ~${r.next_section_hint!.suggested_budget})`
+  );
+  } else {
+    console.log("  next-section hint ok: unit cases (Sherlock sample not present, skipped e2e)");
+  }
+}
+
+async function testRelevanceFloorDropsWeakToc() {
+  const sherlock = join(process.cwd(), "public", "samples", "sherlock-holmes.docx");
+  if (!existsSync(sherlock)) {
+    console.log("  relevance-floor toc ok: skipped (no Sherlock sample)");
+    return;
+  }
+  const r = await compileContext(
+    sherlock,
+    "Why does the King of Bohemia come to Sherlock Holmes?",
+    2000
+  );
+  const weak = r.selected_sections.filter((s) => (s.relevance ?? 0) < 40);
+  assert.equal(
+    weak.length,
+    0,
+    `floor 0.4 should drop <40% TOC noise, got: ${weak.map((s) => s.id + "@" + s.relevance).join(", ")}`
+  );
+  assert.ok(
+    r.selected_sections.some((s) => (s.relevance ?? 0) >= 80),
+    "strong Bohemia sections should still be selected"
+  );
+  console.log(
+    `  relevance-floor toc ok: ${r.selected_sections.length} sections, all ≥40% relevance`
+  );
 }
 
 async function testMultiQuery() {
@@ -1082,6 +1160,8 @@ for (const fn of [
   testReserveDoesNotEvictFittingContent,
   testOversizedTopNotice,
   testBm25FirstPackingDespiteDemotion,
+  testNextSectionHint,
+  testRelevanceFloorDropsWeakToc,
   testMultiQuery,
   testFormatConversion,
   testImageConversionFailsClearly,

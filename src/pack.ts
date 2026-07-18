@@ -157,7 +157,7 @@ export function assemble(
  * lowest-ranked chunk only when the manifest is already minimal.
  *
  * Relevance floor: if per-chunk scores are provided, chunks scoring below
- * CC_RELEVANCE_FLOOR (default 0.15) × top-score are omitted even when
+ * CC_RELEVANCE_FLOOR (default 0.4) × top-score are omitted even when
  * budget remains — the budget is a ceiling, not a target. The floor is
  * RELATIVE, so it only bites when the ranker has real signal: on a vague
  * query with flat scores nothing falls below it, and the packer fills the
