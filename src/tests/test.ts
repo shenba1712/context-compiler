@@ -125,6 +125,52 @@ async function testMultilingualRanking() {
   console.log("  multilingual ok: Devanagari ranking + content-priority packing");
 }
 
+async function testMoreScriptsRanking() {
+  // The Unicode tokenizer must rank across scripts, not just Devanagari. This
+  // guards the sample library's added languages: Latin+accents (Spanish),
+  // Cyrillic (Russian), and Arabic (right-to-left, connected). Each query
+  // shares terms with exactly one section; the ranker must surface it over a
+  // longer, unrelated distractor.
+  const cases = [
+    {
+      q: "¿Qué encontró el panadero en la harina?",
+      hit: "monedas",
+      doc: [
+        "# Cuentos",
+        "## El panadero\n\nEl panadero encontró una bolsa de monedas en la harina.",
+        "## El árbol\n\n" + "Un olmo crecía en la plaza del pueblo. ".repeat(20),
+      ],
+    },
+    {
+      q: "Что нашёл извозчик в санях?",
+      hit: "кошелёк",
+      doc: [
+        "# Рассказы",
+        "## Извозчик\n\nИзвозчик нашёл кошелёк в санях.",
+        "## Берёза\n\n" + "Берёза росла у сельской школы. ".repeat(20),
+      ],
+    },
+    {
+      q: "ماذا وجد الخبّاز في كيس الطحين؟",
+      hit: "صرّة",
+      doc: [
+        "# حكايات",
+        "## الخبّاز\n\nوجد الخبّاز صرّة نقود في كيس الطحين.",
+        "## الشجرة\n\n" + "شجرة عتيقة في وسط القرية. ".repeat(20),
+      ],
+    },
+  ];
+  for (const c of cases) {
+    const chunks = chunkMarkdown(c.doc.join("\n\n"));
+    const ranked = await rank(c.q, chunks, false);
+    assert.ok(
+      ranked[0].text.includes(c.hit),
+      `top chunk for "${c.q}" should contain "${c.hit}", got: ${ranked[0].breadcrumb}`
+    );
+  }
+  console.log("  more-scripts ok: Spanish / Russian / Arabic queries rank the right section");
+}
+
 async function testRelevanceFloor() {
   const chunks = chunkMarkdown(makeTestDoc());
   const task = "What are the termination notice periods?";
@@ -695,6 +741,7 @@ for (const fn of [
   testRankAndPack,
   testEndToEnd,
   testMultilingualRanking,
+  testMoreScriptsRanking,
   testRelevanceFloor,
   testReserveDoesNotEvictFittingContent,
   testOversizedTopNotice,

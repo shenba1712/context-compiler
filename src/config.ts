@@ -1,10 +1,8 @@
 /**
- * One place for the numbers this project would otherwise scatter and
- * duplicate across files: token budget limits, the relevance floor, and the
- * upload size cap. Pulling them here fixed a real bug — CC_RELEVANCE_FLOOR
- * used to be read separately (and inconsistently) in rank.ts and pack.ts, so
- * a bad value could silently break one and not the other. Reading it once,
- * here, means both always agree.
+ * One home for the project's shared numbers — token budget limits, the
+ * relevance floor, and the upload size cap. Defining each once here keeps every
+ * file that uses it in agreement, instead of parsing the same env var in a few
+ * places and risking them drifting apart.
  */
 import { intEnv, numEnv } from "./env.js";
 

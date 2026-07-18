@@ -20,8 +20,6 @@ const checkPath = (filePath: string): string => checkPathWithin(ROOT, filePath);
 
 const server = new McpServer({ name: "context-compiler", version: "0.1.0" });
 
-// registerTool(), not the older tool() method — tool() still works but is
-// deprecated by the MCP SDK.
 server.registerTool(
   "compile_context",
   {

@@ -167,13 +167,10 @@ function errorResponse(res: express.Response, e: unknown, context: string) {
   return res.status(500).json({ error: "Internal server error." });
 }
 
-// Real, measured token counts for the sample library — computed through the
-// exact same convert+cache pipeline a real compile uses (fullMarkdown), never
-// hardcoded. A hardcoded guess can silently drift from the truth the moment a
-// sample file, the tokenizer, or the chunker changes; this can't, because
-// it's derived fresh from the actual file every time this route is hit.
-// Memoized in-process (sample files don't change during a server's lifetime)
-// so repeat page loads don't even pay for a disk-cache lookup.
+// Sample-library token counts, measured from the real files via the same
+// convert pipeline a compile uses — so they can't drift from reality the way a
+// hardcoded number would. Memoized in-process since the sample files never
+// change while the server runs.
 let samplesCache: Array<{
   key: string;
   file: string;

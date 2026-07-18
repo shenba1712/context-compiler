@@ -56,10 +56,8 @@ export function cachePut(key: string, markdown: string): void {
   maybeSweep();
 }
 
-// Runs at most once per SWEEP_INTERVAL_MS, piggybacking on a real cachePut
-// call rather than a timer — so a short-lived CLI process doesn't pay for a
-// background timer it'll never need, and a long-lived server self-cleans as
-// it works.
+// Runs at most once per SWEEP_INTERVAL_MS, triggered by cachePut rather than a
+// timer — so short-lived CLI runs skip it and long-lived servers self-clean.
 function maybeSweep(): void {
   const now = Date.now();
   if (now - lastSweep < SWEEP_INTERVAL_MS) return;
