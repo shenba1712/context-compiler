@@ -1,7 +1,7 @@
 /**
  * In-process operational counters — a cheap way to see what the server is
  * actually doing (compiles, agent runs, conversion failures, LLM failovers,
- * rate-limit hits). Surfaced at GET /healthz.
+ * rate-limit hits). Surfaced at GET /metrics (not /healthz).
  *
  * These live in memory and reset on restart, and aren't shared across replicas
  * — fine for a single-instance demo, and the honest scope for this project. A

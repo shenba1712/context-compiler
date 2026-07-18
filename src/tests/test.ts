@@ -86,6 +86,10 @@ async function testEndToEnd() {
     assert.ok(r.reduction_pct > 50, `expected >50% reduction, got ${r.reduction_pct}%`);
     assert.ok(r.markdown.includes("90 days written notice"));
     assert.ok(r.omitted_sections.length, "manifest should list omitted sections");
+    assert.ok(
+      r.selected_sections.every((s) => typeof s.text === "string" && s.text.length > 0),
+      "pipeline attaches text on selected sections (web UI depends on this)"
+    );
 
     const r2 = await compileContext(path, "payment terms", 1500, false);
     assert.equal(r2.cache_hit, true, "second call hits cache");
@@ -681,15 +685,15 @@ async function testHealthzEndpoint() {
     const res = await fetch(`http://127.0.0.1:${port}/healthz`);
     const body = (await res.json()) as {
       status: string;
-      converter_available: boolean;
       uptime_s: number;
+      converter_available?: unknown;
       counters?: unknown;
       llm_configured?: unknown;
     };
-    assert.equal(res.status, 200, "healthz is 200 when the converter runs");
+    assert.equal(res.status, 200, "healthz is always 200 (cheap liveness)");
     assert.equal(body.status, "ok");
-    assert.equal(body.converter_available, true);
     assert.equal(typeof body.uptime_s, "number");
+    assert.equal(body.converter_available, undefined, "converter check must not run on healthz");
     assert.equal(body.counters, undefined, "public healthz must not expose counters");
     assert.equal(body.llm_configured, undefined, "public healthz must not expose llm_configured");
 
@@ -706,12 +710,16 @@ async function testHealthzEndpoint() {
     const ok = await fetch(`http://127.0.0.1:${port}/metrics`, {
       headers: { authorization: "Bearer test-metrics-token" },
     });
-    const metrics = (await ok.json()) as { counters: Record<string, number>; llm_configured: boolean };
     assert.equal(ok.status, 200);
+    const metrics = (await ok.json()) as {
+      counters: Record<string, number>;
+      llm_configured: boolean;
+      converter_available: boolean;
+    };
     assert.equal(metrics.counters[probe], 7);
     assert.equal(typeof metrics.llm_configured, "boolean");
-    delete process.env.CC_METRICS_TOKEN;
-    console.log("  healthz ok: minimal public probe; metrics gated by token");
+    assert.equal(typeof metrics.converter_available, "boolean", "converter lives on /metrics");
+    console.log("  healthz ok: cheap public probe; metrics gated by token");
   } finally {
     delete process.env.CC_METRICS_TOKEN;
     server.close();
@@ -741,11 +749,6 @@ async function testCompileIncrementsCounter() {
     fd.append("token_budget", "2000");
     const compileRes = await fetch(`http://127.0.0.1:${port}/api/compile`, { method: "POST", body: fd });
     assert.equal(compileRes.status, 200, "compile succeeds for a tiny markdown upload");
-    const body = (await compileRes.json()) as { selected_sections: Array<{ text?: string }> };
-    assert.ok(
-      body.selected_sections.every((s) => s.text === undefined),
-      "HTTP compile omits duplicate section text"
-    );
 
     const after =
       (
@@ -757,6 +760,46 @@ async function testCompileIncrementsCounter() {
     console.log("  compile counter ok: /api/compile bumps compiles visible on /metrics");
   } finally {
     delete process.env.CC_METRICS_TOKEN;
+    server.close();
+  }
+}
+
+/**
+ * Regression: the section-card UI renders `selected_sections[].text`. An earlier
+ * "drop duplicate bodies" optimization stripped that field from /api/compile and
+ * left empty cards (titles only) while CI still passed — because a test asserted
+ * the strip. Keep text on the web response; MCP may still strip separately.
+ */
+async function testWebCompileSectionCardsHaveText() {
+  const { app } = await import("../web.js");
+  const server = app.listen(0);
+  await new Promise<void>((r) => server.once("listening", () => r()));
+  const port = (server.address() as { port: number }).port;
+  try {
+    const fd = new FormData();
+    fd.append(
+      "file",
+      new Blob(["# Refund Policy\n\nCustomers may return items within 90 days written notice.\n"], {
+        type: "text/markdown",
+      }),
+      "policy.md"
+    );
+    fd.append("task", "What is the return window?");
+    fd.append("token_budget", "2000");
+    const resp = await fetch(`http://127.0.0.1:${port}/api/compile`, { method: "POST", body: fd });
+    assert.equal(resp.status, 200, "compile succeeds");
+    const body = (await resp.json()) as {
+      selected_sections: Array<{ id: string; text?: string }>;
+      markdown: string;
+    };
+    assert.ok(body.selected_sections.length > 0, "at least one selected section");
+    for (const s of body.selected_sections) {
+      assert.equal(typeof s.text, "string", `section ${s.id} must include text for the card UI`);
+      assert.ok((s.text as string).length > 0, `section ${s.id} text must be non-empty`);
+    }
+    assert.ok(body.markdown.includes("90 days"), "compiled markdown still carries the answer");
+    console.log("  web section-text ok: /api/compile keeps selected_sections[].text for the UI");
+  } finally {
     server.close();
   }
 }
@@ -1009,6 +1052,7 @@ for (const fn of [
   testMetricsCounters,
   testHealthzEndpoint,
   testCompileIncrementsCounter,
+  testWebCompileSectionCardsHaveText,
   testNoStdoutInMcpPath,
   testSmallFilePassthrough,
   testTokenizeCjkAndStem,

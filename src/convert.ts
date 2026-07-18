@@ -123,8 +123,9 @@ export async function convertToMarkdown(path: string): Promise<string> {
 }
 
 // Health check: is the markitdown converter actually runnable? Result is cached
-// briefly so /healthz can be hit often without spawning a process each time.
+// briefly so /metrics can ask often without spawning a process each time.
 // Concurrent callers on a cold cache share one in-flight probe.
+// Do NOT call this from /healthz — platform probes must stay instant.
 let converterCache: { ok: boolean; at: number } | null = null;
 let converterInflight: Promise<boolean> | null = null;
 const CONVERTER_CHECK_TTL_MS = 30_000;

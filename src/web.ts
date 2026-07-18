@@ -293,19 +293,19 @@ app.get("/api/config", (_req, res) => {
   });
 });
 
-// Liveness for platform probes — minimal surface, no traffic counters.
-app.get("/healthz", async (_req, res) => {
-  const converter = await converterAvailable();
-  return res.status(converter ? 200 : 503).json({
-    status: converter ? "ok" : "degraded",
+// Liveness for platform probes (Render healthCheckPath). Must stay cheap and
+// synchronous — never spawn markitdown here. A slow /healthz on free-tier cold
+// start makes the proxy hang and the instance look dead forever.
+app.get("/healthz", (_req, res) => {
+  return res.status(200).json({
+    status: "ok",
     uptime_s: Math.round(process.uptime()),
-    converter_available: converter,
   });
 });
 
 // Deeper ops snapshot. Disabled unless CC_METRICS_TOKEN is set; then require
 // Authorization: Bearer <token>. Keeps counters + llm_configured off the public URL.
-app.get("/metrics", (req, res) => {
+app.get("/metrics", async (req, res) => {
   const token = process.env.CC_METRICS_TOKEN;
   if (!token) return res.status(404).json({ error: "Not found" });
   const auth = req.get("authorization") ?? "";
@@ -313,6 +313,7 @@ app.get("/metrics", (req, res) => {
   return res.json({
     uptime_s: Math.round(process.uptime()),
     llm_configured: hasLlm(),
+    converter_available: await converterAvailable(),
     counters: snapshot(),
   });
 });
@@ -374,12 +375,8 @@ app.post("/api/compile", upload.single("file"), guardUpload, async (req, res) =>
       sanitizeSourceName(req.file.originalname)
     );
     inc("compiles");
-    // Drop duplicate section bodies from the JSON — they're already in markdown.
-    // Keeps mobile responses small; the UI falls back to the raw markdown view.
-    const selected_sections = result.selected_sections.map(({ text: _t, ...r }) => r);
     return res.json({
       ...result,
-      selected_sections,
       cost_raw_usd: (result.raw_tokens / 1e6) * PRICE_PER_MTOK,
       cost_compiled_usd: (result.tokens_used / 1e6) * PRICE_PER_MTOK,
       price_per_mtok: PRICE_PER_MTOK,
@@ -581,7 +578,10 @@ app.use((err: unknown, _req: express.Request, res: express.Response, next: expre
 // Start listening only when run directly (`node dist/web.js`), not when this
 // module is imported — the tests import `app` and bind their own random port.
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  app.listen(PORT, () => log.info("Context Compiler demo listening", { url: `http://localhost:${PORT}` }));
+  // Bind all interfaces — required on Render/Railway (default can miss the proxy).
+  app.listen(PORT, "0.0.0.0", () =>
+    log.info("Context Compiler demo listening", { url: `http://0.0.0.0:${PORT}` })
+  );
 }
 
 export { app };
