@@ -41,18 +41,24 @@ hosted URL runs):
 
 ```bash
 docker build -t context-compiler .
-docker run -p 8000:8000 -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY context-compiler
+docker run -p 8000:8000 -e GEMINI_API_KEY=$GEMINI_API_KEY context-compiler
 # open http://localhost:8000
 ```
 
-Deploy anywhere that runs a Dockerfile (Render / Railway / Fly.io).
+Deploy anywhere that runs a Dockerfile (Render / Railway / Fly.io). A
+[`render.yaml`](./render.yaml) blueprint is included: in Render, choose
+**New + → Blueprint**, point it at this repo, and enter `GEMINI_API_KEY` /
+`OPENROUTER_API_KEY` when prompted (both optional). Note this app needs a
+container/VM host, **not** a serverless platform like Vercel — it shells out to
+the Python markitdown converter and keeps upload handles in memory, neither of
+which survive serverless invocations.
 
 **Bare metal** — prerequisites: Node ≥ 20 and Python ≥ 3.10:
 
 ```bash
 npm install && npm run build
 python3 -m pip install "markitdown[docx,pdf,xlsx,pptx]"   # converter binary
-export ANTHROPIC_API_KEY=sk-ant-...   # optional: enables rerank + answer-parity panel
+export GEMINI_API_KEY=...              # optional: enables rerank + answer-parity panel (free tier)
 npm run web                            # http://localhost:8000
 ```
 
@@ -63,24 +69,37 @@ entirely and use Docker.
 
 ### About API keys (optional — bring any provider's)
 
-**No Anthropic key yet? Nothing is blocked.** An LLM API key unlocks exactly
-two optional upgrades: the reranker (better section selection on paraphrased
-questions) and the demo's answer-parity panel. **Without any key, everything
-else works** — conversion, chunking, BM25 ranking, packing, both MCP tools
-(`compile_context` and `expand_section`), the full web demo — fully offline;
-that's the local-first design, and it's verified in CI on every commit with
-no keys set at all. If an Anthropic key specifically doesn't arrive in time,
-any OpenAI-compatible key unlocks the same two upgrades identically — OpenAI,
-Gemini, Groq, OpenRouter, or a free local Ollama model, see below.
+**No key yet? Nothing is blocked.** An LLM API key unlocks exactly two optional
+upgrades: the reranker (better section selection on paraphrased questions) and
+the demo's answer-parity panel. **Without any key, everything else works** —
+conversion, chunking, BM25 ranking, packing, both MCP tools (`compile_context`
+and `expand_section`), the full web demo — fully offline; that's the local-first
+design, and it's verified in CI on every commit with no keys set at all.
 
-Any of these works (checked in this order):
+**Providers and automatic failover.** Configure one or more of the keys below.
+They're tried in priority order, and a request automatically fails over to the
+next configured provider on any error (rate limit, quota, outage) — so one
+provider hitting its free-tier limit never takes the feature down while another
+key still works. If every provider fails, the reranker quietly falls back to
+BM25 and the answer panel reports the error.
 
-- `ANTHROPIC_API_KEY` → Claude (default model: Haiku)
-- `OPENAI_API_KEY` → OpenAI (default model: gpt-4o-mini)
-- `CC_LLM_API_KEY` + `CC_LLM_BASE_URL` → any OpenAI-compatible endpoint:
-  Gemini (`https://generativelanguage.googleapis.com/v1beta/openai`),
-  Groq, OpenRouter, local Ollama, etc. Set `CC_RERANK_MODEL` /
-  `CC_ANSWER_MODEL` to pick models.
+| Priority | Env var | Provider | Default model |
+|---|---|---|---|
+| 1 | `GEMINI_API_KEY` | Google Gemini (free tier, no card) | `gemini-2.5-flash` |
+| 2 | `OPENROUTER_API_KEY` | OpenRouter (many models) | `meta-llama/llama-3.3-70b-instruct:free` |
+| 3 | `ANTHROPIC_API_KEY` | Claude | `claude-haiku-4-5` |
+| 4 | `OPENAI_API_KEY`, or `CC_LLM_API_KEY` + `CC_LLM_BASE_URL` | Any OpenAI-compatible endpoint (OpenAI, Groq, Ollama, ...) | `gpt-4o-mini` |
+
+Recommended setup: **Gemini as the free primary, OpenRouter as the fallback,
+BM25 as the final safety net** — set `GEMINI_API_KEY` and `OPENROUTER_API_KEY`
+and you're done.
+
+Per-provider model overrides (optional): `CC_GEMINI_MODEL`,
+`CC_OPENROUTER_MODEL`, `CC_ANTHROPIC_MODEL`, `CC_LLM_MODEL`. OpenRouter's `:free`
+model IDs change without notice — if the default stops working, set
+`CC_OPENROUTER_MODEL` to any current model from <https://openrouter.ai/models>.
+`CC_GEMINI_BASE_URL` / `CC_OPENROUTER_BASE_URL` override the endpoints (proxies,
+regional). `CC_ANSWER_MODEL` overrides the model label shown in the answer panel.
 
 Who supplies it depends on where it runs: on a **hosted deployment**, the
 operator sets it as a server environment variable and end users never see
@@ -170,15 +189,18 @@ fewer tokens: that's the pitch in one click.
 
 | Env var | Default | Purpose |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | unset | Enables rerank + answer panel via Claude; without any key, fully local |
-| `OPENAI_API_KEY` | unset | Same, via OpenAI |
-| `CC_LLM_API_KEY` / `CC_LLM_BASE_URL` | unset | Same, via any OpenAI-compatible endpoint (Gemini, Groq, Ollama, ...) |
+| `GEMINI_API_KEY` | unset | Enables rerank + answer panel via Gemini (free tier); primary provider. Without any key, fully local |
+| `OPENROUTER_API_KEY` | unset | Fallback provider; used automatically if Gemini errors |
+| `ANTHROPIC_API_KEY` | unset | Next fallback, via Claude |
+| `OPENAI_API_KEY` / `CC_LLM_API_KEY` / `CC_LLM_BASE_URL` | unset | Last fallback, via any OpenAI-compatible endpoint (OpenAI, Groq, Ollama, ...) |
+| `CC_GEMINI_MODEL` / `CC_OPENROUTER_MODEL` / `CC_ANTHROPIC_MODEL` / `CC_LLM_MODEL` | per provider | Per-provider model overrides |
+| `CC_GEMINI_BASE_URL` / `CC_OPENROUTER_BASE_URL` | provider default | Endpoint overrides (proxy / regional) |
+| `CC_ANSWER_MODEL` | primary provider's model | Model label shown in the answer panel |
 | `CC_ROOT` | `~` | Path allowlist root for the MCP server |
 | `CC_CACHE_DIR` | `~/.cache/context-compiler` | Converted-markdown cache |
 | `CC_MAX_FILE_BYTES` | 50 MB | Refuse larger files |
 | `CC_CONVERT_TIMEOUT_S` | 120 | Conversion subprocess timeout |
 | `CC_MARKITDOWN_CMD` | `markitdown` | Converter binary override |
-| `CC_RERANK_MODEL` / `CC_ANSWER_MODEL` | per provider | Model overrides (claude-haiku / gpt-4o-mini defaults) |
 | `CC_DEMO_PRICE_PER_MTOK` | 3.0 | $/Mtok for the demo cost meter |
 
 ## Tests
@@ -220,9 +242,9 @@ project needs Node ≥ 20.
 the build context. Commit it; `npm ci` requires it by design.
 
 **"Prove answer parity" returns an error about API keys** — the server has
-no LLM key. Set `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` (or
-`CC_LLM_API_KEY` + `CC_LLM_BASE_URL` for Gemini/Groq/Ollama). Everything
-except the rerank and parity panel works without any key.
+no LLM key. Set `GEMINI_API_KEY` (free tier) or any other provider key from
+the Configuration table. Everything except the rerank and parity panel works
+without any key.
 
 **HTTP 429 from the demo API** — per-IP rate limit (default 30 requests /
 5 min). Wait, or raise `CC_RATE_LIMIT` on your own deployment.

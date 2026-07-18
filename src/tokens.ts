@@ -25,7 +25,10 @@ export function countTokens(text: string): number {
     } catch (err) {
       if (!warnedOnEncodeFailure) {
         warnedOnEncodeFailure = true;
-        console.warn("Tiktoken encode() failed on some input; falling back to the 4-chars/token estimate:", err);
+        console.warn(
+          "Tiktoken encode() failed on some input; falling back to the 4-chars/token estimate:",
+          err
+        );
       }
     }
   }

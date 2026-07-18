@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+<!-- ============================== HEAD ============================== -->
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -15,6 +16,9 @@
 <div id="liveRegion" class="sr-only" role="status" aria-live="polite"></div>
 <div id="liveRegionAssertive" class="sr-only" role="alert" aria-live="assertive"></div>
 
+<!-- ============================== HERO ==============================
+     Headline, the "few sections vs whole file" pitch, and the animated
+     token-savings mock-up (fixed demo numbers, not live data). -->
 <div class="hero">
   <div class="wrap">
     <div class="badge-top"><span class="dot"></span> Model-agnostic · MCP-native · works with zero API keys</div>
@@ -22,18 +26,18 @@
       <div>
         <h1 class="title">Stop paying for pages your agent <span class="grad">doesn't read</span>.</h1>
         <p class="lede">Context Compiler turns any file — PDF, Word, Excel, and more — into the
-          <b>few sections your task actually needs</b>, under a token budget you set. Plug it into any
+          <strong>few sections your task actually needs</strong>, under a token budget you set. Plug it into any
           AI agent over MCP, or try it right here.</p>
         <div class="row" style="margin-top:6px">
           <a class="btn primary" href="#try">Try it now ↓</a>
-          <a class="btn ghost" href="https://github.com/shenba1712/context-compiler" id="repoLink" target="_blank" rel="noopener noreferrer" data-placeholder="true">View the code</a>
+          <a class="btn ghost" href="https://github.com/shenba1712/context-compiler" id="repoLink" target="_blank" rel="noopener noreferrer">View the code</a>
         </div>
       </div>
       <div class="heromock" role="img" aria-label="Example: compiling Pride and Prejudice for the question 'How does Mr. Collins propose?' reduces the whole file from 19,612 tokens to 1,454 tokens — a 92.6% reduction with the same answer.">
         <div class="cap">A classic novel · Pride &amp; Prejudice · Question: "How does Mr. Collins propose?"</div>
         <div class="hrow"><div class="htrack"><div class="hbar raw" style="width:100%"></div></div><span class="hval">Whole file — 19,612 tokens</span></div>
         <div class="hrow"><div class="htrack"><div class="hbar small" style="width:7.4%"></div></div><span class="hval">Compiled — 1,454 tokens</span></div>
-        <div class="verdict"><b>92.6% fewer tokens</b>, same answer. Every read. Forever.</div>
+        <div class="verdict"><strong>92.6% fewer tokens</strong>, same answer. Every read. Forever.</div>
       </div>
     </div>
 
@@ -42,14 +46,17 @@
       <div class="c"><div class="n">2 · Select</div><div class="h">Rank against your task</div><div class="d">BM25 lexical ranking; LLM rerank when a key is set.</div></div>
       <div class="c"><div class="n">3 · Pack</div><div class="h">Fit the token budget</div><div class="d">Best sections in, a manifest of what was left out.</div></div>
     </div>
-    <div class="keynote">The compiled result is <b>exactly what your AI agent receives instead of the whole file</b>.
-      None of this needs an API key. A key unlocks one extra thing — <b>Prove answer parity</b> — where a model
+    <div class="keynote">The compiled result is <strong>exactly what your AI agent receives instead of the whole file</strong>.
+      None of this needs an API key. A key unlocks one extra thing — <strong>Prove answer parity</strong> — where a model
       answers your question twice, from the full file and from the compiled context, so you can confirm the
       compression didn't change the answer.</div>
   </div>
 </div>
 
 <main>
+<!-- ========================= COMPILE FORM ============================
+     Upload/sample picker, question box, and token-budget slider. Submits
+     to /api/compile (app.ts owns all the client-side wiring here). -->
 <section id="try"><div class="wrap"><div class="panel">
   <h2 class="sec">Compile a document</h2>
   <p class="sub">Upload your own file, or pick a sample below. Then ask a question and set a budget.</p>
@@ -69,7 +76,7 @@
     <textarea id="task" name="task" rows="1" placeholder="e.g. What voids the warranty? Can it fly in rain?" autocomplete="off"></textarea>
     <div class="qchips hidden" id="qchips" role="group" aria-label="Suggested questions"></div>
     <div class="qhint hidden" id="qhint">Suggested questions for this sample — click one, or type your own above.</div>
-    <div class="qhint">Asking several things at once? Separate them with <b>?</b> or new lines — each question is ranked on its own and its best sections merged in. Press <kbd>Enter</kbd> to compile, <kbd>Shift+Enter</kbd> for a new line.</div>
+    <div class="qhint">Asking several things at once? Separate them with <strong>?</strong> or new lines — each question is ranked on its own and its best sections merged in. Press <kbd>Enter</kbd> to compile, <kbd>Shift+Enter</kbd> for a new line.</div>
 
     <label for="budget">Token budget <span style="font-weight:400;color:var(--faint)">— a ceiling, not a target</span></label>
     <div class="docsizenote hidden" id="docSizeNote"></div>
@@ -81,7 +88,7 @@
         <button type="button" class="bpre" data-v="8000" data-tier="deep" aria-pressed="false">deep dive <small>~8,000</small></button>
       </div>
     </div>
-    <input type="range" id="budget" name="budget" min="200" max="20000" step="100" value="4000"
+    <input type="range" id="budget" name="budget" min="200" max="20000" step="50" value="4000"
       aria-describedby="budgetTip">
     <div class="sliderscale" aria-hidden="true"><span>200</span><span>20,000 tokens</span></div>
     <div id="budgetTip" style="font-size:12px;color:var(--faint);margin-top:4px">Tip: budget by question breadth, not file size. A factual lookup rarely needs more than ~1,000 tokens.</div>
@@ -96,6 +103,10 @@
   </form>
 </div></div></section>
 
+<!-- =========================== RESULTS ===============================
+     Hidden until a compile finishes. Stats, section cards / raw-markdown
+     toggle, omitted-sections manifest, and (if a key is set) the answer-
+     parity panel comparing full-file vs compiled answers. -->
 <section id="resultsSec" class="hidden"><div class="wrap">
   <div class="panel" id="results">
     <h2 class="sec" id="resultsHeading" tabindex="-1">Your compiled context</h2>
@@ -107,7 +118,7 @@
       <div class="stat"><div class="v" id="sCost">–</div><div class="l">cost / read <span id="price" style="color:var(--faint)"></span></div></div>
     </div>
     <p class="qhint" id="compiledTokensNote" style="margin-top:6px">
-      <b>Why is "compiled tokens" more than the sections below add up to?</b>
+      <strong>Why is "compiled tokens" more than the sections below add up to?</strong>
       It's the exact text sent to the AI: the selected sections <i>plus</i> the wrapper comments and the
       omitted-sections manifest — not just the section text alone.
     </p>
@@ -146,25 +157,28 @@
   </div>
 </div></section>
 
+<!-- ====================== MCP INTEGRATION ============================
+     Explains that the demo above IS the compile_context tool, then gives
+     copy-paste MCP config for the three most common agent clients. -->
 <section id="mcp"><div class="wrap"><div class="panel">
   <h2 class="sec">Use it in your own AI agent</h2>
   <p class="sub">The demo above runs the exact same <code>compile_context</code> tool this server exposes — so what you
-    just saw <i>is</i> the MCP tool's output. In real use it's an <b>MCP server</b> your coding agent calls automatically,
+    just saw <i>is</i> the MCP tool's output. In real use it's an <strong>MCP server</strong> your coding agent calls automatically,
     so it reads the 3% that matters instead of dumping whole files into the model.</p>
 
   <div class="workflow">
     <div class="wf"><div class="n">Without Context Compiler</div>
-      <p>Your agent needs one fact from a 40-page PDF, so it loads <b>the entire file</b> into the model —
+      <p>Your agent needs one fact from a 40-page PDF, so it loads <strong>the entire file</strong> into the model —
         thousands of tokens, most of them irrelevant, paid for on every turn.</p>
     </div>
     <div class="wf good"><div class="n">With Context Compiler</div>
-      <p>Your agent calls <code>compile_context(file, task, budget)</code> and gets back <b>only the relevant
-        sections</b> under a token budget. Same answer, a fraction of the tokens — and it can
+      <p>Your agent calls <code>compile_context(file, task, budget)</code> and gets back <strong>only the relevant
+        sections</strong> under a token budget. Same answer, a fraction of the tokens — and it can
         <code>expand_section</code> if it needs more.</p>
     </div>
   </div>
 
-  <p class="sub" style="margin:22px 0 10px"><b>Where it connects:</b> it's a local process your agent launches over stdio.
+  <p class="sub" style="margin:22px 0 10px"><strong>Where it connects:</strong> it's a local process your agent launches over stdio.
     Add one entry to your client's MCP config, point <code>CC_ROOT</code> at the folder the agent may read, and the two
     tools appear automatically. No API key needed for compilation.</p>
 
@@ -207,7 +221,8 @@ CC_ROOT = "/path/agents/may/read"</pre>
 </div></div></section>
 </main>
 
-<footer><div class="wrap">Context Compiler · team <b>3 Percent</b> · <a href="https://github.com/shenba1712/context-compiler" id="repoLink2" data-placeholder="true">source &amp; docs on GitHub</a></div></footer>
+<!-- ============================= FOOTER ============================== -->
+<footer><div class="wrap">Context Compiler · team <b>3 Percent</b> · <a href="https://github.com/shenba1712/context-compiler" id="repoLink2">source &amp; docs on GitHub</a></div></footer>
 
 <script defer src="/app.js"></script>
 </body>

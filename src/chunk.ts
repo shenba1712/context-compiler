@@ -33,9 +33,13 @@ function splitBlocks(lines: string[]): string[][] {
       if (current.length) blocks.push(current);
       current = [line];
       inTable = true;
-    } else if (inTable && !tableLine && line.trim()) {
+    } else if (inTable && !tableLine) {
+      // Leaving a table — on a blank line OR on real text either way, so two
+      // tables separated only by a blank line end up as two separate blocks
+      // instead of merging into one (a blank line used to just get folded
+      // into the table's own text instead of ending it).
       blocks.push(current);
-      current = [line];
+      current = line.trim() ? [line] : [];
       inTable = false;
     } else if (!line.trim() && !inTable) {
       if (current.length) blocks.push(current);
@@ -71,7 +75,11 @@ function packBlocks(blocks: string[][], limit: number): string[] {
 export function chunkMarkdown(markdown: string): Chunk[] {
   const lines = markdown.split(/\r?\n/);
 
-  interface Section { trail: string[]; headingLine: string | null; body: string[] }
+  interface Section {
+    trail: string[];
+    headingLine: string | null;
+    body: string[];
+  }
   const sections: Section[] = [];
   const trail: Array<{ level: number; title: string }> = [];
   let body: string[] = [];
@@ -117,11 +125,13 @@ export function chunkMarkdown(markdown: string): Chunk[] {
     if (countTokens(full) <= MAX_CHUNK_TOKENS) {
       push(breadcrumb, full);
     } else {
-      const parts = packBlocks(splitBlocks(bodyLines), MAX_CHUNK_TOKENS);
-      parts.forEach((part, i) => {
-        // Heading line attaches to the first part; breadcrumbs cover the rest.
-        push(breadcrumb, i === 0 ? (header + part).trim() : part.trim());
-      });
+      // Put the heading line IN with the body before packing, so its tokens
+      // count toward the first part's own limit (attaching it afterward
+      // meant the first part could quietly exceed MAX_CHUNK_TOKENS by
+      // however long the heading was).
+      const withHeading = headingLine ? [headingLine, ...bodyLines] : bodyLines;
+      const parts = packBlocks(splitBlocks(withHeading), MAX_CHUNK_TOKENS);
+      parts.forEach((part) => push(breadcrumb, part.trim()));
     }
   }
   return chunks;
