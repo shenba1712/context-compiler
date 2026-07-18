@@ -161,7 +161,14 @@ function geminiReasoningEffort(model: string): "none" | "minimal" | "low" {
 /** Comma-separated model list → unique non-empty ids. */
 function parseModelList(raw: string | undefined, fallback: readonly string[]): string[] {
   if (!raw?.trim()) return [...fallback];
-  const list = [...new Set(raw.split(",").map((s) => s.trim()).filter(Boolean))];
+  const list = [
+    ...new Set(
+      raw
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean)
+    ),
+  ];
   return list.length ? list : [...fallback];
 }
 
@@ -339,9 +346,7 @@ async function callProvider(
     signal,
   });
   if (!res.ok) {
-    const err: ProviderHttpError = new Error(
-      `${res.status} ${(await res.text()).slice(0, 200)}`
-    );
+    const err: ProviderHttpError = new Error(`${res.status} ${(await res.text()).slice(0, 200)}`);
     const retryAfterMs = parseRetryAfterMs(res.headers.get("retry-after"));
     if (retryAfterMs !== undefined) err.retryAfterMs = retryAfterMs;
     throw err;
@@ -395,11 +400,7 @@ export async function complete(
       if (signal.aborted) throw new Error("LLM request aborted");
       const msg = e instanceof Error ? e.message : String(e);
       errors.push(`${providerLabel(p)}: ${msg}`);
-      if (
-        p.kind === "openai-compat" &&
-        isGeminiCompat(p) &&
-        isGeminiModelMissing(msg)
-      ) {
+      if (p.kind === "openai-compat" && isGeminiCompat(p) && isGeminiModelMissing(msg)) {
         markGeminiDeadModel(p.model);
       }
       if (p !== chain[chain.length - 1]) {

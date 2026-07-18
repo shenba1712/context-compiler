@@ -118,9 +118,7 @@ async function decideNext(
   // When the compile already sits at the ceiling (web path: start === ceiling),
   // recompile cannot grow — omit it so the model doesn't waste a turn.
   const allowRecompile = tokenCeiling > currentBudget;
-  const actions = allowRecompile
-    ? `"answer" | "expand" | "recompile"`
-    : `"answer" | "expand"`;
+  const actions = allowRecompile ? `"answer" | "expand" | "recompile"` : `"answer" | "expand"`;
   const recompileHint = allowRecompile
     ? ` Otherwise use "expand" with the section_id most likely to hold the answer, or "recompile" ` +
       `with a larger "budget" up to ${tokenCeiling} if the current pack was smaller than the user's ceiling.`
@@ -191,10 +189,7 @@ export async function runAgent(
   const rawTokens = compiled.raw_tokens;
   // Ceiling defaults to the same user budget (not a hidden larger pool). Never
   // aim past EOF.
-  const tokenCeiling = Math.min(
-    opts.tokenCeiling ?? startBudget,
-    Math.max(rawTokens, 1)
-  );
+  const tokenCeiling = Math.min(opts.tokenCeiling ?? startBudget, Math.max(rawTokens, 1));
 
   let baseMarkdown = compiled.markdown;
   let baseTokens = compiled.tokens_used;
@@ -308,10 +303,7 @@ export async function runAgent(
 
     // recompile — only offered when ceiling > currentBudget. Still guard a
     // no-op (next <= current) so a bad model response cannot loop.
-    const next = Math.min(
-      Math.max(decision.budget ?? currentBudget * 2, currentBudget + 500),
-      tokenCeiling
-    );
+    const next = Math.min(Math.max(decision.budget ?? currentBudget * 2, currentBudget + 500), tokenCeiling);
     if (next <= currentBudget) {
       stopped = "confident";
       break;

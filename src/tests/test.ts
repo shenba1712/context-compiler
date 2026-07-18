@@ -82,7 +82,15 @@ import { intEnv, numEnv } from "../env.js";
 import { pack } from "../pack.js";
 import { checkPathWithin } from "../path-guard.js";
 import { compileContext, expandSection } from "../pipeline.js";
-import { bm25Scores, queryAttribution, rank, rankMulti, splitQueries, tokenize, tokenizeQuery } from "../rank.js";
+import {
+  bm25Scores,
+  queryAttribution,
+  rank,
+  rankMulti,
+  splitQueries,
+  tokenize,
+  tokenizeQuery,
+} from "../rank.js";
 import { countTokens } from "../tokens.js";
 import { UploadRejected, validateUpload } from "../upload-guard.js";
 
@@ -340,8 +348,7 @@ async function testBm25FirstPackingDespiteDemotion() {
     "## Scandal\n\n" +
       "The King of Bohemia comes to Sherlock Holmes because Irene Adler has a " +
       "photograph that could compromise his forthcoming marriage. ".repeat(35),
-    "## Other case\n\n" +
-      "A red-headed league and a bank tunnel distraction fill this chapter. ".repeat(35),
+    "## Other case\n\n" + "A red-headed league and a bank tunnel distraction fill this chapter. ".repeat(35),
   ].join("\n\n");
   const chunks = chunkMarkdown(doc);
   const task = "Why does the King of Bohemia come to Sherlock Holmes?";
@@ -402,24 +409,17 @@ async function testNextSectionHint() {
   // End-to-end: Sherlock @ 1150 should surface s18 (or similar strong omit).
   const sherlock = join(process.cwd(), "public", "samples", "sherlock-holmes.docx");
   if (existsSync(sherlock)) {
-    const r = await compileContext(
-      sherlock,
-      "Why does the King of Bohemia come to Sherlock Holmes?",
-      1150
-    );
+    const r = await compileContext(sherlock, "Why does the King of Bohemia come to Sherlock Holmes?", 1150);
     assert.ok(r.next_section_hint, "Sherlock@1150 should hint at the next strong omitted section");
-    assert.ok(
-      (r.next_section_hint!.relevance ?? 0) >= 40,
-      "hinted section should be high-relevance"
-    );
+    assert.ok((r.next_section_hint!.relevance ?? 0) >= 40, "hinted section should be high-relevance");
     assert.ok(
       r.next_section_hint!.suggested_budget > r.token_budget,
       "suggested budget must exceed the current one"
     );
     console.log(
-    `  next-section hint ok: unit + Sherlock@1150 → ${r.next_section_hint!.id} ` +
-      `(raise to ~${r.next_section_hint!.suggested_budget})`
-  );
+      `  next-section hint ok: unit + Sherlock@1150 → ${r.next_section_hint!.id} ` +
+        `(raise to ~${r.next_section_hint!.suggested_budget})`
+    );
   } else {
     console.log("  next-section hint ok: unit cases (Sherlock sample not present, skipped e2e)");
   }
@@ -431,11 +431,7 @@ async function testRelevanceFloorDropsWeakToc() {
     console.log("  relevance-floor toc ok: skipped (no Sherlock sample)");
     return;
   }
-  const r = await compileContext(
-    sherlock,
-    "Why does the King of Bohemia come to Sherlock Holmes?",
-    2000
-  );
+  const r = await compileContext(sherlock, "Why does the King of Bohemia come to Sherlock Holmes?", 2000);
   const weak = r.selected_sections.filter((s) => (s.relevance ?? 0) < 40);
   assert.equal(
     weak.length,
@@ -446,9 +442,7 @@ async function testRelevanceFloorDropsWeakToc() {
     r.selected_sections.some((s) => (s.relevance ?? 0) >= 80),
     "strong Bohemia sections should still be selected"
   );
-  console.log(
-    `  relevance-floor toc ok: ${r.selected_sections.length} sections, all ≥40% relevance`
-  );
+  console.log(`  relevance-floor toc ok: ${r.selected_sections.length} sections, all ≥40% relevance`);
 }
 
 async function testMultiQuery() {
@@ -519,18 +513,15 @@ async function testOpenAICompatClient() {
   // Clear every higher-priority provider + model overrides so this test
   // exercises the generic OpenAI-compatible path in isolation.
   try {
-    await withCleanEnv(
-      [...LLM_PROVIDER_KEYS, ...LLM_MODEL_KEYS, "CC_LLM_BASE_URL"],
-      async () => {
-        process.env.CC_LLM_API_KEY = "test-key";
-        process.env.CC_LLM_BASE_URL = `http://127.0.0.1:${port}/v1`;
-        const { complete, hasLlm, answerModel } = await import("../llm.js");
-        assert.equal(hasLlm(), true);
-        assert.equal(answerModel(), "gpt-4o-mini"); // openai-compat default
-        assert.equal(await complete("ping"), "mock-answer");
-        console.log("  openai-compat ok: generic provider path works");
-      }
-    );
+    await withCleanEnv([...LLM_PROVIDER_KEYS, ...LLM_MODEL_KEYS, "CC_LLM_BASE_URL"], async () => {
+      process.env.CC_LLM_API_KEY = "test-key";
+      process.env.CC_LLM_BASE_URL = `http://127.0.0.1:${port}/v1`;
+      const { complete, hasLlm, answerModel } = await import("../llm.js");
+      assert.equal(hasLlm(), true);
+      assert.equal(answerModel(), "gpt-4o-mini"); // openai-compat default
+      assert.equal(await complete("ping"), "mock-answer");
+      console.log("  openai-compat ok: generic provider path works");
+    });
   } finally {
     server.close();
   }
@@ -644,9 +635,7 @@ async function testGeminiModelFailover() {
         process.env.CC_GEMINI_BASE_URL = `http://127.0.0.1:${port}`;
         // Existing 429 path must stay fast — cooldown is covered in its own test.
         process.env.CC_LLM_FAILOVER_COOLDOWN_MS = "0";
-        const { complete, geminiModels, answerModel, clearGeminiDeadModels } = await import(
-          "../llm.js"
-        );
+        const { complete, geminiModels, answerModel, clearGeminiDeadModels } = await import("../llm.js");
         clearGeminiDeadModels();
         assert.deepEqual(geminiModels(), [
           "gemini-flash-lite-latest",
@@ -676,8 +665,11 @@ async function testGeminiModelFailover() {
         process.env.OPENROUTER_API_KEY = "or-key";
         process.env.CC_OPENROUTER_BASE_URL = `http://127.0.0.1:${orPort}`;
         try {
-          const { complete: complete2, geminiModels: geminiModels2, answerModel: answerModel2 } =
-            await import("../llm.js");
+          const {
+            complete: complete2,
+            geminiModels: geminiModels2,
+            answerModel: answerModel2,
+          } = await import("../llm.js");
           assert.deepEqual(geminiModels2(), ["model-a", "model-b"]);
           assert.equal(await complete2("ping"), "ok:model-b");
           assert.deepEqual(seen, ["model-a", "model-b"]);
@@ -696,11 +688,7 @@ async function testGeminiModelFailover() {
           assert.deepEqual(seen, ["model-429", "model-ok"]);
           seen.length = 0;
           assert.equal(await complete2("ping4"), "ok:model-ok");
-          assert.deepEqual(
-            seen,
-            ["model-429", "model-ok"],
-            "429 must not blacklist — model-429 hit again"
-          );
+          assert.deepEqual(seen, ["model-429", "model-ok"], "429 must not blacklist — model-429 hit again");
 
           console.log(
             "  gemini model failover ok: defaults + override; dead-model cache; 429 not cached; OpenRouter unused"
@@ -793,15 +781,10 @@ async function testGeminiFailoverCooldown() {
         const t2 = Date.now();
         assert.equal(await complete("ping-404"), "ok:model-ok");
         assert.deepEqual(seen, ["model-404", "model-ok"]);
-        assert.ok(
-          Date.now() - t2 < 150,
-          "404 failover must not sleep the 200ms cooldown"
-        );
+        assert.ok(Date.now() - t2 < 150, "404 failover must not sleep the 200ms cooldown");
 
         clearGeminiDeadModels();
-        console.log(
-          "  gemini failover cooldown ok: Retry-After path, env cooldown on 429, no sleep on 404"
-        );
+        console.log("  gemini failover cooldown ok: Retry-After path, env cooldown on 429, no sleep on 404");
       }
     );
   } finally {
@@ -915,7 +898,10 @@ async function testAgentLoop() {
       assert.equal(whole.stopped_reason, "whole_file");
       assert.equal(whole.tokens_read, whole.raw_tokens, "read the whole small file once");
       assert.equal(decideCalls, 0, "no decide steps when the whole file already fit");
-      assert.ok(whole.steps[0].detail.includes("whole file"), `compile step should say whole file, got ${whole.steps[0].detail}`);
+      assert.ok(
+        whole.steps[0].detail.includes("whole file"),
+        `compile step should say whole file, got ${whole.steps[0].detail}`
+      );
       assert.ok(!whole.steps.some((s) => s.action === "expand"), "no expands on a whole-file short-circuit");
       assert.ok(whole.answer.includes("swordfish"));
     } finally {
@@ -960,7 +946,11 @@ async function testAgentLoop() {
     const alwaysExpandCeiling: (p: string) => Promise<string> = async (prompt) => {
       if (/ONLY a JSON object/.test(prompt)) {
         assert.match(prompt, /"answer" \| "expand"/, "web-equal ceiling omits recompile from decide prompt");
-        assert.doesNotMatch(prompt, /"recompile"/, "recompile must not be offered when ceiling ≤ current budget");
+        assert.doesNotMatch(
+          prompt,
+          /"recompile"/,
+          "recompile must not be offered when ceiling ≤ current budget"
+        );
         const id = (prompt.match(/- (s\d+)/) ?? [])[1];
         return JSON.stringify({ action: "expand", section_id: id, reasoning: "more" });
       }
@@ -978,8 +968,7 @@ async function testAgentLoop() {
       "always-expand under equal start/ceiling stops with token_ceiling"
     );
     assert.ok(
-      ceilingHit.tokens_read >= softCeiling ||
-        ceilingHit.steps.some((s) => s.action === "expand"),
+      ceilingHit.tokens_read >= softCeiling || ceilingHit.steps.some((s) => s.action === "expand"),
       `should hit soft ceiling or expand at least once (tokens_read=${ceilingHit.tokens_read})`
     );
     // Soft overshoot is allowed: last expand can finish past the ceiling.
@@ -988,7 +977,10 @@ async function testAgentLoop() {
       "soft ceiling bounds expand count"
     );
     if (ceilingHit.tokens_read > softCeiling) {
-      assert.ok(ceilingHit.steps.some((s) => s.action === "expand"), "overshoot comes from an expand");
+      assert.ok(
+        ceilingHit.steps.some((s) => s.action === "expand"),
+        "overshoot comes from an expand"
+      );
     }
 
     // 5. Equal start/ceiling: inject recompile → schema rejects it → answer
@@ -1015,7 +1007,10 @@ async function testAgentLoop() {
     });
     assert.ok(decideCalls >= 1, "decide should run when compile left headroom under ceiling");
     assert.equal(noop.stopped_reason, "confident", "rejected recompile collapses to answer");
-    assert.ok(!noop.steps.some((s) => s.action === "recompile"), "no recompile step when ceiling equals start");
+    assert.ok(
+      !noop.steps.some((s) => s.action === "recompile"),
+      "no recompile step when ceiling equals start"
+    );
 
     console.log(
       "  agent loop ok: expand→answer, step-cap, bad JSON, soft ceiling, recompile omitted at equal ceiling"
@@ -1055,117 +1050,111 @@ async function testAgentSseEndpoint() {
   await new Promise<void>((r) => chat.listen(0, r));
   const chatPort = (chat.address() as { port: number }).port;
 
-  await withCleanEnv(
-    [...LLM_PROVIDER_KEYS, ...LLM_MODEL_KEYS, "CC_LLM_BASE_URL"],
-    async () => {
-      process.env.CC_LLM_API_KEY = "test-key";
-      process.env.CC_LLM_BASE_URL = `http://127.0.0.1:${chatPort}/v1`;
+  await withCleanEnv([...LLM_PROVIDER_KEYS, ...LLM_MODEL_KEYS, "CC_LLM_BASE_URL"], async () => {
+    process.env.CC_LLM_API_KEY = "test-key";
+    process.env.CC_LLM_BASE_URL = `http://127.0.0.1:${chatPort}/v1`;
 
-      const { app } = await import("../web.js");
-      const server = app.listen(0);
-      await new Promise<void>((r) => server.once("listening", () => r()));
-      const appPort = (server.address() as { port: number }).port;
+    const { app } = await import("../web.js");
+    const server = app.listen(0);
+    await new Promise<void>((r) => server.once("listening", () => r()));
+    const appPort = (server.address() as { port: number }).port;
 
-      try {
-        const form = new FormData();
-        form.append("task", "termination notice period");
-        form.append("token_budget", "1200");
-        form.append("file", new Blob([makeTestDoc()], { type: "text/markdown" }), "doc.md");
-        const res = await fetch(`http://127.0.0.1:${appPort}/api/agent`, { method: "POST", body: form });
-        assert.equal(res.headers.get("content-type"), "text/event-stream", "agent route streams SSE");
+    try {
+      const form = new FormData();
+      form.append("task", "termination notice period");
+      form.append("token_budget", "1200");
+      form.append("file", new Blob([makeTestDoc()], { type: "text/markdown" }), "doc.md");
+      const res = await fetch(`http://127.0.0.1:${appPort}/api/agent`, { method: "POST", body: form });
+      assert.equal(res.headers.get("content-type"), "text/event-stream", "agent route streams SSE");
 
-        // Parse the buffered event stream into {event, data} records.
-        const raw = await res.text();
-        const events = raw
-          .split("\n\n")
-          .filter(Boolean)
-          .map((block) => {
-            const event = (block.match(/^event: (.*)$/m) ?? [])[1];
-            const data = (block.match(/^data: (.*)$/m) ?? [])[1];
-            return { event, data: data ? JSON.parse(data) : null };
-          });
-
-        const steps = events.filter((e) => e.event === "step");
-        const done = events.find((e) => e.event === "done");
-        assert.ok(steps.length >= 2, "should stream at least a compile and one more step");
-        assert.equal(steps[0].data.action, "compile", "first streamed step is the compile");
-        assert.equal(
-          String(steps[0].data.detail).replace(/[^\d]/g, ""),
-          "1200",
-          `first compile should respect token_budget=1200, got ${steps[0].data.detail}`
-        );
-        assert.ok(
-          steps[0].data.tokens_added <= 1200,
-          "compile pack must stay under the requested budget"
-        );
-        assert.ok(
-          steps.some((s) => s.data.action === "expand"),
-          "the agent expanded a section over the wire"
-        );
-        assert.ok(done, "a done event closes the stream");
-        assert.ok(done!.data.answer.includes("90 days"), "final answer arrives in the done event");
-        assert.ok(done!.data.tokens_read < done!.data.raw_tokens, "reads less than the whole file");
-        assert.ok(
-          done!.data.tokens_read <= 1200 + 2500,
-          "tokens_read stays near the soft ceiling (compile + at most one expand overshoot)"
-        );
-        const handle = done!.data.parity_handle as string;
-        assert.ok(typeof handle === "string" && /^[a-f0-9]{32}$/.test(handle), "opaque parity_handle on done");
-        assert.equal(
-          done!.data.final_context,
-          undefined,
-          "agent context must not be sent over SSE (only the handle)"
-        );
-
-        // POST /api/agent-parity: happy path, then one-shot 410, invalid → 400.
-        const parityOk = await fetch(`http://127.0.0.1:${appPort}/api/agent-parity`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ parity_handle: handle }),
+      // Parse the buffered event stream into {event, data} records.
+      const raw = await res.text();
+      const events = raw
+        .split("\n\n")
+        .filter(Boolean)
+        .map((block) => {
+          const event = (block.match(/^event: (.*)$/m) ?? [])[1];
+          const data = (block.match(/^data: (.*)$/m) ?? [])[1];
+          return { event, data: data ? JSON.parse(data) : null };
         });
-        assert.equal(parityOk.status, 200, "agent-parity succeeds with a fresh handle");
-        const parityBody = (await parityOk.json()) as {
-          full?: { answer?: string; context_tokens?: number };
-          agent?: { answer?: string; context_tokens?: number };
-          model?: string;
-        };
-        assert.ok(parityBody.full?.answer, "parity returns full-file answer");
-        assert.ok(parityBody.agent?.answer, "parity returns agent-context answer");
-        assert.ok(typeof parityBody.full?.context_tokens === "number");
-        assert.ok(typeof parityBody.agent?.context_tokens === "number");
-        assert.ok(
-          (parityBody.full!.context_tokens as number) >= (parityBody.agent!.context_tokens as number),
-          "full context is at least as large as agent context"
-        );
 
-        const parityReuse = await fetch(`http://127.0.0.1:${appPort}/api/agent-parity`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ parity_handle: handle }),
-        });
-        assert.equal(parityReuse.status, 410, "parity handle is one-shot — second call is gone");
+      const steps = events.filter((e) => e.event === "step");
+      const done = events.find((e) => e.event === "done");
+      assert.ok(steps.length >= 2, "should stream at least a compile and one more step");
+      assert.equal(steps[0].data.action, "compile", "first streamed step is the compile");
+      assert.equal(
+        String(steps[0].data.detail).replace(/[^\d]/g, ""),
+        "1200",
+        `first compile should respect token_budget=1200, got ${steps[0].data.detail}`
+      );
+      assert.ok(steps[0].data.tokens_added <= 1200, "compile pack must stay under the requested budget");
+      assert.ok(
+        steps.some((s) => s.data.action === "expand"),
+        "the agent expanded a section over the wire"
+      );
+      assert.ok(done, "a done event closes the stream");
+      assert.ok(done!.data.answer.includes("90 days"), "final answer arrives in the done event");
+      assert.ok(done!.data.tokens_read < done!.data.raw_tokens, "reads less than the whole file");
+      assert.ok(
+        done!.data.tokens_read <= 1200 + 2500,
+        "tokens_read stays near the soft ceiling (compile + at most one expand overshoot)"
+      );
+      const handle = done!.data.parity_handle as string;
+      assert.ok(typeof handle === "string" && /^[a-f0-9]{32}$/.test(handle), "opaque parity_handle on done");
+      assert.equal(
+        done!.data.final_context,
+        undefined,
+        "agent context must not be sent over SSE (only the handle)"
+      );
 
-        const parityBad = await fetch(`http://127.0.0.1:${appPort}/api/agent-parity`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ parity_handle: "not-a-valid-handle" }),
-        });
-        assert.equal(parityBad.status, 400, "invalid parity_handle → 400");
+      // POST /api/agent-parity: happy path, then one-shot 410, invalid → 400.
+      const parityOk = await fetch(`http://127.0.0.1:${appPort}/api/agent-parity`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ parity_handle: handle }),
+      });
+      assert.equal(parityOk.status, 200, "agent-parity succeeds with a fresh handle");
+      const parityBody = (await parityOk.json()) as {
+        full?: { answer?: string; context_tokens?: number };
+        agent?: { answer?: string; context_tokens?: number };
+        model?: string;
+      };
+      assert.ok(parityBody.full?.answer, "parity returns full-file answer");
+      assert.ok(parityBody.agent?.answer, "parity returns agent-context answer");
+      assert.ok(typeof parityBody.full?.context_tokens === "number");
+      assert.ok(typeof parityBody.agent?.context_tokens === "number");
+      assert.ok(
+        (parityBody.full!.context_tokens as number) >= (parityBody.agent!.context_tokens as number),
+        "full context is at least as large as agent context"
+      );
 
-        const parityMissing = await fetch(`http://127.0.0.1:${appPort}/api/agent-parity`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ parity_handle: "a".repeat(32) }),
-        });
-        assert.equal(parityMissing.status, 410, "unknown handle → 410");
+      const parityReuse = await fetch(`http://127.0.0.1:${appPort}/api/agent-parity`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ parity_handle: handle }),
+      });
+      assert.equal(parityReuse.status, 410, "parity handle is one-shot — second call is gone");
 
-        console.log("  agent SSE ok: token_budget, live steps, agent-parity 200/400/410 one-shot");
-      } finally {
-        server.close();
-        chat.close();
-      }
+      const parityBad = await fetch(`http://127.0.0.1:${appPort}/api/agent-parity`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ parity_handle: "not-a-valid-handle" }),
+      });
+      assert.equal(parityBad.status, 400, "invalid parity_handle → 400");
+
+      const parityMissing = await fetch(`http://127.0.0.1:${appPort}/api/agent-parity`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ parity_handle: "a".repeat(32) }),
+      });
+      assert.equal(parityMissing.status, 410, "unknown handle → 410");
+
+      console.log("  agent SSE ok: token_budget, live steps, agent-parity 200/400/410 one-shot");
+    } finally {
+      server.close();
+      chat.close();
     }
-  );
+  });
 }
 
 async function testAnswerExpandedIds() {
@@ -1221,42 +1210,39 @@ async function testAnswerExpandedIds() {
     unlinkSync(tmp);
   }
 
-  await withCleanEnv(
-    [...LLM_PROVIDER_KEYS, ...LLM_MODEL_KEYS, "CC_LLM_BASE_URL"],
-    async () => {
-      process.env.CC_LLM_API_KEY = "test-key";
-      process.env.CC_LLM_BASE_URL = `http://127.0.0.1:${chatPort}/v1`;
+  await withCleanEnv([...LLM_PROVIDER_KEYS, ...LLM_MODEL_KEYS, "CC_LLM_BASE_URL"], async () => {
+    process.env.CC_LLM_API_KEY = "test-key";
+    process.env.CC_LLM_BASE_URL = `http://127.0.0.1:${chatPort}/v1`;
 
-      const { app } = await import("../web.js");
-      const server = app.listen(0);
-      await new Promise<void>((r) => server.once("listening", () => r()));
-      const appPort = (server.address() as { port: number }).port;
+    const { app } = await import("../web.js");
+    const server = app.listen(0);
+    await new Promise<void>((r) => server.once("listening", () => r()));
+    const appPort = (server.address() as { port: number }).port;
 
-      try {
-        const form = new FormData();
-        form.append("task", "alpha filler text");
-        form.append("token_budget", "400");
-        form.append("expanded_ids", JSON.stringify([omittedId]));
-        form.append("file", new Blob([doc], { type: "text/markdown" }), "doc.md");
-        const res = await fetch(`http://127.0.0.1:${appPort}/api/answer`, { method: "POST", body: form });
-        assert.equal(res.status, 200, "answer with expanded_ids succeeds");
-        const body = (await res.json()) as {
-          compiled?: { answer?: string; context_tokens?: number; expanded_ids?: string[] };
-          full?: { answer?: string };
-        };
-        assert.deepEqual(body.compiled?.expanded_ids, [omittedId], "expanded_ids echoed on compiled side");
-        assert.ok(
-          (body.compiled!.context_tokens as number) > baseTokens,
-          `compiled context should grow with expand (${body.compiled!.context_tokens} vs base ${baseTokens})`
-        );
-        assert.equal(body.compiled?.answer, "found-needle", "compiled prompt must include the expanded needle");
-        console.log("  answer expanded_ids ok: omitted needle merged into Prove context");
-      } finally {
-        server.close();
-        chat.close();
-      }
+    try {
+      const form = new FormData();
+      form.append("task", "alpha filler text");
+      form.append("token_budget", "400");
+      form.append("expanded_ids", JSON.stringify([omittedId]));
+      form.append("file", new Blob([doc], { type: "text/markdown" }), "doc.md");
+      const res = await fetch(`http://127.0.0.1:${appPort}/api/answer`, { method: "POST", body: form });
+      assert.equal(res.status, 200, "answer with expanded_ids succeeds");
+      const body = (await res.json()) as {
+        compiled?: { answer?: string; context_tokens?: number; expanded_ids?: string[] };
+        full?: { answer?: string };
+      };
+      assert.deepEqual(body.compiled?.expanded_ids, [omittedId], "expanded_ids echoed on compiled side");
+      assert.ok(
+        (body.compiled!.context_tokens as number) > baseTokens,
+        `compiled context should grow with expand (${body.compiled!.context_tokens} vs base ${baseTokens})`
+      );
+      assert.equal(body.compiled?.answer, "found-needle", "compiled prompt must include the expanded needle");
+      console.log("  answer expanded_ids ok: omitted needle merged into Prove context");
+    } finally {
+      server.close();
+      chat.close();
     }
-  );
+  });
 }
 
 async function testRateCostsInConfig() {
@@ -1450,9 +1436,7 @@ async function testCompileIncrementsCounter() {
       try {
         const before =
           (
-            (await (
-              await fetch(`http://127.0.0.1:${port}/metrics`, { headers: metricsHeaders })
-            ).json()) as {
+            (await (await fetch(`http://127.0.0.1:${port}/metrics`, { headers: metricsHeaders })).json()) as {
               counters: Record<string, number>;
             }
           ).counters.compiles ?? 0;
@@ -1469,9 +1453,7 @@ async function testCompileIncrementsCounter() {
 
         const after =
           (
-            (await (
-              await fetch(`http://127.0.0.1:${port}/metrics`, { headers: metricsHeaders })
-            ).json()) as {
+            (await (await fetch(`http://127.0.0.1:${port}/metrics`, { headers: metricsHeaders })).json()) as {
               counters: Record<string, number>;
             }
           ).counters.compiles ?? 0;

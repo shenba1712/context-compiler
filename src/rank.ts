@@ -243,9 +243,7 @@ function honorificExpansions(task: string): { add: string[]; dropFirst: Set<stri
 export function tokenizeQuery(task: string): string[] {
   const cleaned = task.replace(QUERY_FILLER_RE, " ");
   const { add, dropFirst } = honorificExpansions(task);
-  const base = tokenize(cleaned).filter(
-    (t) => t.length > 1 && !QUERY_STOP.has(t) && !dropFirst.has(t)
-  );
+  const base = tokenize(cleaned).filter((t) => t.length > 1 && !QUERY_STOP.has(t) && !dropFirst.has(t));
   const seen = new Set(base);
   const out = [...base];
   for (const t of add) {

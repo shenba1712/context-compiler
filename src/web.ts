@@ -150,12 +150,7 @@ function requestCost(req: express.Request): number {
   const p = req.path;
   if (p === "/agent" || p.endsWith("/agent")) return RATE_COST_AGENT;
   // Agent post-run "Compare to full file" costs the same as Prove.
-  if (
-    p === "/answer" ||
-    p.endsWith("/answer") ||
-    p === "/agent-parity" ||
-    p.endsWith("/agent-parity")
-  ) {
+  if (p === "/answer" || p.endsWith("/answer") || p === "/agent-parity" || p.endsWith("/agent-parity")) {
     return RATE_COST_ANSWER;
   }
   return 1;
@@ -523,9 +518,7 @@ app.post("/api/answer", upload.single("file"), guardUpload, async (req, res) => 
         expandedApplied.push(id);
       }
       const compiledContext =
-        expandExtras.length > 0
-          ? compiled.markdown + "\n\n" + expandExtras.join("\n\n")
-          : compiled.markdown;
+        expandExtras.length > 0 ? compiled.markdown + "\n\n" + expandExtras.join("\n\n") : compiled.markdown;
       const compiledContextTokens = countTokens(compiledContext);
       const fullTok = countTokens(full);
       const reductionPct =
@@ -658,8 +651,7 @@ app.post("/api/agent", upload.single("file"), guardUpload, async (req, res) => {
     // The stream is already open, so errors go out as an SSE event, not a status
     // code. Conversion / LLM-unavailable messages are safe for clients; anything
     // else stays generic. Cancelled/aborted is quiet — the client already left.
-    const cancelled =
-      e instanceof Error && /cancelled|aborted/i.test(e.message);
+    const cancelled = e instanceof Error && /cancelled|aborted/i.test(e.message);
     const msg =
       e instanceof ConversionError
         ? e.message
@@ -668,11 +660,7 @@ app.post("/api/agent", upload.single("file"), guardUpload, async (req, res) => {
           : cancelled
             ? "Agent cancelled"
             : "Internal server error.";
-    if (
-      !(e instanceof ConversionError) &&
-      !(e instanceof LlmUnavailableError) &&
-      !cancelled
-    ) {
+    if (!(e instanceof ConversionError) && !(e instanceof LlmUnavailableError) && !cancelled) {
       log.error("agent failed", { err: e instanceof Error ? e.message : String(e) });
     } else if (e instanceof LlmUnavailableError) {
       log.warn("agent: LLM unavailable", { err: e.message });

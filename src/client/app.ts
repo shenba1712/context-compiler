@@ -623,8 +623,7 @@ type LoadingKind = "compile" | "prove";
 const LOADING_COPY: Record<LoadingKind, { title: string; detail: string }> = {
   compile: {
     title: "Compiling…",
-    detail:
-      "Converting a file for the first time can take a few seconds; cached files are instant.",
+    detail: "Converting a file for the first time can take a few seconds; cached files are instant.",
   },
   prove: {
     title: "Proving answer parity…",
@@ -846,9 +845,7 @@ function onAgentDone(r: AgentRunResult): void {
   applyLang($("aAnswer"), r.answer);
   const over =
     ceiling > 0 && r.tokens_read > ceiling
-      ? " Soft ceiling was " +
-        ceiling.toLocaleString() +
-        " — last expand finished slightly over (expected)."
+      ? " Soft ceiling was " + ceiling.toLocaleString() + " — last expand finished slightly over (expected)."
       : "";
   $("aStopped").textContent =
     STOP_TEXT[r.stopped_reason] +
@@ -1270,7 +1267,9 @@ function makeChip(o: SectionInfo, d: CompileApiResult, exp: HTMLElement): HTMLBu
             "Included " +
               lastCrumb(o.section) +
               " in Prove. Effective context ≈ " +
-              (lastCompiledTokens + [...proveExpandedTokens.values()].reduce((a, b) => a + b, 0)).toLocaleString() +
+              (
+                lastCompiledTokens + [...proveExpandedTokens.values()].reduce((a, b) => a + b, 0)
+              ).toLocaleString() +
               " tokens."
           );
         } else {
