@@ -18,6 +18,9 @@
  * CC_GEMINI_MODEL). Each model is tried before moving to the next provider.
  * Soft 404 / model-not-found failures are remembered briefly
  * (CC_GEMINI_DEAD_MODEL_TTL_MS) so later complete() calls skip that id.
+ * Soft 429/quota on Gemini pauses briefly before the next chain entry
+ * (CC_LLM_FAILOVER_COOLDOWN_MS, default 1500ms, capped at 10s; prefers
+ * Retry-After when the provider sends it). 404s fail over immediately.
  *
  * Configure as many or as few providers as you like — an unset key just skips
  * that provider. No keys at all → fully local (BM25 rank, no answer panel).
@@ -42,11 +45,9 @@ const OPENAI_DEFAULT = "gpt-4o-mini";
 const LLM_TIMEOUT_MS = intEnv("CC_LLM_TIMEOUT_MS", 30_000, 1_000, 300_000);
 const MAX_CONCURRENT_LLM = intEnv("CC_MAX_CONCURRENT_LLM", 2, 1, 32);
 
-/** Soft failover that is expected on free tiers (429/quota OR dead model ids). */
-function isSoftFailover(msg: string): boolean {
-  return /\b429\b|rate.?limit|too many requests|quota|\b404\b|not found|not supported|invalid model/i.test(
-    msg
-  );
+/** Soft rate-limit / quota — recoverable; do not blacklist the model. */
+function isSoftRateLimit(msg: string): boolean {
+  return /\b429\b|rate.?limit|too many requests|quota/i.test(msg);
 }
 
 /**
@@ -54,9 +55,50 @@ function isSoftFailover(msg: string): boolean {
  * quickly and must not blacklist a model for the dead-model TTL).
  */
 function isGeminiModelMissing(msg: string): boolean {
-  if (/\b429\b|rate.?limit|too many requests|quota/i.test(msg)) return false;
+  if (isSoftRateLimit(msg)) return false;
   return /\b404\b|not found|not supported|invalid model/i.test(msg);
 }
+
+/** Soft failover that is expected on free tiers (429/quota OR dead model ids). */
+function isSoftFailover(msg: string): boolean {
+  return isSoftRateLimit(msg) || isGeminiModelMissing(msg);
+}
+
+/** Default pause before the next chain entry after a Gemini soft 429/quota. */
+const FAILOVER_COOLDOWN_MAX_MS = 10_000;
+
+function failoverCooldownMs(): number {
+  return intEnv("CC_LLM_FAILOVER_COOLDOWN_MS", 1500, 0, FAILOVER_COOLDOWN_MAX_MS);
+}
+
+/** Parse Retry-After (delta-seconds or HTTP-date) → ms, or undefined if absent/invalid. */
+function parseRetryAfterMs(header: string | null): number | undefined {
+  if (!header?.trim()) return undefined;
+  const raw = header.trim();
+  if (/^\d+$/.test(raw)) return Number(raw) * 1000;
+  const when = Date.parse(raw);
+  if (!Number.isNaN(when)) return Math.max(0, when - Date.now());
+  return undefined;
+}
+
+/** Sleep that rejects promptly when `signal` aborts (so failover does not outlive the client). */
+function sleepAbortable(ms: number, signal: AbortSignal): Promise<void> {
+  if (ms <= 0) return Promise.resolve();
+  if (signal.aborted) return Promise.reject(new Error("LLM request aborted"));
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new Error("LLM request aborted"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+type ProviderHttpError = Error & { retryAfterMs?: number };
 
 /** Process-local: Gemini model id → expiry ms. Bounded; oldest dropped first. */
 const geminiDeadModels = new Map<string, number>();
@@ -297,7 +339,12 @@ async function callProvider(
     signal,
   });
   if (!res.ok) {
-    throw new Error(`${res.status} ${(await res.text()).slice(0, 200)}`);
+    const err: ProviderHttpError = new Error(
+      `${res.status} ${(await res.text()).slice(0, 200)}`
+    );
+    const retryAfterMs = parseRetryAfterMs(res.headers.get("retry-after"));
+    if (retryAfterMs !== undefined) err.retryAfterMs = retryAfterMs;
+    throw err;
   }
   const data = (await res.json()) as {
     choices?: Array<{ message?: { content?: string }; finish_reason?: string }>;
@@ -364,6 +411,28 @@ export async function complete(
           model: p.model,
           err: msg,
         });
+        // Gemini soft 429/quota: brief cool-down before the next chain entry
+        // (free-tier walls often clear in a second or two). Skip for 404 /
+        // dead-model (fail over immediately) and never sleep after the last entry.
+        if (p.kind === "openai-compat" && isGeminiCompat(p) && isSoftRateLimit(msg)) {
+          const fromHeader =
+            e instanceof Error && typeof (e as ProviderHttpError).retryAfterMs === "number"
+              ? (e as ProviderHttpError).retryAfterMs
+              : undefined;
+          const waitMs = Math.min(
+            fromHeader !== undefined ? fromHeader : failoverCooldownMs(),
+            FAILOVER_COOLDOWN_MAX_MS
+          );
+          if (waitMs > 0) {
+            log.info("LLM failover cool-down before next model", {
+              provider: p.name,
+              model: p.model,
+              ms: waitMs,
+              fromRetryAfter: fromHeader !== undefined,
+            });
+            await sleepAbortable(waitMs, signal);
+          }
+        }
       }
     }
   }

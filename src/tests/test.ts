@@ -637,10 +637,13 @@ async function testGeminiModelFailover() {
         "CC_GEMINI_BASE_URL",
         "CC_OPENROUTER_BASE_URL",
         "CC_GEMINI_DEAD_MODEL_TTL_MS",
+        "CC_LLM_FAILOVER_COOLDOWN_MS",
       ],
       async () => {
         process.env.GEMINI_API_KEY = "gem-key";
         process.env.CC_GEMINI_BASE_URL = `http://127.0.0.1:${port}`;
+        // Existing 429 path must stay fast — cooldown is covered in its own test.
+        process.env.CC_LLM_FAILOVER_COOLDOWN_MS = "0";
         const { complete, geminiModels, answerModel, clearGeminiDeadModels } = await import(
           "../llm.js"
         );
@@ -710,6 +713,150 @@ async function testGeminiModelFailover() {
     );
   } finally {
     server.close();
+  }
+}
+
+async function testGeminiFailoverCooldown() {
+  // Soft 429 on Gemini model-a must pause briefly before trying model-b.
+  // Env knocks the default 1500ms down so the suite stays fast; Retry-After
+  // (when present) is preferred over the env default.
+  const http = await import("node:http");
+  const seen: string[] = [];
+  const server = http.createServer((req, res) => {
+    let body = "";
+    req.on("data", (d) => (body += d));
+    req.on("end", () => {
+      const model = (JSON.parse(body) as { model?: string }).model ?? "?";
+      seen.push(model);
+      res.setHeader("content-type", "application/json");
+      if (model === "model-a") {
+        res.statusCode = 429;
+        res.setHeader("Retry-After", "0"); // exercise header path; 0ms → no real wait
+        res.end(JSON.stringify({ error: "rate limit" }));
+        return;
+      }
+      if (model === "model-slow") {
+        res.statusCode = 429;
+        // No Retry-After → env cooldown (50ms) applies.
+        res.end(JSON.stringify({ error: "quota exceeded" }));
+        return;
+      }
+      if (model === "model-404") {
+        res.statusCode = 404;
+        res.end(JSON.stringify({ error: "model not found" }));
+        return;
+      }
+      res.end(JSON.stringify({ choices: [{ message: { content: `ok:${model}` } }] }));
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, r));
+  const port = (server.address() as { port: number }).port;
+
+  try {
+    await withCleanEnv(
+      [
+        ...LLM_PROVIDER_KEYS,
+        ...LLM_MODEL_KEYS,
+        "CC_GEMINI_BASE_URL",
+        "CC_LLM_FAILOVER_COOLDOWN_MS",
+        "CC_GEMINI_DEAD_MODEL_TTL_MS",
+      ],
+      async () => {
+        process.env.GEMINI_API_KEY = "gem-key";
+        process.env.CC_GEMINI_BASE_URL = `http://127.0.0.1:${port}`;
+        process.env.CC_LLM_FAILOVER_COOLDOWN_MS = "50";
+        const { complete, clearGeminiDeadModels } = await import("../llm.js");
+        clearGeminiDeadModels();
+
+        // Retry-After: 0 → failover still works, no meaningful delay.
+        process.env.CC_GEMINI_MODELS = "model-a,model-b";
+        seen.length = 0;
+        const t0 = Date.now();
+        assert.equal(await complete("ping-ra"), "ok:model-b");
+        assert.deepEqual(seen, ["model-a", "model-b"]);
+        assert.ok(Date.now() - t0 < 200, "Retry-After: 0 should not stall");
+
+        // Env cooldown when no Retry-After: must wait ~50ms before model-ok.
+        process.env.CC_GEMINI_MODELS = "model-slow,model-ok";
+        seen.length = 0;
+        const t1 = Date.now();
+        assert.equal(await complete("ping-cd"), "ok:model-ok");
+        const elapsed = Date.now() - t1;
+        assert.deepEqual(seen, ["model-slow", "model-ok"]);
+        assert.ok(elapsed >= 40, `expected ~50ms cooldown, got ${elapsed}ms`);
+
+        // 404 must fail over immediately (no cooldown sleep). Bump env cooldown
+        // so a missing sleep is obvious vs ordinary HTTP latency.
+        process.env.CC_LLM_FAILOVER_COOLDOWN_MS = "200";
+        process.env.CC_GEMINI_MODELS = "model-404,model-ok";
+        seen.length = 0;
+        const t2 = Date.now();
+        assert.equal(await complete("ping-404"), "ok:model-ok");
+        assert.deepEqual(seen, ["model-404", "model-ok"]);
+        assert.ok(
+          Date.now() - t2 < 150,
+          "404 failover must not sleep the 200ms cooldown"
+        );
+
+        clearGeminiDeadModels();
+        console.log(
+          "  gemini failover cooldown ok: Retry-After path, env cooldown on 429, no sleep on 404"
+        );
+      }
+    );
+  } finally {
+    server.close();
+  }
+}
+
+async function testAgentAbort() {
+  // AbortSignal mid-loop must stop further complete() calls (client disconnect).
+  const { runAgent } = await import("../agent.js");
+  const path = testTmpPath(`cc-agent-abort-${Date.now()}.md`);
+  writeFileSync(path, makeTestDoc());
+  try {
+    const ac = new AbortController();
+    let calls = 0;
+    let firstStarted!: () => void;
+    const firstCallStarted = new Promise<void>((r) => {
+      firstStarted = r;
+    });
+
+    const run = runAgent(path, "termination notice period", {
+      startBudget: 1200,
+      signal: ac.signal,
+      complete: async (_prompt, opts) => {
+        calls += 1;
+        firstStarted();
+        // Hang until aborted — mirrors a slow LLM call the client abandons.
+        await new Promise<void>((_resolve, reject) => {
+          const sig = opts?.signal ?? ac.signal;
+          if (sig.aborted) {
+            reject(new Error("LLM request aborted"));
+            return;
+          }
+          const onAbort = () => reject(new Error("LLM request aborted"));
+          sig.addEventListener("abort", onAbort, { once: true });
+        });
+        return "unreachable";
+      },
+    });
+
+    await firstCallStarted;
+    assert.equal(calls, 1, "decide should have started one complete()");
+    ac.abort();
+    await assert.rejects(
+      () => run,
+      (e: unknown) => {
+        assert.match(String(e), /cancelled|aborted/i);
+        return true;
+      }
+    );
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal(calls, 1, "no further complete() after abort");
+    console.log("  agent abort ok: signal stops the loop mid-complete");
+  } finally {
+    unlinkSync(path);
   }
 }
 
@@ -1654,6 +1801,8 @@ for (const fn of [
   testOpenAICompatClient,
   testProviderFailover,
   testGeminiModelFailover,
+  testGeminiFailoverCooldown,
+  testAgentAbort,
   testAgentLoop,
   testAgentSseEndpoint,
   testAnswerExpandedIds,

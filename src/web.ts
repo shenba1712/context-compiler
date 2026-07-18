@@ -534,7 +534,11 @@ app.post("/api/answer", upload.single("file"), guardUpload, async (req, res) => 
           : compiled.reduction_pct;
 
       const ac = new AbortController();
-      req.on("close", () => ac.abort());
+      // Abort LLM work when the browser drops the connection mid-Prove.
+      // Skip once we've finished writing — `close` also fires on a normal end.
+      req.on("close", () => {
+        if (!res.writableEnded) ac.abort();
+      });
 
       const ask = (context: string) =>
         complete(
@@ -615,11 +619,20 @@ app.post("/api/agent", upload.single("file"), guardUpload, async (req, res) => {
   res.setHeader("X-Accel-Buffering", "no"); // stop proxy buffering (nginx/Render) so steps arrive live
   res.flushHeaders();
 
-  const send = (event: string, data: unknown) =>
+  const send = (event: string, data: unknown) => {
+    if (res.writableEnded || res.destroyed) return;
     res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
 
+  // Stop the agent loop + in-flight complete() when the browser aborts the
+  // fetch / closes the SSE stream. `close` also fires after a normal end, so
+  // only abort while the response is still open.
   const ac = new AbortController();
-  req.on("close", () => ac.abort());
+  const abortOnDisconnect = () => {
+    if (!res.writableEnded) ac.abort();
+  };
+  req.on("close", abortOnDisconnect);
+  res.on("close", abortOnDisconnect);
 
   inc("agent_runs");
   try {
@@ -644,28 +657,30 @@ app.post("/api/agent", upload.single("file"), guardUpload, async (req, res) => {
   } catch (e) {
     // The stream is already open, so errors go out as an SSE event, not a status
     // code. Conversion / LLM-unavailable messages are safe for clients; anything
-    // else stays generic.
+    // else stays generic. Cancelled/aborted is quiet — the client already left.
+    const cancelled =
+      e instanceof Error && /cancelled|aborted/i.test(e.message);
     const msg =
       e instanceof ConversionError
         ? e.message
         : e instanceof LlmUnavailableError
           ? e.publicMessage
-          : e instanceof Error && /cancelled|aborted/i.test(e.message)
+          : cancelled
             ? "Agent cancelled"
             : "Internal server error.";
     if (
       !(e instanceof ConversionError) &&
       !(e instanceof LlmUnavailableError) &&
-      !/cancelled|aborted/i.test(String(e))
+      !cancelled
     ) {
       log.error("agent failed", { err: e instanceof Error ? e.message : String(e) });
     } else if (e instanceof LlmUnavailableError) {
       log.warn("agent: LLM unavailable", { err: e.message });
     }
-    send("error", { error: msg });
+    if (!cancelled) send("error", { error: msg });
   } finally {
     releaseLlmJob();
-    res.end();
+    if (!res.writableEnded) res.end();
   }
 });
 
@@ -711,7 +726,9 @@ app.post("/api/agent-parity", express.json({ limit: "4kb" }), async (req, res) =
       }
 
       const ac = new AbortController();
-      req.on("close", () => ac.abort());
+      req.on("close", () => {
+        if (!res.writableEnded) ac.abort();
+      });
 
       const ask = (context: string) =>
         complete(
