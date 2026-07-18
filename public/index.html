@@ -94,11 +94,15 @@
     <div id="budgetTip" style="font-size:12px;color:var(--faint);margin-top:4px">Tip: budget by question breadth, not file size. A factual lookup rarely needs more than ~1,000 tokens.</div>
 
     <div class="row">
-      <button type="submit" class="btn primary" id="go">Compile</button>
+      <button type="submit" class="btn primary" id="go">Compile once</button>
+      <button type="button" class="btn agent" id="goAgent">Run agent ▸</button>
       <button type="button" class="btn ghost hidden" id="cancelGo">Cancel</button>
       <button type="button" class="btn ghost" id="prove">Prove answer parity</button>
       <span class="saved hidden" id="sessionSaved" style="margin-left:auto" role="status"></span>
     </div>
+    <div class="qhint" id="agentHint"><strong>Compile once</strong> ranks and packs at the budget you set.
+      <strong>Run agent</strong> ignores the slider — the model picks a small budget, reads the manifest, and
+      expands sections on its own until it can answer. Watch it work below.</div>
     <div class="err hidden" id="err" role="alert"></div>
   </form>
 </div></div></section>
@@ -156,6 +160,30 @@
     </div>
   </div>
 </div></section>
+
+<!-- =========================== AGENT RUN =============================
+     Hidden until "Run agent" streams a trace over /api/agent. Each step
+     (compile / expand / recompile / answer) appears live as a card, the
+     meter climbs with tokens the agent actually read, then the answer. -->
+<section id="agentSec" class="hidden"><div class="wrap"><div class="panel">
+  <h2 class="sec" id="agentHeading" tabindex="-1">Agent run</h2>
+  <p class="sub">The model drives retrieval itself — compiling a small slice, reading the omitted-sections
+    manifest, and deciding when to expand a section or answer.</p>
+  <div class="ameter">
+    <div class="ametertop">
+      <span><strong id="aTokens">0</strong> tokens the agent read</span>
+      <span class="awhole" id="aWhole"></span>
+    </div>
+    <div class="atrack"><div class="abar" id="aBar" style="width:0%"></div></div>
+  </div>
+  <div id="aSteps" class="asteps" aria-live="polite"></div>
+  <div id="aAnswerWrap" class="hidden">
+    <div class="alabel">Answer</div>
+    <div id="aAnswer" class="aanswer"></div>
+    <div id="aStopped" class="qhint"></div>
+  </div>
+  <div class="err hidden" id="aErr" role="alert"></div>
+</div></div></section>
 
 <!-- ====================== MCP INTEGRATION ============================
      Explains that the demo above IS the compile_context tool, then gives

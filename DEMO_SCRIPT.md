@@ -92,3 +92,46 @@ On screen: hosted URL + repo.
   it until it's boring to you.
 - If the parity answers differ slightly in wording, say so: "not identical
   words — identical facts." Pretending they're identical reads worse.
+
+## Appendix — capturing the agent (both paths)
+
+Two shots show "the model drives it." Record both; use whichever lands.
+
+### A. In-repo agent (the dependable shot)
+
+This is the demo's own loop — deterministic-looking, streamed, no terminal.
+
+1. Server running with a key set: `GEMINI_API_KEY=... npm run web` (the free
+   tier is plenty; failover to `OPENROUTER_API_KEY` if you set one).
+2. Load the hero doc (or a sample), type a question whose answer lives deep in
+   the document, and click **Run agent** — not "Compile once".
+3. Record the trace building live: the `compile_context` step, then an
+   `expand_section` step with the model's one-line reason, then `answer`. The
+   token meter climbs toward the crossed-out whole-file number.
+
+> "I don't set a budget here. The model compiles a slice, sees a manifest of
+> what it hasn't read, decides the answer is in section nineteen, expands just
+> that, and answers — having read a fraction of the file. It decided that,
+> not me."
+
+Pre-warm the doc first (cached conversion) so step one isn't waiting on
+markitdown. If a live model wanders, reload and re-run — it's fast.
+
+### B. Real coding agent over MCP (the credibility shot)
+
+Proves the same tools work in a real client, not just our UI.
+
+1. Build once: `npm run build`.
+2. Register the server (pick your client):
+   - Claude Code: `claude mcp add context-compiler -- node /abs/path/dist/server.js`
+   - Cursor / Claude Desktop: the JSON block from the README's MCP section.
+3. Set `CC_ROOT` to a folder the agent may read, and drop the hero doc in it.
+   Set a key (`GEMINI_API_KEY`) in the same env the server launches from.
+4. Prompt, on screen:
+   `Using the context-compiler tools, answer from <hero>.pdf: <specific question>`
+5. Record the tool-call line — the client calling `compile_context` on its own,
+   getting a few thousand tokens instead of tens of thousands, then answering.
+   That autonomous tool call is the whole point; let it sit on screen.
+
+If the client is slow or flaky on camera, fall back to shot A — it makes the
+same point and you control it frame by frame.
