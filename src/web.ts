@@ -17,7 +17,15 @@ import { runAgent } from "./agent.js";
 import { BUDGET_FLOORS, MAX_FILE_BYTES, clampBudget } from "./config.js";
 import { ConversionError, ConverterBusyError, converterAvailable } from "./convert.js";
 import { intEnv, numEnv, trustProxyFromEnv } from "./env.js";
-import { answerModel, complete, hasLlm, LlmBusyError, LlmUnavailableError, releaseLlmJob, tryAcquireLlmJob } from "./llm.js";
+import {
+  answerModel,
+  complete,
+  hasLlm,
+  LlmBusyError,
+  LlmUnavailableError,
+  releaseLlmJob,
+  tryAcquireLlmJob,
+} from "./llm.js";
 import { log } from "./log.js";
 import { inc, snapshot } from "./metrics.js";
 import { compileContext, expandSection, fullMarkdown } from "./pipeline.js";
@@ -169,8 +177,7 @@ function demoTokenGate(req: express.Request, res: express.Response, next: expres
     return next();
   }
   const bearer = req.get("authorization");
-  const fromBearer =
-    bearer && bearer.toLowerCase().startsWith("bearer ") ? bearer.slice(7).trim() : "";
+  const fromBearer = bearer && bearer.toLowerCase().startsWith("bearer ") ? bearer.slice(7).trim() : "";
   const got =
     (req.get("x-cc-demo-token") ?? "").trim() ||
     fromBearer ||
@@ -348,7 +355,10 @@ app.get("/api/samples", async (_req, res) => {
           } catch (e) {
             // One bad sample file shouldn't take down the whole library —
             // that sample just shows without a size hint.
-            log.warn("could not measure sample", { file: s.file, err: e instanceof Error ? e.message : String(e) });
+            log.warn("could not measure sample", {
+              file: s.file,
+              err: e instanceof Error ? e.message : String(e),
+            });
             return { ...s, tok: null };
           }
         })

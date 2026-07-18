@@ -255,7 +255,10 @@ async function testOversizedTopNotice() {
 
   const { text, selected } = pack(ranked, 200, "policy.md", scores);
   assert.ok(!selected.some((c) => c.id === refundId), "oversized top section is omitted at a tiny budget");
-  assert.ok(text.includes("Most relevant") || text.includes(refundId), "artifact warns about the omitted top section");
+  assert.ok(
+    text.includes("Most relevant") || text.includes(refundId),
+    "artifact warns about the omitted top section"
+  );
   assert.ok(countTokens(text) <= 200, `budget must hold even when nothing fits: ${countTokens(text)}`);
   console.log("  oversized-top ok: artifact flags the too-big top section for expansion");
 }
@@ -726,9 +729,11 @@ async function testCompileIncrementsCounter() {
   const metricsHeaders = { authorization: "Bearer test-metrics-token" };
   try {
     const before =
-      ((await (await fetch(`http://127.0.0.1:${port}/metrics`, { headers: metricsHeaders })).json()) as {
-        counters: Record<string, number>;
-      }).counters.compiles ?? 0;
+      (
+        (await (await fetch(`http://127.0.0.1:${port}/metrics`, { headers: metricsHeaders })).json()) as {
+          counters: Record<string, number>;
+        }
+      ).counters.compiles ?? 0;
 
     const fd = new FormData();
     fd.append("file", new Blob(["# Tiny\n\nHello world."], { type: "text/markdown" }), "tiny.md");
@@ -743,9 +748,11 @@ async function testCompileIncrementsCounter() {
     );
 
     const after =
-      ((await (await fetch(`http://127.0.0.1:${port}/metrics`, { headers: metricsHeaders })).json()) as {
-        counters: Record<string, number>;
-      }).counters.compiles ?? 0;
+      (
+        (await (await fetch(`http://127.0.0.1:${port}/metrics`, { headers: metricsHeaders })).json()) as {
+          counters: Record<string, number>;
+        }
+      ).counters.compiles ?? 0;
     assert.equal(after, before + 1, "compiles counter increments on success");
     console.log("  compile counter ok: /api/compile bumps compiles visible on /metrics");
   } finally {
@@ -994,7 +1001,11 @@ async function testDemoTokenGate() {
     process.env.CC_DEMO_TOKEN = "judge-secret";
     const lockedCfg = await fetch(`http://127.0.0.1:${port}/api/config`);
     const lockedBody = (await lockedCfg.json()) as { demo_token_required: boolean };
-    assert.equal(lockedBody.demo_token_required, true, "config advertises the lock without requiring the token");
+    assert.equal(
+      lockedBody.demo_token_required,
+      true,
+      "config advertises the lock without requiring the token"
+    );
 
     const denied = await fetch(`http://127.0.0.1:${port}/api/samples`);
     assert.equal(denied.status, 401, "samples locked without token");

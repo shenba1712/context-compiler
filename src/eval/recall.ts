@@ -100,8 +100,7 @@ export async function runRecallCase(c: RecallCase): Promise<RecallCaseResult> {
   if (c.expand_recover) {
     const needle = c.expand_recover;
     const target =
-      omitted.find((ch) => ch.text.includes(needle)) ??
-      ranked.find((ch) => ch.text.includes(needle));
+      omitted.find((ch) => ch.text.includes(needle)) ?? ranked.find((ch) => ch.text.includes(needle));
     // Recovery contract: gold lives in an omitted (or at least findable) chunk,
     // and "expand" returns that chunk's full text containing the needle.
     expandOk = Boolean(target && target.text.includes(needle) && omitted.some((ch) => ch.id === target.id));
