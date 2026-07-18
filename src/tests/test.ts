@@ -518,7 +518,7 @@ async function testProviderFailover() {
     const { complete, answerModel } = await import("../llm.js");
     // Primary (Gemini) label is what the UI shows, even though this call
     // fails over to the fallback under the hood.
-    assert.equal(answerModel(), "gemini-3.1-flash-lite");
+    assert.equal(answerModel(), "gemini-flash-lite-latest");
     assert.equal(await complete("ping"), "fallback-answer", "should fail over to the healthy provider");
 
     // Now knock out the fallback too: every provider down → complete() throws.
@@ -542,6 +542,59 @@ async function testProviderFailover() {
     process.env = saved as NodeJS.ProcessEnv;
     primary.close();
     fallback.close();
+  }
+}
+
+async function testGeminiModelFailover() {
+  // Same Gemini key, first model id dead → second model on the same key succeeds
+  // before we ever leave the Gemini provider.
+  const http = await import("node:http");
+  const seen: string[] = [];
+  const server = http.createServer((req, res) => {
+    let body = "";
+    req.on("data", (d) => (body += d));
+    req.on("end", () => {
+      const model = (JSON.parse(body) as { model?: string }).model ?? "?";
+      seen.push(model);
+      res.setHeader("content-type", "application/json");
+      if (model === "gemini-flash-lite-latest") {
+        res.statusCode = 404;
+        res.end(JSON.stringify({ error: "model not found" }));
+        return;
+      }
+      res.end(JSON.stringify({ choices: [{ message: { content: `ok:${model}` } }] }));
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, r));
+  const port = (server.address() as { port: number }).port;
+
+  const saved = { ...process.env };
+  for (const k of [
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "CC_LLM_API_KEY",
+    "OPENROUTER_API_KEY",
+    "GOOGLE_API_KEY",
+    "CC_GEMINI_MODEL",
+    "CC_GEMINI_MODELS",
+  ]) {
+    delete process.env[k];
+  }
+  process.env.GEMINI_API_KEY = "gem-key";
+  process.env.CC_GEMINI_BASE_URL = `http://127.0.0.1:${port}`;
+  try {
+    const { complete, geminiModels } = await import("../llm.js");
+    assert.deepEqual(geminiModels(), [
+      "gemini-flash-lite-latest",
+      "gemini-3-flash-preview",
+      "gemini-flash-latest",
+    ]);
+    assert.equal(await complete("ping"), "ok:gemini-3-flash-preview");
+    assert.deepEqual(seen, ["gemini-flash-lite-latest", "gemini-3-flash-preview"]);
+    console.log("  gemini model failover ok: retired id → next Gemini model on same key");
+  } finally {
+    process.env = saved as NodeJS.ProcessEnv;
+    server.close();
   }
 }
 
@@ -1239,6 +1292,7 @@ for (const fn of [
   testEnvParsingFailsSafe,
   testOpenAICompatClient,
   testProviderFailover,
+  testGeminiModelFailover,
   testAgentLoop,
   testAgentSseEndpoint,
   testLogger,

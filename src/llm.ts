@@ -2,22 +2,23 @@
  * Thin LLM interface — the entire provider surface lives in this file.
  *
  * Providers are tried in a fixed priority order, and complete() automatically
- * falls over to the next one when a provider errors (rate limit, quota, network
- * blip, bad key). If they all fail, complete() throws and callers degrade
- * gracefully: the answer panel reports the error.
+ * falls over to the next entry when one errors (rate limit, quota, network
+ * blip, bad/retired model id). If they all fail, complete() throws and callers
+ * degrade gracefully: the answer panel reports the error.
  *
  * Priority order (highest first):
- *   1. Gemini      — GEMINI_API_KEY   (free tier, no card; the intended primary)
+ *   1. Gemini      — GEMINI_API_KEY   (free tier; tries several model ids)
  *   2. OpenRouter  — OPENROUTER_API_KEY (fallback across many models)
  *   3. Anthropic   — ANTHROPIC_API_KEY (Claude)
  *   4. Generic     — OPENAI_API_KEY, or CC_LLM_API_KEY + CC_LLM_BASE_URL
  *                    (any OpenAI-compatible endpoint: OpenAI, Groq, Ollama, ...)
  *
- * Configure as many or as few as you like — an unset key just skips that
- * provider. No keys at all → fully local (BM25 rank, no answer panel).
+ * Gemini free-tier model ids churn, so one Gemini key expands into a short
+ * model list (defaults below; override with CC_GEMINI_MODELS or pin one via
+ * CC_GEMINI_MODEL). Each model is tried before moving to the next provider.
  *
- * Each provider has a sensible default model, overridable per-provider by env
- * (see the CC_*_MODEL vars below) without touching the priority order.
+ * Configure as many or as few providers as you like — an unset key just skips
+ * that provider. No keys at all → fully local (BM25 rank, no answer panel).
  */
 import Anthropic from "@anthropic-ai/sdk";
 
@@ -25,7 +26,13 @@ import { intEnv } from "./env.js";
 import { log } from "./log.js";
 import { inc } from "./metrics.js";
 
-const GEMINI_DEFAULT = "gemini-3.1-flash-lite";
+/** Tried in order on the same Gemini key before failing over to OpenRouter etc. */
+const GEMINI_MODELS_DEFAULT = [
+  "gemini-flash-lite-latest",
+  "gemini-3-flash-preview",
+  "gemini-flash-latest",
+] as const;
+
 const OPENROUTER_DEFAULT = "meta-llama/llama-3.3-70b-instruct:free";
 const ANTHROPIC_DEFAULT = "claude-haiku-4-5-20251001";
 const OPENAI_DEFAULT = "gpt-4o-mini";
@@ -52,11 +59,31 @@ function isGeminiCompat(p: OpenAICompatProvider): boolean {
  * Gemini 2.5/3.x spend hidden "thinking" tokens from the same max_tokens budget.
  * With a small ceiling (e.g. 500) the visible answer truncates mid-sentence.
  * Dial thinking down for demo Q&A; 2.5 Flash can disable it entirely.
- * Default model is gemini-3.1-flash-lite (override with CC_GEMINI_MODEL).
  */
 function geminiReasoningEffort(model: string): "none" | "minimal" | "low" {
   if (/gemini-2\.5/i.test(model) && !/pro/i.test(model)) return "none";
   return "minimal";
+}
+
+/** Comma-separated model list → unique non-empty ids. */
+function parseModelList(raw: string | undefined, fallback: readonly string[]): string[] {
+  if (!raw?.trim()) return [...fallback];
+  const list = [...new Set(raw.split(",").map((s) => s.trim()).filter(Boolean))];
+  return list.length ? list : [...fallback];
+}
+
+/**
+ * Gemini models for this process. Precedence:
+ *   CC_GEMINI_MODELS (comma list) > CC_GEMINI_MODEL (single pin) > built-in defaults.
+ */
+export function geminiModels(): string[] {
+  if (process.env.CC_GEMINI_MODELS?.trim()) {
+    return parseModelList(process.env.CC_GEMINI_MODELS, GEMINI_MODELS_DEFAULT);
+  }
+  if (process.env.CC_GEMINI_MODEL?.trim()) {
+    return [process.env.CC_GEMINI_MODEL.trim()];
+  }
+  return [...GEMINI_MODELS_DEFAULT];
 }
 
 /** Thrown when every configured provider fails (or none are configured). */
@@ -95,15 +122,18 @@ function providerChain(): Provider[] {
 
   const geminiKey = process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY;
   if (geminiKey) {
-    chain.push({
-      name: "gemini",
-      kind: "openai-compat",
-      baseUrl: (
-        process.env.CC_GEMINI_BASE_URL ?? "https://generativelanguage.googleapis.com/v1beta/openai"
-      ).replace(/\/+$/, ""),
-      apiKey: geminiKey,
-      model: process.env.CC_GEMINI_MODEL ?? GEMINI_DEFAULT,
-    });
+    const baseUrl = (
+      process.env.CC_GEMINI_BASE_URL ?? "https://generativelanguage.googleapis.com/v1beta/openai"
+    ).replace(/\/+$/, "");
+    for (const model of geminiModels()) {
+      chain.push({
+        name: "gemini",
+        kind: "openai-compat",
+        baseUrl,
+        apiKey: geminiKey,
+        model,
+      });
+    }
   }
 
   if (process.env.OPENROUTER_API_KEY) {
@@ -156,6 +186,10 @@ function mergeSignals(signal?: AbortSignal): AbortSignal {
   const timeout = AbortSignal.timeout(LLM_TIMEOUT_MS);
   if (!signal) return timeout;
   return AbortSignal.any([signal, timeout]);
+}
+
+function providerLabel(p: Provider): string {
+  return `${p.name}/${p.model}`;
 }
 
 async function callProvider(
@@ -218,10 +252,10 @@ async function callProvider(
 }
 
 /**
- * Run a prompt through the provider chain, failing over on any error. Returns
- * the first successful completion; throws only if every configured provider
- * fails (so a single provider's rate limit never takes the feature down while
- * another key still works).
+ * Run a prompt through the provider/model chain, failing over on any error.
+ * Returns the first successful completion; throws only if every configured
+ * entry fails (so a retired Gemini model id never takes the feature down while
+ * another Gemini model — or another provider — still works).
  */
 export async function complete(
   prompt: string,
@@ -240,14 +274,20 @@ export async function complete(
     } catch (e) {
       if (signal.aborted) throw new Error("LLM request aborted");
       const msg = e instanceof Error ? e.message : String(e);
-      errors.push(`${p.name}: ${msg}`);
+      errors.push(`${providerLabel(p)}: ${msg}`);
       if (p !== chain[chain.length - 1]) {
         inc("llm_failover");
-        // Free-tier OpenRouter (and friends) 429 often — expected failover,
-        // not an ops alert. Real outages still surface if every provider fails.
-        const rateLimited = /\b429\b|rate.?limit|too many requests|quota/i.test(msg);
-        const level = rateLimited ? "info" : "warn";
-        log[level]("LLM provider failed, trying next", { provider: p.name, err: msg });
+        // Free-tier 429 / retired model ids are expected failover, not an ops alert.
+        const soft =
+          /\b429\b|rate.?limit|too many requests|quota|\b404\b|not found|not supported|invalid model/i.test(
+            msg
+          );
+        const level = soft ? "info" : "warn";
+        log[level]("LLM endpoint failed, trying next", {
+          provider: p.name,
+          model: p.model,
+          err: msg,
+        });
       }
     }
   }
