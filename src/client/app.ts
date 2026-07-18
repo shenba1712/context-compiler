@@ -250,15 +250,10 @@ document.querySelectorAll<HTMLButtonElement>(".bpre").forEach((b) => {
 });
 syncBudget();
 
-// Static defaults make sense for a big document (a 20,000-token novel: 1,000
-// / 4,000 / 8,000 are genuinely different choices). They make NO sense for a
-// small one — a 400-token spreadsheet fits comfortably under even "quick
-// fact", so all three presets silently become "return the whole file" with
-// no real choice. Below the default "deep dive" ceiling, scale all three
-// presets to the document's own size so they stay meaningfully different.
-// "standard" (4000) intentionally matches DEFAULT_TOKEN_BUDGET in
-// src/config.ts — this file is a separately-built client bundle with no
-// import path to the server code, so the number is copied, not shared.
+// Preset budgets for a big document. On a small one these would all just mean
+// "return the whole file", so computePresets() scales them down to the doc's
+// size below. "standard" mirrors DEFAULT_TOKEN_BUDGET in config.ts — the client
+// is a separate bundle that can't import server code, so the number is copied.
 const DEFAULT_PRESETS: BudgetPresets = { quick: 1000, standard: 4000, deep: 8000 };
 
 function computePresets(rawTokens: number | null): BudgetPresets {
@@ -385,12 +380,9 @@ $<HTMLInputElement>("file").addEventListener("change", () => {
     return;
   }
   if (f) {
-    // A manually picked file replaces whatever the form is currently set to
-    // compile — including a sample. Without this, a sample card kept showing
-    // "✓ selected" after the user picked their own file, claiming the sample
-    // was still the source when it no longer was (this handler doesn't fire
-    // for selectSample()'s own programmatic file assignment, so it can't
-    // undo a sample pick — only a genuine manual one reaches here).
+    // A manually picked file replaces any selected sample, so clear the sample
+    // cards' "selected" state. (This only fires for real user picks, not
+    // selectSample()'s own programmatic assignment.)
     document.querySelectorAll<HTMLButtonElement>(".scard").forEach((x) => {
       x.classList.remove("active");
       x.setAttribute("aria-pressed", "false");
@@ -763,7 +755,7 @@ function renderSections(d: CompileApiResult): void {
     }
     if (s.text) {
       const p = document.createElement("pre");
-      if (DEVANAGARI_RE.test(s.text)) p.lang = "hi";
+      applyLang(p, s.text);
       p.textContent = s.text;
       el.appendChild(p);
     }
@@ -826,6 +818,8 @@ function renderFloorNote(d: CompileApiResult): void {
     null
   );
   if (topOmit && d.selected_sections.length === 0) {
+    // Suggested budget: the section's size plus ~80 tokens of wrapper overhead,
+    // rounded up to a tidy hundred.
     const need = Math.ceil((topOmit.tokens + 80) / 100) * 100;
     el.innerHTML =
       "<strong>Nothing fit your budget.</strong> Even the best match — “" +
@@ -995,10 +989,10 @@ $<HTMLButtonElement>("prove").onclick = async () => {
     $("parity").classList.remove("hidden");
     $("parityModel").textContent = d.model;
     $("ansFull").textContent = d.full.answer;
-    $("ansFull").lang = DEVANAGARI_RE.test(d.full.answer) ? "hi" : "";
+    applyLang($("ansFull"), d.full.answer);
     $("ansFullCost").textContent = d.full.context_tokens.toLocaleString() + " context tokens";
     $("ansCompiled").textContent = d.compiled.answer;
-    $("ansCompiled").lang = DEVANAGARI_RE.test(d.compiled.answer) ? "hi" : "";
+    applyLang($("ansCompiled"), d.compiled.answer);
     $("ansCompiledCost").textContent =
       d.compiled.context_tokens.toLocaleString() + " context tokens (" + d.compiled.reduction_pct + "% less)";
     $("parity").scrollIntoView({ behavior: "smooth", block: "nearest" });

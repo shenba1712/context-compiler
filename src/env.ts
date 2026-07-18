@@ -2,10 +2,10 @@
  * Environment-variable parsing that fails safe and loud.
  *
  * `Number(process.env.X ?? default)` has a footgun: a non-numeric value (a
- * deploy typo like CC_RATE_LIMIT=off) yields NaN, and comparisons against NaN
- * are always false — which silently DISABLED the rate limiter in an earlier
- * version. These helpers reject NaN, warn once, and fall back to the default
- * (clamped to a sane range) instead of quietly propagating NaN through the app.
+ * deploy typo like CC_RATE_LIMIT=off) yields NaN, and every comparison against
+ * NaN is false — so a typo could silently switch off something like the rate
+ * limiter. These helpers reject NaN, warn once, and fall back to the default
+ * (clamped to a sane range) instead of letting NaN leak through the app.
  */
 function parse(name: string, def: number): number {
   const raw = process.env[name];

@@ -1,9 +1,11 @@
 /**
- * Chunk ranking: own BM25 (Okapi) baseline + optional Claude Haiku rerank.
+ * Chunk ranking: a built-in BM25 (Okapi) baseline, optionally refined by an
+ * LLM reranker.
  *
- * ADR: BM25 is deterministic, offline, and free — the file never leaves the
- * machine unless reranking is explicitly enabled via ANTHROPIC_API_KEY.
- * Rerank failures fall back silently to BM25 order.
+ * BM25 is deterministic, offline, and free — the file never leaves the machine
+ * unless a reranker runs. The reranker uses whatever LLM provider is configured
+ * (see llm.ts; Gemini by default), and any failure falls back silently to BM25
+ * order, so it's always a best-effort upgrade, never a hard dependency.
  */
 import { Chunk } from "./chunk.js";
 import { relevanceFloor } from "./config.js";
@@ -113,13 +115,10 @@ export function perQueryScores(queries: string[], chunks: Chunk[]): number[][] {
  * scores. A chunk that best answers ANY one question scores ~1, so it clears
  * the relevance floor even if it's irrelevant to the others.
  *
- * Split into a "FromRows" half that takes already-computed `perQueryScores`
- * and a convenience wrapper that computes them. compileContext() (in
- * pipeline.ts) needs this same per-query breakdown for THREE things — this
- * score, query attribution, and the round-robin ranking — so it calls
- * `perQueryScores` once and passes the result to all three `FromRows`
- * versions below, instead of re-running BM25 over the whole document per
- * sub-question, three separate times.
+ * The "FromRows" variant takes pre-computed `perQueryScores`; the wrapper
+ * computes them. This split lets compileContext() run BM25 once and share the
+ * result across the three things that need it (this score, attribution, and
+ * the round-robin ranking) instead of recomputing it three times.
  */
 export function multiScoresFromRows(rows: number[][], chunks: Chunk[]): number[] {
   return chunks.map((_, i) => maxOf(rows.map((r) => r[i])));
@@ -185,7 +184,7 @@ export function rankMulti(queries: string[], chunks: Chunk[]): Chunk[] {
   return rankMultiFromRows(perQueryScores(queries, chunks), chunks);
 }
 
-async function haikuRerank(task: string, shortlist: Chunk[]): Promise<string[] | null> {
+async function llmRerank(task: string, shortlist: Chunk[]): Promise<string[] | null> {
   if (!hasLlm()) return null;
   try {
     const listing = shortlist.map((c) => `[${c.id}] (${c.breadcrumb})\n${c.text.slice(0, 600)}`).join("\n\n");
@@ -223,9 +222,10 @@ export async function rank(task: string, chunks: Chunk[], rerank = false): Promi
 
   if (rerank && byScore.length > 1) {
     const shortlist = byScore.slice(0, RERANK_SHORTLIST);
-    const order = await haikuRerank(task, shortlist);
+    const order = await llmRerank(task, shortlist);
     if (order) {
       const pos = new Map(order.map((id, i) => [id, i]));
+      // 99 sorts any id the reranker somehow dropped to the end of the shortlist.
       const reranked = [...shortlist].sort((a, b) => (pos.get(a.id) ?? 99) - (pos.get(b.id) ?? 99));
       return [...reranked, ...byScore.slice(RERANK_SHORTLIST)];
     }

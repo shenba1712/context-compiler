@@ -34,10 +34,8 @@ function splitBlocks(lines: string[]): string[][] {
       current = [line];
       inTable = true;
     } else if (inTable && !tableLine) {
-      // Leaving a table — on a blank line OR on real text either way, so two
-      // tables separated only by a blank line end up as two separate blocks
-      // instead of merging into one (a blank line used to just get folded
-      // into the table's own text instead of ending it).
+      // End the table on ANY non-table line, blank or not, so two tables with
+      // only a blank line between them stay separate blocks instead of merging.
       blocks.push(current);
       current = line.trim() ? [line] : [];
       inTable = false;
@@ -99,6 +97,8 @@ export function chunkMarkdown(markdown: string): Chunk[] {
       body = [];
       const level = m[1].length;
       const title = m[2].trim();
+      // Pop the breadcrumb trail back to this heading's parent: drop any open
+      // heading at the same or deeper level before pushing this one.
       while (trail.length && trail[trail.length - 1].level >= level) trail.pop();
       trail.push({ level, title });
       currentTrail = trail.map((t) => t.title);
@@ -125,10 +125,8 @@ export function chunkMarkdown(markdown: string): Chunk[] {
     if (countTokens(full) <= MAX_CHUNK_TOKENS) {
       push(breadcrumb, full);
     } else {
-      // Put the heading line IN with the body before packing, so its tokens
-      // count toward the first part's own limit (attaching it afterward
-      // meant the first part could quietly exceed MAX_CHUNK_TOKENS by
-      // however long the heading was).
+      // Pack the heading in WITH the body so its tokens count toward the first
+      // part's limit; otherwise the first part could exceed MAX_CHUNK_TOKENS.
       const withHeading = headingLine ? [headingLine, ...bodyLines] : bodyLines;
       const parts = packBlocks(splitBlocks(withHeading), MAX_CHUNK_TOKENS);
       parts.forEach((part) => push(breadcrumb, part.trim()));

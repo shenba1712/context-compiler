@@ -20,14 +20,9 @@ interface Sample {
   nm: string;
   mt: string;
   q: string[];
-  /** Real raw token count (cl100k), measured server-side from the actual
-   *  file via the same convert+cache pipeline a real compile uses (see
-   *  GET /api/samples in web.ts) — never a client-side guess, so it can't
-   *  drift from reality if the file, tokenizer, or chunker ever changes.
-   *  Lets budget presets react to actual document size before the user ever
-   *  compiles — a 400-token spreadsheet and a 20,000-token novel shouldn't
-   *  offer the same "quick fact / standard / deep dive" numbers. Null if the
-   *  server couldn't measure this one sample (conversion failed). */
+  /** Raw token count, measured server-side from the real file (GET /api/samples
+   *  in web.ts), so budget presets can scale to the document's actual size
+   *  before the first compile. Null if the server couldn't measure it. */
   tok: number | null;
 }
 
