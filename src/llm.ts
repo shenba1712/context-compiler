@@ -16,6 +16,8 @@
  * Gemini free-tier model ids churn, so one Gemini key expands into a short
  * model list (defaults below; override with CC_GEMINI_MODELS or pin one via
  * CC_GEMINI_MODEL). Each model is tried before moving to the next provider.
+ * Soft 404 / model-not-found failures are remembered briefly
+ * (CC_GEMINI_DEAD_MODEL_TTL_MS) so later complete() calls skip that id.
  *
  * Configure as many or as few providers as you like — an unset key just skips
  * that provider. No keys at all → fully local (BM25 rank, no answer panel).
@@ -39,6 +41,55 @@ const OPENAI_DEFAULT = "gpt-4o-mini";
 
 const LLM_TIMEOUT_MS = intEnv("CC_LLM_TIMEOUT_MS", 30_000, 1_000, 300_000);
 const MAX_CONCURRENT_LLM = intEnv("CC_MAX_CONCURRENT_LLM", 2, 1, 32);
+
+/** Soft failover that is expected on free tiers (429/quota OR dead model ids). */
+function isSoftFailover(msg: string): boolean {
+  return /\b429\b|rate.?limit|too many requests|quota|\b404\b|not found|not supported|invalid model/i.test(
+    msg
+  );
+}
+
+/**
+ * Gemini model-missing only — 404 / retired id. NOT 429/quota (those recover
+ * quickly and must not blacklist a model for the dead-model TTL).
+ */
+function isGeminiModelMissing(msg: string): boolean {
+  if (/\b429\b|rate.?limit|too many requests|quota/i.test(msg)) return false;
+  return /\b404\b|not found|not supported|invalid model/i.test(msg);
+}
+
+/** Process-local: Gemini model id → expiry ms. Bounded; oldest dropped first. */
+const geminiDeadModels = new Map<string, number>();
+const GEMINI_DEAD_MODEL_MAX = 32;
+
+function geminiDeadModelTtlMs(): number {
+  return intEnv("CC_GEMINI_DEAD_MODEL_TTL_MS", 15 * 60 * 1000, 1_000, 24 * 60 * 60 * 1000);
+}
+
+function markGeminiDeadModel(model: string): void {
+  if (geminiDeadModels.has(model)) geminiDeadModels.delete(model);
+  geminiDeadModels.set(model, Date.now() + geminiDeadModelTtlMs());
+  while (geminiDeadModels.size > GEMINI_DEAD_MODEL_MAX) {
+    const oldest = geminiDeadModels.keys().next().value;
+    if (oldest === undefined) break;
+    geminiDeadModels.delete(oldest);
+  }
+}
+
+function isGeminiDeadModelCached(model: string): boolean {
+  const exp = geminiDeadModels.get(model);
+  if (exp === undefined) return false;
+  if (Date.now() >= exp) {
+    geminiDeadModels.delete(model);
+    return false;
+  }
+  return true;
+}
+
+/** Test helper — drop the process-local dead-model cache. */
+export function clearGeminiDeadModels(): void {
+  geminiDeadModels.clear();
+}
 
 type OpenAICompatProvider = {
   name: string;
@@ -282,6 +333,13 @@ export async function complete(
   const errors: string[] = [];
   for (const p of chain) {
     if (signal.aborted) throw new Error("LLM request aborted");
+    // Skip Gemini models that recently 404'd — avoid burning latency/quota on a
+    // known-dead id until the short TTL expires.
+    if (p.kind === "openai-compat" && isGeminiCompat(p) && isGeminiDeadModelCached(p.model)) {
+      log.info("Skipping cached-dead Gemini model", { model: p.model });
+      errors.push(`${providerLabel(p)}: skipped (cached dead model)`);
+      continue;
+    }
     try {
       const text = await callProvider(p, prompt, maxTokens, signal);
       lastSuccessfulModel = p.model;
@@ -290,14 +348,17 @@ export async function complete(
       if (signal.aborted) throw new Error("LLM request aborted");
       const msg = e instanceof Error ? e.message : String(e);
       errors.push(`${providerLabel(p)}: ${msg}`);
+      if (
+        p.kind === "openai-compat" &&
+        isGeminiCompat(p) &&
+        isGeminiModelMissing(msg)
+      ) {
+        markGeminiDeadModel(p.model);
+      }
       if (p !== chain[chain.length - 1]) {
         inc("llm_failover");
         // Free-tier 429 / retired model ids are expected failover, not an ops alert.
-        const soft =
-          /\b429\b|rate.?limit|too many requests|quota|\b404\b|not found|not supported|invalid model/i.test(
-            msg
-          );
-        const level = soft ? "info" : "warn";
+        const level = isSoftFailover(msg) ? "info" : "warn";
         log[level]("LLM endpoint failed, trying next", {
           provider: p.name,
           model: p.model,

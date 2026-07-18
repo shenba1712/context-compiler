@@ -140,7 +140,7 @@ app.get("/ARCHITECTURE.md", (_req, res) =>
 // LLM-heavy routes cost more "tokens" so one agent/parity call can't burn the
 // bill while staying under a naive request count.
 const RATE_LIMIT = intEnv("CC_RATE_LIMIT", 30, 1);
-const RATE_COST_AGENT = intEnv("CC_RATE_COST_AGENT", 8, 1, 100);
+const RATE_COST_AGENT = intEnv("CC_RATE_COST_AGENT", 12, 1, 100);
 const RATE_COST_ANSWER = intEnv("CC_RATE_COST_ANSWER", 4, 1, 100);
 const WINDOW_MS = 5 * 60_000;
 const MAX_RATE_KEYS = intEnv("CC_RATE_MAP_MAX", 10_000, 100);

@@ -109,7 +109,7 @@ function fillExpectPanel(cfg: {
   const pool = cfg.rate_limit ?? 30;
   const windowMin = cfg.rate_window_minutes ?? 5;
   const costAnswer = cfg.rate_cost_answer ?? 4;
-  const costAgent = cfg.rate_cost_agent ?? 8;
+  const costAgent = cfg.rate_cost_agent ?? 12;
   const setAll = (key: string, text: string) => {
     document.querySelectorAll(`[data-k="${key}"]`).forEach((el) => {
       el.textContent = text;

@@ -618,6 +618,11 @@ async function testGeminiModelFailover() {
         res.end(JSON.stringify({ error: "model not found" }));
         return;
       }
+      if (model === "model-429") {
+        res.statusCode = 429;
+        res.end(JSON.stringify({ error: "quota exceeded" }));
+        return;
+      }
       res.end(JSON.stringify({ choices: [{ message: { content: `ok:${model}` } }] }));
     });
   });
@@ -626,11 +631,20 @@ async function testGeminiModelFailover() {
 
   try {
     await withCleanEnv(
-      [...LLM_PROVIDER_KEYS, ...LLM_MODEL_KEYS, "CC_GEMINI_BASE_URL", "CC_OPENROUTER_BASE_URL"],
+      [
+        ...LLM_PROVIDER_KEYS,
+        ...LLM_MODEL_KEYS,
+        "CC_GEMINI_BASE_URL",
+        "CC_OPENROUTER_BASE_URL",
+        "CC_GEMINI_DEAD_MODEL_TTL_MS",
+      ],
       async () => {
         process.env.GEMINI_API_KEY = "gem-key";
         process.env.CC_GEMINI_BASE_URL = `http://127.0.0.1:${port}`;
-        const { complete, geminiModels, answerModel } = await import("../llm.js");
+        const { complete, geminiModels, answerModel, clearGeminiDeadModels } = await import(
+          "../llm.js"
+        );
+        clearGeminiDeadModels();
         assert.deepEqual(geminiModels(), [
           "gemini-flash-lite-latest",
           "gemini-3-flash-preview",
@@ -666,11 +680,31 @@ async function testGeminiModelFailover() {
           assert.deepEqual(seen, ["model-a", "model-b"]);
           assert.equal(openRouterHits, 0, "OpenRouter must not be called when a Gemini model succeeds");
           assert.equal(answerModel2(), "model-b");
+
+          // Dead-model cache: 404'd model-a must not be re-hit on the next complete().
+          seen.length = 0;
+          assert.equal(await complete2("ping2"), "ok:model-b");
+          assert.deepEqual(seen, ["model-b"], "cached-dead model-a skipped (no HTTP)");
+
+          // 429/quota must NOT blacklist — model-429 is tried again on the next call.
+          process.env.CC_GEMINI_MODELS = "model-429,model-ok";
+          seen.length = 0;
+          assert.equal(await complete2("ping3"), "ok:model-ok");
+          assert.deepEqual(seen, ["model-429", "model-ok"]);
+          seen.length = 0;
+          assert.equal(await complete2("ping4"), "ok:model-ok");
+          assert.deepEqual(
+            seen,
+            ["model-429", "model-ok"],
+            "429 must not blacklist — model-429 hit again"
+          );
+
           console.log(
-            "  gemini model failover ok: defaults + CC_GEMINI_MODELS override; OpenRouter unused"
+            "  gemini model failover ok: defaults + override; dead-model cache; 429 not cached; OpenRouter unused"
           );
         } finally {
           orServer.close();
+          clearGeminiDeadModels();
         }
       }
     );
@@ -1092,10 +1126,10 @@ async function testRateCostsInConfig() {
       rate_cost_answer?: number;
       rate_cost_agent?: number;
     };
-    assert.equal(cfg.rate_cost_agent, 8, "agent costs 8 rate points");
+    assert.equal(cfg.rate_cost_agent, 12, "agent costs 12 rate points");
     assert.equal(cfg.rate_cost_answer, 4, "answer/parity cost 4 rate points");
-    assert.ok((cfg.rate_limit as number) >= 8, "window can fit at least one agent run");
-    console.log("  rate costs ok: /api/config reports agent=8 answer=4");
+    assert.ok((cfg.rate_limit as number) >= 12, "window can fit at least one agent run");
+    console.log("  rate costs ok: /api/config reports agent=12 answer=4");
   } finally {
     server.close();
   }
