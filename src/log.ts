@@ -19,7 +19,9 @@ const ORDER: Record<Level, number> = { error: 0, warn: 1, info: 2, debug: 3 };
 
 // Read live (not cached at import) so tests and deploys can change it freely.
 function threshold(): number {
-  const raw = (process.env.CC_LOG_LEVEL ?? (process.env.NODE_ENV === "test" ? "silent" : "info")).toLowerCase();
+  const raw = (
+    process.env.CC_LOG_LEVEL ?? (process.env.NODE_ENV === "test" ? "silent" : "info")
+  ).toLowerCase();
   if (raw === "silent" || raw === "off" || raw === "none") return -1;
   return ORDER[raw as Level] ?? ORDER.info;
 }

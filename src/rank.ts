@@ -32,7 +32,8 @@ function isCjkRun(s: string): boolean {
 
 /** Tiny Latin stem — return/returned, refunds/refund — without a stemmer dep. */
 function stemLight(t: string): string {
-  if (/[^\u0000-\u007f]/.test(t) || t.length < 4) return t;
+  // Non-ASCII → leave alone (avoid control-char regex that trips eslint).
+  if ([...t].some((c) => c.charCodeAt(0) > 127) || t.length < 4) return t;
   if (t.length >= 5 && t.endsWith("ing")) return t.slice(0, -3);
   if (t.length >= 4 && t.endsWith("ed")) return t.slice(0, -2);
   if (t.length >= 4 && t.endsWith("s") && !t.endsWith("ss")) return t.slice(0, -1);

@@ -88,9 +88,7 @@ function setLlmDependentButtons(available: boolean): void {
   proveBtn.title = available
     ? "Answer the question from the full file vs the compiled context"
     : NO_LLM_TITLE;
-  agentBtn.title = available
-    ? "Let the model expand sections until it can answer"
-    : NO_LLM_TITLE;
+  agentBtn.title = available ? "Let the model expand sections until it can answer" : NO_LLM_TITLE;
 }
 
 async function loadConfig(): Promise<void> {
@@ -562,7 +560,9 @@ $<HTMLFormElement>("compileForm").addEventListener("submit", async (e) => {
   showLoading();
   try {
     const resp = await apiFetch("/api/compile", { method: "POST", body: fd, signal: compileAbort.signal });
-    const d: CompileApiResult = await resp.json().catch(() => ({ error: "Compile failed." }) as CompileApiResult);
+    const d: CompileApiResult = await resp
+      .json()
+      .catch(() => ({ error: "Compile failed." }) as CompileApiResult);
     if (!resp.ok || d.error) throw new Error(await apiFailureMessage(resp, d));
     hideLoading();
     // Now that the real size is known (for an upload, this is the FIRST time
@@ -1063,7 +1063,9 @@ $<HTMLButtonElement>("prove").onclick = async () => {
   announce("Asking the model twice, this can take a few seconds…");
   try {
     const resp = await apiFetch("/api/answer", { method: "POST", body: fd, signal: proveAbort.signal });
-    const d: AnswerApiResult = await resp.json().catch(() => ({ error: "Parity request failed." }) as AnswerApiResult);
+    const d: AnswerApiResult = await resp
+      .json()
+      .catch(() => ({ error: "Parity request failed." }) as AnswerApiResult);
     if (!resp.ok || d.error) throw new Error(await apiFailureMessage(resp, d));
     $("parity").classList.remove("hidden");
     $("parityModel").textContent = d.model;
