@@ -57,7 +57,7 @@ Action: terminal with Claude Code. Prompt on screen:
 > Claude Desktop, Claude Code, or Cursor. Watch Claude Code work: it calls
 > compile_context on its own, gets 2,000 tokens instead of 40,000, and
 > answers. The model decides what it needs; the compiler keeps it under
-> budget. And the ranking is a real pipeline — BM25 plus a Claude Haiku
+> budget. And the ranking is a real pipeline — BM25 plus an optional LLM
 > reranker — not a prompt wrapper."
 
 Show: the tool-call line in Claude Code's output (this is the AI-fluency

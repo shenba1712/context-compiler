@@ -117,7 +117,7 @@ LLM keys and model overrides are described above. Beyond those: `CC_ROOT` confin
 
 ## Tests and troubleshooting
 
-`npm test` builds both the server and the typed browser client, then runs a plain `node:assert` suite — chunking, ranking, packing, cache, expand, multilingual BM25, CJK bigrams, a curated offline recall@budget eval, format conversion through real markitdown, upload and path guards, provider failover, the agent loop, logger and webhook behavior, `/healthz`, and the optional demo-token door lock. No test framework, on purpose; the file is readable top to bottom.
+`npm test` builds both the server and the typed browser client, then runs a plain `node:assert` suite — chunking, ranking, packing, cache, expand, multilingual BM25, CJK bigrams, a curated offline recall@budget eval in `src/eval/`, format conversion through real markitdown, upload and path guards, provider failover, the agent loop, logger and webhook behavior, `/healthz`, and the optional demo-token door lock. No test framework, on purpose; the file is readable top to bottom.
 
 If you see `spawn markitdown ENOENT`, the converter is not on PATH — install it or set `CC_MARKITDOWN_CMD`. If pip quietly gives you markitdown `0.0.1a1`, your default Python is older than 3.10; uninstall and reinstall with uv on 3.12. Empty conversion output usually means a scanned PDF with no text layer. Port 8000 already taken? `PORT=8080 npm run web`. First request on a free-tier host feeling slow? Cold start plus an uncached conversion; warm it with a pinger or a paid instance.
 
@@ -129,10 +129,10 @@ Prompt injection is a known game on this stage. Compiled output is wrapped in `U
 
 ## What we know we do not do yet
 
-Lexical ranking can still miss a paraphrased-but-relevant section. The mitigation is the manifest plus `expand_section` — failure is visible and repairable, never silent. Local embeddings as a second scorer are planned for when they can stay local-first.
+Lexical ranking can still miss a paraphrased-but-relevant section. The mitigation is the manifest plus `expand_section` — failure is visible and repairable, never silent. An offline recall@budget suite in `src/eval/` (lexical, paraphrase, multi-query, heading-less, compare, and miss→expand cases) guards regressions in CI. Local embeddings as a second scorer are still planned for when they can stay local-first without free-tier RAM blowups.
 
 Scanned, image-only PDFs have nothing to rank; we fail loudly rather than invent text. OCR is deferred because a bad transcript silently corrupts answers, which violates the “never silently lossy” rule. Video and audio would plug in as a transcription head on the same pipeline; they are a scope cut, not a feasibility one.
 
-Token budgets are counted with cl100k. Other model tokenizers drift by a couple of percent; budgets are contracts of intent. The hosted demo has rate limits and cost caps but no user accounts — fine for judging traffic, not for a public SaaS. If the URL will stay up for weeks, set `CC_DEMO_TOKEN` as a shared door lock; leave it unset for a short-lived contest deploy. CJK ranking uses character bigrams; an offline recall@budget fixture suite in `src/eval/` guards regressions.
+Token budgets are counted with cl100k. Other model tokenizers drift by a couple of percent; budgets are contracts of intent. The hosted demo has rate limits and cost caps but no user accounts — fine for judging traffic, not for a public SaaS. If the URL will stay up for weeks, set `CC_DEMO_TOKEN` as a shared door lock; leave it unset for a short-lived contest deploy. CJK ranking uses character bigrams plus a light Latin stem; the eval suite is how we keep those claims honest.
 
 The web UI stays vanilla HTML, CSS, and a typed `src/client` build compiled to plain scripts. The product is the pipeline and the MCP server. The page is an instrument for proving them — and that is enough for now.
