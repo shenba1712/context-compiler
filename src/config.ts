@@ -10,9 +10,8 @@ export const DEFAULT_TOKEN_BUDGET = 4000;
 export const MAX_TOKEN_BUDGET = 200_000;
 
 // Different callers deliberately use different floors:
-//  - the web demo has a slider that goes down to 200, so its floor (100)
-//    just needs to stay at or below that — it should never be the thing
-//    that overrides what the slider says.
+//  - the web demo slider mins at 100 (same as BUDGET_FLOORS.web); presets clamp
+//    to that range so quick/standard/deep stay on the slider.
 //  - the MCP tools have no slider to defer to, so their floors are chosen to
 //    keep results useful: 500 for a full compile, 200 for pulling one
 //    already-identified section (which is naturally smaller).

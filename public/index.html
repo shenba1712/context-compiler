@@ -4,10 +4,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Context Compiler — stop paying for pages your agent doesn't read</title>
+<title>Context Compiler: stop paying for pages your agent doesn't read</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Fraunces:opsz,wght@9..144,600;9..144,700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
@@ -17,40 +17,50 @@
 <div id="liveRegionAssertive" class="sr-only" role="alert" aria-live="assertive"></div>
 
 <!-- ============================== HERO ==============================
-     Headline, the "few sections vs whole file" pitch, and the animated
-     token-savings mock-up (fixed demo numbers, not live data). -->
-<div class="hero">
-  <div class="wrap">
-    <div class="badge-top"><span class="dot"></span> Model-agnostic · MCP-native · works with zero API keys</div>
-    <div class="hero-grid">
-      <div>
-        <h1 class="title">Stop paying for pages your agent <span class="grad">doesn't read</span>.</h1>
-        <p class="lede">Context Compiler turns any file — PDF, Word, Excel, and more — into the
-          <strong>few sections your task actually needs</strong>, under a token budget you set. Plug it into any
-          AI agent over MCP, or try it right here.</p>
-        <div class="row" style="margin-top:6px">
-          <a class="btn primary" href="#try">Try it now ↓</a>
-          <a class="btn ghost" href="https://github.com/shenba1712/context-compiler" id="repoLink" target="_blank" rel="noopener noreferrer">View the code</a>
-        </div>
-      </div>
-      <div class="heromock" role="img" aria-label="Example: compiling Pride and Prejudice for the question 'How does Mr. Collins propose?' reduces the whole file from 19,612 tokens to 1,454 tokens — a 92.6% reduction with the same answer.">
-        <div class="cap">A classic novel · Pride &amp; Prejudice · Question: "How does Mr. Collins propose?"</div>
-        <div class="hrow"><div class="htrack"><div class="hbar raw" style="width:100%"></div></div><span class="hval">Whole file — 19,612 tokens</span></div>
-        <div class="hrow"><div class="htrack"><div class="hbar small" style="width:7.4%"></div></div><span class="hval">Compiled — 1,454 tokens</span></div>
-        <div class="verdict"><strong>92.6% fewer tokens</strong>, same answer. Every read. Forever.</div>
-      </div>
+     Brand-first Forest map (H): Fraunces wordmark, coords, pitch, CTAs,
+     dark forest plane with Pride bars. Pipeline lives below the fold. -->
+<section class="hero" aria-label="Hero composition">
+  <div class="copy">
+    <p class="brand">Context <span>Compiler</span></p>
+    <p class="coords">MCP · LOCAL BM25 · NO KEY FOR COMPILE</p>
+    <h1 class="title">Stop paying for pages your agent doesn’t read.</h1>
+    <p class="lede">Chart the useful terrain in any file, then pack only the sections your task needs, under a budget you set. Plug it into any AI agent over MCP, or try it right here.</p>
+    <div class="cta">
+      <a class="btn primary" href="#try">Try it now</a>
+      <a class="btn ghost" href="https://github.com/shenba1712/context-compiler" id="repoLink" target="_blank" rel="noopener noreferrer">View the code</a>
     </div>
+  </div>
 
-    <div class="pipe" style="margin-top:34px">
-      <div class="c"><div class="n">1 · Convert</div><div class="h">Any file → markdown</div><div class="d">PDF, docx, xlsx, pptx, images. The result is cached by the file's content hash, so a file is only ever converted once — ask it new questions for free.</div></div>
-      <div class="c"><div class="n">2 · Select</div><div class="h">Rank against your task</div><div class="d">BM25 lexical ranking — free, local, and deterministic.</div></div>
+  <aside class="plane" role="img" aria-label="Example: Pride and Prejudice compiled from 19,612 tokens to 1,454 tokens. 92.6% reduction.">
+    <div class="plane-inner">
+      <p class="cap">Pride &amp; Prejudice · “How does Mr. Collins propose?”</p>
+      <div class="bar-block">
+        <div class="bar-label"><span>Whole file</span><span class="tokens">19,612 tokens</span></div>
+        <div class="htrack"><div class="hbar raw" style="width:100%"></div></div>
+      </div>
+      <div class="bar-block">
+        <div class="bar-label"><span>Compiled</span><span class="tokens">1,454 tokens</span></div>
+        <div class="htrack"><div class="hbar small" style="width:7.4%"></div></div>
+      </div>
+      <p class="verdict"><strong>92.6% fewer tokens</strong> Same facts. Every read.</p>
+    </div>
+  </aside>
+</section>
+
+<!-- Below fold: pipeline + keynote (not in the first viewport) -->
+<section class="pipeline" aria-label="How it works">
+  <div class="wrap">
+    <div class="pipe">
+      <div class="c"><div class="n">1 · Convert</div><div class="h">Any file → markdown</div><div class="d">PDF, docx, xlsx, pptx, images. The result is cached by the file's content hash, so a file is only ever converted once. Ask it new questions for free.</div></div>
+      <div class="c"><div class="n">2 · Select</div><div class="h">Rank against your task</div><div class="d">BM25 lexical ranking: free, local, and deterministic.</div></div>
       <div class="c"><div class="n">3 · Pack</div><div class="h">Fit the token budget</div><div class="d">Best sections in, a manifest of what was left out.</div></div>
     </div>
     <div class="keynote">The compiled result is <strong>exactly what your AI agent receives instead of the whole file</strong>.
       None of this needs an API key. A key unlocks <strong>Prove answer parity</strong> (full file vs your Compile result)
       and <strong>Run agent</strong> (the model retrieves on its own).
+    </div>
   </div>
-</div>
+</section>
 
 <main>
 <!-- ========================= COMPILE FORM ============================
@@ -61,11 +71,11 @@
   <p class="sub">Upload your own file, or pick a sample below. Then ask a question and set a budget.</p>
   <p id="coldStartNote" class="hostnote hidden" role="note">
     This free-tier host sleeps when idle. If the page just woke up, give it
-    <strong>30–60 seconds</strong> on the first load — then it runs normally.
+    <strong>30–60 seconds</strong> on the first load. Then it runs normally.
   </p>
 
   <form id="compileForm">
-    <label for="file">Upload your file (pdf, docx, xlsx, pptx, html, csv, txt, md) — max 20 MB</label>
+    <label for="file">Upload your file (pdf, docx, xlsx, pptx, html, csv, txt, md). Max 20 MB</label>
     <input type="file" id="file" name="file"
       accept=".pdf,.docx,.xlsx,.pptx,.html,.htm,.csv,.txt,.md,.markdown">
     <div id="fileErr" class="err hidden" role="alert"></div>
@@ -80,10 +90,10 @@
     <div class="qchips hidden" id="qchips" role="group" aria-label="Suggested questions"></div>
     <details class="formhint">
       <summary>Tips for questions</summary>
-      <p>Asking several things at once? Separate them with <strong>?</strong> or new lines — each question is ranked on its own. Press <kbd>Enter</kbd> to compile, <kbd>Shift+Enter</kbd> for a new line.</p>
+      <p>Asking several things at once? Separate them with <strong>?</strong> or new lines. Each question is ranked on its own. Press <kbd>Enter</kbd> to compile, <kbd>Shift+Enter</kbd> for a new line.</p>
     </details>
 
-    <label for="budget">Token budget <span style="font-weight:400;color:var(--faint)">— ceiling for Compile and Agent</span></label>
+    <label for="budget">Token budget <span style="font-weight:400;color:var(--faint)">(ceiling for Compile and Agent)</span></label>
     <div class="docsizenote hidden" id="docSizeNote"></div>
     <div class="budgetbar">
       <div class="budgetnum"><span id="budgetVal">4,000</span> <span class="u">tokens</span></div>
@@ -93,26 +103,26 @@
         <button type="button" class="bpre" data-v="8000" data-tier="deep" aria-pressed="false">deep dive <small>~8,000</small></button>
       </div>
     </div>
-    <input type="range" id="budget" name="budget" min="200" max="20000" step="50" value="4000">
-    <div class="sliderscale" aria-hidden="true"><span>200</span><span>20,000 tokens</span></div>
+    <input type="range" id="budget" name="budget" min="100" max="20000" step="50" value="4000">
+    <div class="sliderscale" aria-hidden="true"><span>100</span><span>20,000 tokens</span></div>
 
     <div class="row">
       <button type="submit" class="btn primary" id="go">Compile once</button>
       <button type="button" class="btn agent" id="goAgent">Run agent ▸</button>
       <button type="button" class="btn ghost hidden" id="cancelGo">Cancel</button>
-      <button type="button" class="btn quiet" id="prove" title="Skip the results view — prove from file + budget directly">Prove…</button>
+      <button type="button" class="btn quiet" id="prove" title="Skip the results view. Prove from file + budget directly">Prove…</button>
       <span class="saved hidden" id="sessionSaved" style="margin-left:auto" role="status"></span>
     </div>
-    <p class="qhint" id="agentHint"><strong>Compile</strong> packs strictly under your budget. <strong>UI expands</strong> peek omitted sections; only those you Include in Prove add tokens on top. <strong>Agent</strong> uses the same budget as its starting compile and soft reading ceiling — it stops starting new expands once past it; an in-flight expand may finish slightly over. Prove lives under Compile results.</p>
+    <p class="qhint" id="agentHint"><strong>Compile</strong> packs strictly under your budget. <strong>UI expands</strong> peek omitted sections; only those you Include in Prove add tokens on top. <strong>Agent</strong> uses the same budget as its starting compile and soft reading ceiling. It stops starting new expands once past it; an in-flight expand may finish slightly over. Prove lives under Compile results.</p>
     <details class="expectbox" id="expectBox">
       <summary>Limits &amp; free-tier notes</summary>
       <div class="expectbody" id="expectBody">
-        <p>This is a <strong>public free-tier demo</strong> — no accounts, shared capacity. Limits below are enforced per IP on this server; provider free tiers add their own caps on top.</p>
+        <p>This is a <strong>public free-tier demo</strong>: no accounts, shared capacity. Limits below are enforced per IP on this server; provider free tiers add their own caps on top.</p>
         <ul>
           <li><strong>Compile once</strong> and <strong>expand</strong> are free of model cost (local BM25). They share a pool of about <span data-k="compile_n">30</span> requests every <span data-k="window">5</span> minutes.</li>
-          <li><strong>Prove answer parity</strong> checks your <em>Compile</em> result (not Agent) using free-tier LLM keys. Each prove costs <span data-k="cost_answer">4</span> of those points — roughly <span data-k="prove_n">7</span> proves per <span data-k="window">5</span> minutes. The full-file side is capped at about <span data-k="answer_cap">60,000</span> tokens.</li>
-          <li><strong>Run agent</strong> also uses those free-tier keys and is heavier: <span data-k="cost_agent">12</span> points each — roughly <span data-k="agent_n">2</span> runs per <span data-k="window">5</span> minutes. After a run you can optionally <strong>Compare to full file</strong> (same cost as Prove). At most <span data-k="llm_conc">2</span> LLM jobs run at once on this host.</li>
-          <li id="expectLlmLine">If Gemini/OpenRouter free quota is exhausted, Prove and Agent may return 429/503 even when our rate limit still has room — wait a few minutes and retry.</li>
+          <li><strong>Prove answer parity</strong> checks your <em>Compile</em> result (not Agent) using free-tier LLM keys. Each prove costs <span data-k="cost_answer">4</span> of those points, roughly <span data-k="prove_n">7</span> proves per <span data-k="window">5</span> minutes. The full-file side is capped at about <span data-k="answer_cap">60,000</span> tokens.</li>
+          <li><strong>Run agent</strong> also uses those free-tier keys and is heavier: <span data-k="cost_agent">12</span> points each, roughly <span data-k="agent_n">2</span> runs per <span data-k="window">5</span> minutes. After a run you can optionally <strong>Compare to full file</strong> (same cost as Prove). At most <span data-k="llm_conc">2</span> LLM jobs run at once on this host.</li>
+          <li id="expectLlmLine">If Gemini/OpenRouter free quota is exhausted, Prove and Agent may return 429/503 even when our rate limit still has room. Wait a few minutes and retry.</li>
         </ul>
       </div>
     </details>
@@ -125,7 +135,7 @@
      toggle, omitted-sections manifest, and (if a key is set) the answer-
      parity panel comparing full-file vs compiled answers. -->
 <section id="resultsSec" class="hidden"><div class="wrap">
-  <!-- Prominent wait state for Compile / Prove — outside the results panel so
+  <!-- Prominent wait state for Compile / Prove: outside the results panel so
        empty stats don't bury the message while a first conversion runs. -->
   <div id="loadingNote" class="loading-banner hidden" role="status" aria-live="polite" aria-busy="false">
     <span class="spinner" aria-hidden="true"></span>
@@ -172,19 +182,19 @@
 
     <div id="proveActions" class="hidden" style="margin-top:16px">
       <button type="button" class="btn ghost" id="proveResults">Prove answer parity</button>
-      <span class="qhint" style="margin-left:8px">Full file vs this compile (+ any included expands) — optional, not an Agent run.</span>
+      <span class="qhint" style="margin-left:8px">Full file vs this compile (+ any included expands). Optional, not an Agent run.</span>
     </div>
   </div>
 
   <div class="panel hidden" id="parity" style="margin-top:20px">
     <strong style="font-size:14px">Answer parity</strong> <span class="badge" id="parityModel"></span>
-    <p class="sub" style="margin:6px 0 0">Full file vs your <strong>Compile</strong> context (and any sections you expanded) — not an Agent run.</p>
+    <p class="sub" style="margin:6px 0 0">Side-by-side check: same question, two contexts. Compare the facts yourself. Wording can differ; a thin compiled answer usually means raise the budget or include omitted sections. Not an Agent run.</p>
     <div class="duo">
       <div><h3>From the FULL file</h3><pre id="ansFull"></pre><div class="cost full" id="ansFullCost"></div></div>
       <div><h3 id="ansCompiledHeading">From the COMPILED context</h3><pre id="ansCompiled"></pre><div class="cost small" id="ansCompiledCost"></div></div>
     </div>
     <p class="qhint" id="parityBudgetNote" style="margin-top:12px">
-      This proves the Compile path. For Agent, use Run agent — that’s a separate retrieval loop.
+      The compiled answer only sees what fit your token budget (plus any omitted sections you included). If it looks thinner than the full-file answer, raise the budget and prove again, or expand omitted sections below, then prove again.
     </p>
   </div>
 </div></section>
@@ -195,7 +205,7 @@
      meter climbs with tokens the agent actually read, then the answer. -->
 <section id="agentSec" class="hidden"><div class="wrap"><div class="panel">
   <h2 class="sec" id="agentHeading" tabindex="-1">Agent run</h2>
-  <p class="sub">Uses your token budget as a soft reading ceiling — compiling under it, then expanding omitted
+  <p class="sub">Uses your token budget as a soft reading ceiling, compiling under it, then expanding omitted
     sections until that ceiling is reached (an in-flight expand may finish slightly over), or answering from the whole file when it already fits.</p>
   <div id="agentLoadingNote" class="loading-banner hidden" role="status" aria-live="polite" aria-busy="false">
     <span class="spinner" aria-hidden="true"></span>
@@ -218,7 +228,7 @@
     <div id="aStopped" class="qhint"></div>
     <div id="aParityActions" class="hidden" style="margin-top:12px">
       <button type="button" class="btn ghost" id="aParityBtn">Compare to full file</button>
-      <span class="qhint" style="margin-left:8px">Same question from the full file vs the agent’s context — optional, costs like Prove.</span>
+      <span class="qhint" style="margin-left:8px">Same question from the full file vs the agent’s context. Optional, costs like Prove.</span>
     </div>
     <div id="aParity" class="hidden" style="margin-top:16px">
       <strong style="font-size:14px">Agent vs full file</strong> <span class="badge" id="aParityModel"></span>
@@ -237,19 +247,20 @@
      Explains that the demo above IS the compile_context tool, then gives
      copy-paste MCP config for the three most common agent clients. -->
 <section id="mcp"><div class="wrap"><div class="panel">
+  <p class="sec-eyebrow">MCP · AGENT WIRING</p>
   <h2 class="sec">Use it in your own AI agent</h2>
-  <p class="sub">The demo above runs the exact same <code>compile_context</code> tool this server exposes — so what you
+  <p class="sub">The demo above runs the exact same <code>compile_context</code> tool this server exposes, so what you
     just saw <i>is</i> the MCP tool's output. In real use it's an <strong>MCP server</strong> your coding agent calls automatically,
     so it reads the 3% that matters instead of dumping whole files into the model.</p>
 
   <div class="workflow">
     <div class="wf"><div class="n">Without Context Compiler</div>
-      <p>Your agent needs one fact from a 40-page PDF, so it loads <strong>the entire file</strong> into the model —
+      <p>Your agent needs one fact from a 40-page PDF, so it loads <strong>the entire file</strong> into the model.
         thousands of tokens, most of them irrelevant, paid for on every turn.</p>
     </div>
     <div class="wf good"><div class="n">With Context Compiler</div>
       <p>Your agent calls <code>compile_context(file, task, budget)</code> and gets back <strong>only the relevant
-        sections</strong> under a token budget. Same answer, a fraction of the tokens — and it can
+        sections</strong> under a token budget. The answer still holds on a fraction of the tokens, and it can
         <code>expand_section</code> if it needs more.</p>
     </div>
   </div>

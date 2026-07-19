@@ -10,7 +10,7 @@
 
 function $<T extends HTMLElement = HTMLElement>(id: string): T {
   const el = document.getElementById(id);
-  if (!el) throw new Error(`Missing #${id} in the page — markup and script are out of sync.`);
+  if (!el) throw new Error(`Missing #${id} in the page. Markup and script are out of sync.`);
   return el as T;
 }
 
@@ -30,7 +30,7 @@ async function loadSamples(): Promise<void> {
     renderSamples();
   } catch (e) {
     console.warn("Could not load the sample library:", e);
-    wrap.textContent = "Couldn't load the sample library right now — uploading your own file still works.";
+    wrap.textContent = "Couldn't load the sample library right now. Uploading your own file still works.";
   }
 }
 
@@ -85,7 +85,7 @@ async function loadConfig(): Promise<void> {
       const label = document.querySelector('label[for="file"]');
       if (label) {
         const mb = Math.round(maxFileBytes / (1024 * 1024));
-        label.textContent = `Upload your file (pdf, docx, xlsx, pptx, html, csv, txt, md) — max ${mb} MB`;
+        label.textContent = `Upload your file (pdf, docx, xlsx, pptx, html, csv, txt, md). Max ${mb} MB`;
       }
     }
     setLlmDependentButtons(Boolean(cfg.llm_available));
@@ -127,8 +127,8 @@ function fillExpectPanel(cfg: {
   const llmLine = document.getElementById("expectLlmLine");
   if (llmLine) {
     llmLine.innerHTML = cfg.llm_available
-      ? "If Gemini/OpenRouter <strong>free-tier quota</strong> is exhausted, Prove and Agent may return 429/503 even when our rate limit still has room — wait a few minutes and retry."
-      : "<strong>Prove</strong> and <strong>Run agent</strong> are disabled here — this server has no LLM API key. Compile and expand still work fully offline.";
+      ? "If Gemini/OpenRouter <strong>free-tier quota</strong> is exhausted, Prove and Agent may return 429/503 even when our rate limit still has room. Wait a few minutes and retry."
+      : "<strong>Prove</strong> and <strong>Run agent</strong> are disabled here. This server has no LLM API key. Compile and expand still work fully offline.";
   }
 }
 
@@ -159,6 +159,27 @@ function langSpan(text: string): HTMLSpanElement {
 
 function announce(msg: string, assertive = false): void {
   $(assertive ? "liveRegionAssertive" : "liveRegion").textContent = msg;
+}
+
+/** True when el meaningfully intersects the viewport (with a small margin). */
+function isNearVisible(el: HTMLElement, margin = 64): boolean {
+  const r = el.getBoundingClientRect();
+  const vh = window.innerHeight || document.documentElement.clientHeight;
+  return r.bottom > margin && r.top < vh - margin;
+}
+
+/**
+ * Scroll only when the target isn't already near-visible — avoids the
+ * Prove flow jumping to the spinner when the user is already in results.
+ * Returns whether a scroll was started.
+ */
+function scrollIntoViewIfNeeded(
+  el: HTMLElement,
+  opts: ScrollIntoViewOptions = { behavior: "smooth", block: "start" },
+): boolean {
+  if (isNearVisible(el)) return false;
+  el.scrollIntoView(opts);
+  return true;
 }
 
 const esc = (s: unknown): string =>
@@ -366,15 +387,25 @@ syncBudget();
 // "return the whole file", so computePresets() scales them down to the doc's
 // size below. "standard" mirrors DEFAULT_TOKEN_BUDGET in config.ts — the client
 // is a separate bundle that can't import server code, so the number is copied.
+// Keep presets inside the slider's min/max (see #budget in index.html; min
+// matches BUDGET_FLOORS.web = 100).
 const DEFAULT_PRESETS: BudgetPresets = { quick: 1000, standard: 4000, deep: 8000 };
+const SLIDER_MIN = 100;
+const SLIDER_MAX = 20_000;
 
 function computePresets(rawTokens: number | null): BudgetPresets {
   if (!rawTokens || rawTokens >= DEFAULT_PRESETS.deep) return DEFAULT_PRESETS;
-  const round50 = (n: number) => Math.max(50, Math.round(n / 50) * 50);
-  const deep = Math.max(300, rawTokens); // "deep dive" = essentially the whole document
-  const standard = Math.min(deep, round50(Math.max(200, rawTokens * 0.5)));
-  const quick = Math.min(standard, round50(Math.max(100, rawTokens * 0.2)));
-  return { quick, standard, deep };
+  const round50 = (n: number) => Math.round(n / 50) * 50;
+  const clamp = (n: number) => Math.min(SLIDER_MAX, Math.max(SLIDER_MIN, round50(n)));
+  const deep = clamp(Math.max(rawTokens, SLIDER_MIN));
+  // Spread tiers on small docs so quick < standard < deep when the file allows it.
+  const standard = clamp(Math.min(deep, Math.max(SLIDER_MIN * 2, rawTokens * 0.5)));
+  const quick = clamp(Math.min(standard - 50, Math.max(SLIDER_MIN, rawTokens * 0.2)));
+  return {
+    quick: Math.min(quick, standard),
+    standard: Math.min(standard, deep),
+    deep,
+  };
 }
 
 // selectTier: which preset to jump the slider to, or null to just relabel the
@@ -390,7 +421,9 @@ function applyPresets(p: BudgetPresets, selectTier: keyof BudgetPresets | null):
     if (small) small.textContent = "~" + p[tier].toLocaleString();
   });
   if (selectTier) {
-    $<HTMLInputElement>("budget").value = String(p[selectTier]);
+    const slider = $<HTMLInputElement>("budget");
+    const v = Math.min(SLIDER_MAX, Math.max(SLIDER_MIN, p[selectTier]));
+    slider.value = String(v);
     syncBudget();
     onBudgetUserChange();
   } else {
@@ -405,7 +438,7 @@ function renderDocSizeNote(rawTokens: number | null, scaled: boolean): void {
     return;
   }
   el.textContent = scaled
-    ? `This document is about ${rawTokens.toLocaleString()} tokens total — the presets below are scaled to it.`
+    ? `This document is about ${rawTokens.toLocaleString()} tokens total. The presets below are scaled to it.`
     : `This document is about ${rawTokens.toLocaleString()} tokens total.`;
   el.classList.remove("hidden");
 }
@@ -426,7 +459,7 @@ function fail(m: string): void {
 /** Turn HTTP status + JSON error body into a human message (429/503 aware). */
 async function apiFailureMessage(resp: Response, body: { error?: string } | null): Promise<string> {
   const base = body?.error || `Request failed (${resp.status})`;
-  if (resp.status === 429) return base + " Wait a minute, then try again.";
+  if (resp.status === 429) return base;
   if (resp.status === 503) {
     const ra = resp.headers.get("Retry-After");
     return base + (ra ? ` Retry in about ${ra}s.` : " Retry in a few seconds.");
@@ -495,7 +528,7 @@ $<HTMLInputElement>("file").addEventListener("change", () => {
   if (f && f.size > maxFileBytes) {
     const mb = Math.round(maxFileBytes / (1024 * 1024));
     $("fileErr").textContent =
-      `"${f.name}" is ${(f.size / 1e6).toFixed(1)} MB — over the ${mb} MB limit. Pick a smaller file.`;
+      `"${f.name}" is ${(f.size / 1e6).toFixed(1)} MB, over the ${mb} MB limit. Pick a smaller file.`;
     $("fileErr").classList.remove("hidden");
     $<HTMLInputElement>("file").value = "";
     return;
@@ -603,7 +636,7 @@ function refreshExpandBudgetNote(): void {
     expandSum.toLocaleString() +
     "</strong> from included expands → <strong>" +
     total.toLocaleString() +
-    "</strong> tokens effective (slider budget was the compile ceiling only — only sections with Include in Prove add tokens; peeks do not).";
+    "</strong> tokens effective (slider budget was the compile ceiling only. Only sections with Include in Prove add tokens; peeks do not).";
   el.classList.remove("hidden");
 }
 
@@ -627,7 +660,7 @@ const LOADING_COPY: Record<LoadingKind, { title: string; detail: string }> = {
   },
   prove: {
     title: "Proving answer parity…",
-    detail: "Asking the model twice — full file vs your compile. This can take a few seconds.",
+    detail: "Asking the model twice: full file vs your compile. This can take a few seconds.",
   },
 };
 
@@ -639,19 +672,32 @@ function showLoading(kind: LoadingKind = "compile"): void {
   el.classList.remove("hidden");
   el.setAttribute("aria-busy", "true");
   $("resultsSec").classList.remove("hidden");
-  // Hide compile shell + parity while waiting so the banner is the focus.
-  $("results").classList.add("hidden");
   $("parity").classList.add("hidden");
-  if (kind === "compile") {
-    $<HTMLButtonElement>("cancelGo").classList.remove("hidden");
+
+  if (kind === "prove") {
+    // Keep compile results on screen. Park the wait banner under the Prove
+    // controls so the page does not collapse up to a top-of-section spinner.
+    if (hasCompiledOnce) $("results").classList.remove("hidden");
+    else $("results").classList.add("hidden");
+    $("proveActions").after(el);
+    return;
   }
-  $("resultsSec").scrollIntoView({ behavior: "smooth", block: "start" });
+
+  // Compile: hide stale results; banner at the top of resultsSec.
+  $("results").classList.add("hidden");
+  const wrap = $("resultsSec").querySelector(".wrap");
+  if (wrap) wrap.prepend(el);
+  $<HTMLButtonElement>("cancelGo").classList.remove("hidden");
+  scrollIntoViewIfNeeded($("resultsSec"));
 }
 function hideLoading(): void {
   const el = $("loadingNote");
   el.classList.add("hidden");
   el.setAttribute("aria-busy", "false");
   $<HTMLButtonElement>("cancelGo").classList.add("hidden");
+  // Park the banner back at the top of resultsSec for the next compile wait.
+  const wrap = $("resultsSec").querySelector(".wrap");
+  if (wrap) wrap.prepend(el);
 }
 $<HTMLButtonElement>("cancelGo").onclick = () => {
   compileAbort?.abort();
@@ -710,8 +756,8 @@ $<HTMLFormElement>("compileForm").addEventListener("submit", async (e) => {
     });
     $("cacheBadge").textContent = d.cache_hit ? "⚡ conversion cached" : "converted fresh";
     $("cacheBadge").title = d.cache_hit
-      ? "This file was already converted — reused cached markdown. Ranking still ran fresh."
-      : "First time we saw this file — converted and cached by content hash.";
+      ? "This file was already converted. Reused cached markdown. Ranking still ran fresh."
+      : "First time we saw this file. Converted and cached by content hash.";
     $("rankBadge").textContent = "bm25 ranking";
     $("omitBadge").textContent = d.omitted_sections.length + " sections omitted";
     $("out").textContent = d.markdown;
@@ -845,11 +891,11 @@ function onAgentDone(r: AgentRunResult): void {
   applyLang($("aAnswer"), r.answer);
   const over =
     ceiling > 0 && r.tokens_read > ceiling
-      ? " Soft ceiling was " + ceiling.toLocaleString() + " — last expand finished slightly over (expected)."
+      ? " Soft ceiling was " + ceiling.toLocaleString() + ". Last expand finished slightly over (expected)."
       : "";
   $("aStopped").textContent =
     STOP_TEXT[r.stopped_reason] +
-    " — reading " +
+    " · reading " +
     r.tokens_read.toLocaleString() +
     " tokens (" +
     pct +
@@ -864,7 +910,7 @@ function onAgentDone(r: AgentRunResult): void {
   }
   $("agentHeading").focus();
   announce(
-    "Agent finished — read " +
+    "Agent finished. Read " +
       r.tokens_read.toLocaleString() +
       " of " +
       r.raw_tokens.toLocaleString() +
@@ -1092,7 +1138,7 @@ function renderFloorNote(d: CompileApiResult): void {
       d.raw_tokens.toLocaleString() +
       " tokens, under your " +
       budget.toLocaleString() +
-      "-token budget, so it was returned in full — " +
+      "-token budget, so it was returned in full. " +
       "nothing to leave out. Lower the budget (try “quick fact”) to see compilation kick in.";
     el.classList.remove("hidden");
     return;
@@ -1110,13 +1156,13 @@ function renderFloorNote(d: CompileApiResult): void {
     // rounded up to a tidy hundred.
     const need = Math.ceil((topOmit.tokens + 80) / 100) * 100;
     el.innerHTML =
-      "<strong>Nothing fit your budget.</strong> Even the best match — “" +
+      "<strong>Nothing fit your budget.</strong> Even the best match, “" +
       esc(lastCrumb(topOmit.section)) +
       "” (" +
       topOmit.relevance +
       "% relevant, " +
       topOmit.tokens.toLocaleString() +
-      " tokens) — is larger than your " +
+      " tokens) is larger than your " +
       budget.toLocaleString() +
       "-token budget, so no section is shown below. " +
       "Raise the budget to about " +
@@ -1202,7 +1248,7 @@ function renderFloorNote(d: CompileApiResult): void {
       d.selected_sections.length +
       "</strong> section" +
       (d.selected_sections.length === 1 ? "" : "s") +
-      " cleared the 40% relevance floor — " +
+      " cleared the 40% relevance floor. " +
       "the rest scored too low to matter for this question. Used <strong>" +
       d.tokens_used.toLocaleString() +
       "</strong> of your " +
@@ -1303,7 +1349,7 @@ function makeChip(o: SectionInfo, d: CompileApiResult, exp: HTMLElement): HTMLBu
       announce(
         "Peeked section: " +
           lastCrumb(o.section) +
-          ". Not in Prove yet — check Include in Prove to add its tokens."
+          ". Not in Prove yet. Check Include in Prove to add its tokens."
       );
     } catch (err) {
       fail(err instanceof Error ? err.message : String(err));
@@ -1403,19 +1449,21 @@ async function runProveFlow(): Promise<void> {
     const budget = Number($<HTMLInputElement>("budget").value);
     $("parityBudgetNote").innerHTML =
       expandedN > 0
-        ? "Compile path (+ expands <code>" +
+        ? "The compiled answer only sees what fit your <strong>" +
+          budget.toLocaleString() +
+          "-token</strong> budget, plus expands <code>" +
           esc(d.compiled.expanded_ids!.join(", ")) +
-          "</code>) on a <strong>" +
+          "</code>. If it looks thinner than the full-file answer, raise the budget and prove again, or expand other omitted sections, then prove again."
+        : "The compiled answer only sees what fit your <strong>" +
           budget.toLocaleString() +
-          "-token</strong> budget — not an Agent run."
-        : "Compile path only — what fit your <strong>" +
-          budget.toLocaleString() +
-          "-token</strong> budget. Not an Agent run.";
-    $("parity").scrollIntoView({ behavior: "smooth", block: "nearest" });
+          "-token</strong> budget. If it looks thinner than the full-file answer, raise the budget and prove again, or expand omitted sections below, then prove again.";
+    // Parity opens under the Prove controls where the spinner just was.
+    // No scroll: the page already stayed put during the wait.
     announce("Answer parity ready: both answers shown below.");
   } catch (e) {
     hideLoading();
     // Restore whatever was on screen before showLoading hid the panels.
+    // No scroll on abort/error.
     if (hasCompiledOnce) {
       $("resultsSec").classList.remove("hidden");
       $("results").classList.remove("hidden");

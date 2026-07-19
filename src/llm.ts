@@ -189,7 +189,7 @@ export function geminiModels(): string[] {
 /** Thrown when every configured provider fails (or none are configured). */
 export class LlmUnavailableError extends Error {
   /** Safe for HTTP/SSE clients — no provider bodies or keys. */
-  readonly publicMessage = "The AI provider is unavailable right now — try again in a minute.";
+  readonly publicMessage = "The AI provider is unavailable right now. Try again in a minute.";
   constructor(detail: string) {
     super(detail);
     this.name = "LlmUnavailableError";

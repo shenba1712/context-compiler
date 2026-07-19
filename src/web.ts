@@ -165,7 +165,7 @@ function rateLimit(req: express.Request, res: express.Response, next: express.Ne
     hits.set(key, arr);
     inc("rate_limited");
     res.setHeader("Retry-After", "60");
-    return res.status(429).json({ error: "Rate limit reached — try again in a few minutes." });
+    return res.status(429).json({ error: "Rate limit reached. Try again in a few minutes." });
   }
   for (let i = 0; i < cost; i++) arr.push(now);
   // Bound the map: drop oldest empty/stale keys when too many distinct IPs.
