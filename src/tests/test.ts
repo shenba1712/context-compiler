@@ -107,9 +107,13 @@ import {
   shouldScrollIntoView,
   shouldShowAgentSecIdle,
   apiFailureMessageFromStatus,
+  busy503RetryDelayMs,
+  BUSY_503_RETRY_MS_MAX,
+  BUSY_503_RETRY_MS_MIN,
   proveFlowUsesLocalError,
   questionStaleBannerHtml,
   rateLimitRetryHint,
+  shouldRetryBusy503,
   taskInvalidatesCompile,
   truncatedSectionMeta,
 } from "../client-ux.js";
@@ -1685,6 +1689,24 @@ function testClientUxContracts() {
     apiFailureMessageFromStatus(503, "Server busy.", "30"),
     "Server busy. Retry in about 30s.",
     "503 uses Retry-After when present"
+  );
+  assert.equal(shouldRetryBusy503(503, 0), true, "first 503 may auto-retry once");
+  assert.equal(shouldRetryBusy503(503, 1), false, "second 503 must not auto-retry again");
+  assert.equal(shouldRetryBusy503(429, 0), false, "429 must never auto-retry");
+  assert.equal(shouldRetryBusy503(500, 0), false, "non-503 must not auto-retry");
+  assert.equal(
+    busy503RetryDelayMs(() => 0),
+    BUSY_503_RETRY_MS_MIN,
+    "jitter floor is 400ms"
+  );
+  assert.equal(
+    busy503RetryDelayMs(() => 0.999999),
+    BUSY_503_RETRY_MS_MAX,
+    "jitter ceiling is 900ms"
+  );
+  assert.ok(
+    BUSY_503_RETRY_MS_MIN >= 400 && BUSY_503_RETRY_MS_MAX <= 900,
+    "busy 503 retry stays in ~400–900ms band"
   );
 
   console.log("  client UX contracts ok: scroll, prove-include, truncated meta + include hint");

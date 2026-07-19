@@ -708,6 +708,55 @@ function apiFailureMessage(
   }
   return base;
 }
+
+/** Keep in sync with client-ux.ts — one automatic retry on 503 busy, never 429. */
+const BUSY_503_RETRY_MS_MIN = 400;
+const BUSY_503_RETRY_MS_MAX = 900;
+
+function shouldRetryBusy503(status: number, attemptIndex: number): boolean {
+  return status === 503 && attemptIndex === 0;
+}
+
+function busy503RetryDelayMs(random: () => number = Math.random): number {
+  return BUSY_503_RETRY_MS_MIN + Math.floor(random() * (BUSY_503_RETRY_MS_MAX - BUSY_503_RETRY_MS_MIN + 1));
+}
+
+/** Soft status nudge during the one invisible 503 retry (no second spinner). */
+function noteBusy503Retry(): void {
+  const note = $("loadingNote");
+  if (!note.classList.contains("hidden")) {
+    $("loadingDetail").textContent = "Server busy — retrying once…";
+  }
+}
+
+/**
+ * Fetch once; on 503 wait a short jittered delay and retry once, then return
+ * the final response (success or still failing). Does not retry 429.
+ */
+async function fetchWithBusyRetry(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const resp = await fetch(input, init);
+  if (!shouldRetryBusy503(resp.status, 0)) return resp;
+  void resp.body?.cancel();
+  noteBusy503Retry();
+  const delay = busy503RetryDelayMs();
+  await new Promise<void>((resolve, reject) => {
+    const signal = init?.signal;
+    if (signal?.aborted) {
+      reject(new DOMException("Aborted", "AbortError"));
+      return;
+    }
+    const timer = setTimeout(resolve, delay);
+    signal?.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        reject(new DOMException("Aborted", "AbortError"));
+      },
+      { once: true }
+    );
+  });
+  return fetch(input, init);
+}
 function clearErr(): void {
   $("err").classList.add("hidden");
   $("fileErr").classList.add("hidden");
@@ -983,7 +1032,11 @@ $<HTMLFormElement>("compileForm").addEventListener("submit", async (e) => {
   showLoading();
   if (shouldClearAgentOnCompile()) clearAgentPanel();
   try {
-    const resp = await fetch("/api/compile", { method: "POST", body: fd, signal: compileAbort.signal });
+    const resp = await fetchWithBusyRetry("/api/compile", {
+      method: "POST",
+      body: fd,
+      signal: compileAbort.signal,
+    });
     const d: CompileApiResult = await resp
       .json()
       .catch(() => ({ error: "Compile failed." }) as CompileApiResult);
@@ -1406,7 +1459,11 @@ async function runAgentFlow(): Promise<void> {
   startAgentPanel();
   let gotDone = false;
   try {
-    const resp = await fetch("/api/agent", { method: "POST", body: fd, signal: agentAbort.signal });
+    const resp = await fetchWithBusyRetry("/api/agent", {
+      method: "POST",
+      body: fd,
+      signal: agentAbort.signal,
+    });
     const ctype = resp.headers.get("content-type") ?? "";
     if (!ctype.includes("text/event-stream") || !resp.body) {
       // A guard rejected the request before the stream opened → JSON error body.
@@ -1617,7 +1674,7 @@ function renderSections(d: CompileApiResult): void {
         if (el.querySelector('.seccard-rest-peek[data-section-id="' + s.id + '"]')) return;
         peekBtn.disabled = true;
         try {
-          const resp = await fetch("/api/expand", {
+          const resp = await fetchWithBusyRetry("/api/expand", {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({ handle: d.handle, section_id: s.id }),
@@ -1989,7 +2046,7 @@ async function peekSection(
     chip.classList.add("done");
   }
   try {
-    const resp = await fetch("/api/expand", {
+    const resp = await fetchWithBusyRetry("/api/expand", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ handle: d.handle, section_id: o.id }),
@@ -2171,7 +2228,11 @@ async function runProveFlow(): Promise<void> {
   showLoading("prove");
   announce("Asking the model twice, this can take a few seconds…");
   try {
-    const resp = await fetch("/api/answer", { method: "POST", body: fd, signal: proveAbort.signal });
+    const resp = await fetchWithBusyRetry("/api/answer", {
+      method: "POST",
+      body: fd,
+      signal: proveAbort.signal,
+    });
     const d: AnswerApiResult = await resp
       .json()
       .catch(() => ({ error: "Parity request failed." }) as AnswerApiResult);

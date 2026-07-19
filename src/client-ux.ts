@@ -168,6 +168,27 @@ export function apiFailureMessageFromStatus(
   return base;
 }
 
+/** Jittered wait before one automatic client retry on HTTP 503 (busy). */
+export const BUSY_503_RETRY_MS_MIN = 400;
+export const BUSY_503_RETRY_MS_MAX = 900;
+
+/**
+ * One automatic retry on 503 only (converter/LLM busy). Never auto-retry 429.
+ * `attemptIndex` is 0-based for the response just received (0 = first response).
+ */
+export function shouldRetryBusy503(status: number, attemptIndex: number): boolean {
+  return status === 503 && attemptIndex === 0;
+}
+
+/** Delay in [min, max] ms inclusive; inject `random` ([0,1)) for tests. */
+export function busy503RetryDelayMs(
+  random: () => number = Math.random,
+  min = BUSY_503_RETRY_MS_MIN,
+  max = BUSY_503_RETRY_MS_MAX
+): number {
+  return min + Math.floor(random() * (max - min + 1));
+}
+
 /** Prove, Agent, and Include-in-Prove stay off until a fresh compile for this question. */
 export function shouldDisableProveAgentWhenQuestionStale(
   hasCompiledOnce: boolean,
