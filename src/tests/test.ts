@@ -3172,7 +3172,11 @@ async function testSampleLibraryStaticServing() {
     "selectSample must check resp.ok and surface HTTP status"
   );
   assert.ok(/filePicked/.test(clientSrc), "client shows a selected-file status line");
-  console.log("  sample library ok: static bytes + dockerignore exception + client resp.ok");
+  assert.ok(
+    /let pickedFile/.test(clientSrc) && /activeFile\(/.test(clientSrc),
+    "sample selection must hold a File in memory (not rely on input.files = DataTransfer)"
+  );
+  console.log("  sample library ok: static bytes + dockerignore + pickedFile + client resp.ok");
 }
 
 async function testCompileIncrementsCounter() {

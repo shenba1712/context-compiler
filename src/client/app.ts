@@ -121,6 +121,18 @@ function $<T extends HTMLElement = HTMLElement>(id: string): T {
 // not a client-side guess. See samples-manifest.ts and web.ts for the source.
 let SAMPLES: Sample[] = [];
 
+/**
+ * Source of truth for the active document when a sample card is chosen.
+ * Programmatic `input.files = DataTransfer…` is unreliable across browsers
+ * (silent no-op, or assignment that does not stick). Compile / Agent / Prove
+ * must not depend on it — they read `pickedFile` first.
+ */
+let pickedFile: File | null = null;
+
+function activeFile(): File | null {
+  return pickedFile ?? $<HTMLInputElement>("file").files?.[0] ?? null;
+}
+
 async function loadSamples(): Promise<void> {
   const wrap = $("samples");
   try {
@@ -429,23 +441,19 @@ async function selectSample(s: Sample, card: HTMLButtonElement): Promise<void> {
       if (!blob.size) throw new Error("Sample file was empty.");
       blobCache[s.key] = blob;
     }
-    const dt = new DataTransfer();
-    dt.items.add(new File([blob], s.file, { type: blob.type || "application/octet-stream" }));
+    // Hold the File in memory — do not require input.files assignment to succeed.
+    pickedFile = new File([blob], s.file, { type: blob.type || "application/octet-stream" });
     const input = $<HTMLInputElement>("file");
     try {
+      const dt = new DataTransfer();
+      dt.items.add(pickedFile);
       input.files = dt.files;
     } catch {
-      throw new Error(
-        "This browser blocked attaching the sample to the file picker. Upload the file manually, or try another browser."
-      );
-    }
-    if (!input.files?.length) {
-      throw new Error(
-        "Could not attach the sample to the file picker in this browser. Upload the file manually instead."
-      );
+      // Best-effort only: some browsers block programmatic FileList writes.
     }
   } catch (e) {
     delete blobCache[s.key];
+    pickedFile = null;
     card.classList.remove("active");
     card.setAttribute("aria-pressed", "false");
     clearFilePickedStatus();
@@ -868,6 +876,7 @@ $<HTMLInputElement>("file").addEventListener("change", () => {
       `"${f.name}" is ${(f.size / 1e6).toFixed(1)} MB, over the ${mb} MB limit. Pick a smaller file.`;
     $("fileErr").classList.remove("hidden");
     $<HTMLInputElement>("file").value = "";
+    pickedFile = null;
     clearFilePickedStatus();
     return;
   }
@@ -877,6 +886,7 @@ $<HTMLInputElement>("file").addEventListener("change", () => {
       `Images aren't supported without an OCR/captioning backend, which this demo doesn't have configured.`;
     $("fileErr").classList.remove("hidden");
     $<HTMLInputElement>("file").value = "";
+    pickedFile = null;
     clearFilePickedStatus();
     return;
   }
@@ -889,9 +899,11 @@ $<HTMLInputElement>("file").addEventListener("change", () => {
       x.classList.remove("active");
       x.setAttribute("aria-pressed", "false");
     });
+    pickedFile = f;
     setFilePickedStatus("Selected file: " + f.name);
     estimateUploadSize(f);
   } else {
+    pickedFile = null;
     clearFilePickedStatus();
   }
 });
@@ -926,7 +938,7 @@ function bumpSavings(d: CompileApiResult): void {
 }
 
 function formData(): FormData | null {
-  const f = $<HTMLInputElement>("file").files?.[0];
+  const f = activeFile();
   const task = $<HTMLTextAreaElement>("task").value.trim();
   if (!f || !task) return null;
   const fd = new FormData();
@@ -1485,7 +1497,7 @@ async function runAgentFlow(): Promise<void> {
     agentError("Question changed since last compile. Click Compile once to refresh.");
     return;
   }
-  const f = $<HTMLInputElement>("file").files?.[0];
+  const f = activeFile();
   const task = $<HTMLTextAreaElement>("task").value.trim();
   if (!f || !task) {
     fail("Pick a file (or a sample) and enter a question.");
