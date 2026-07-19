@@ -1779,11 +1779,9 @@ async function testAgentExpandTokensCountedUnderCeiling() {
   // Multi-facet near a tight ceiling: compile packs one large facet; expanding
   // the other must reclaim budget (mustInclude) so expand substance lands and
   // tokens_read moves — not a silent no-op at the compile total.
-  const facetA = ("Alpha protocol details with marker ALPHANEEDLE. ").repeat(150);
-  const facetB = ("Beta recovery steps with marker BETANEEDLE. ").repeat(150);
-  const doc = ["# Manual", "## Alpha Protocol\n\n" + facetA, "## Beta Recovery\n\n" + facetB].join(
-    "\n\n"
-  );
+  const facetA = "Alpha protocol details with marker ALPHANEEDLE. ".repeat(150);
+  const facetB = "Beta recovery steps with marker BETANEEDLE. ".repeat(150);
+  const doc = ["# Manual", "## Alpha Protocol\n\n" + facetA, "## Beta Recovery\n\n" + facetB].join("\n\n");
   const path = testTmpPath(`agent-expand-tokens-${Date.now()}.md`);
   writeFileSync(path, doc);
   try {
@@ -3191,10 +3189,7 @@ async function testSampleLibraryStaticServing() {
     /let pickedFile/.test(clientSrc) && /activeFile\(/.test(clientSrc),
     "sample selection must hold a File in memory (not rely on input.files = DataTransfer)"
   );
-  assert.ok(
-    /refreshSampleTokens/.test(clientSrc),
-    "client refreshes sample tok hints after background warm"
-  );
+  assert.ok(/refreshSampleTokens/.test(clientSrc), "client refreshes sample tok hints after background warm");
   console.log("  sample library ok: fast catalog + static bytes + pickedFile");
 }
 

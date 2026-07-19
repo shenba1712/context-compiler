@@ -643,7 +643,7 @@ function freeRoomForMustInclude(
   queryTerms: string[] | undefined,
   overheadOf: (c: Chunk) => number
 ): { selected: PackedChunk[]; used: number } {
-  let next = [...selected];
+  const next = [...selected];
   let currentUsed = used;
   const room = () => usable - currentUsed;
   // truncateToBudget reserves marker tokens inside maxTokens — floor must clear that.
@@ -666,10 +666,9 @@ function freeRoomForMustInclude(
     const victim = next[victimIdx]!;
     const overhead = overheadOf(victim);
     const deficit = need - room();
-    const shrinkTargets = [
-      Math.max(minKeep, victim.tokens - deficit),
-      minKeep,
-    ].filter((t, i, arr) => t < victim.tokens && arr.indexOf(t) === i);
+    const shrinkTargets = [Math.max(minKeep, victim.tokens - deficit), minKeep].filter(
+      (t, i, arr) => t < victim.tokens && arr.indexOf(t) === i
+    );
 
     let shrunk = false;
     for (const tryTo of shrinkTargets) {
