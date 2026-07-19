@@ -1775,6 +1775,97 @@ async function testAgentQueryMissOnExpand() {
   }
 }
 
+async function testAgentExpandTokensCountedUnderCeiling() {
+  // Multi-facet near a tight ceiling: compile packs one large facet; expanding
+  // the other must reclaim budget (mustInclude) so expand substance lands and
+  // tokens_read moves — not a silent no-op at the compile total.
+  const facetA = ("Alpha protocol details with marker ALPHANEEDLE. ").repeat(150);
+  const facetB = ("Beta recovery steps with marker BETANEEDLE. ").repeat(150);
+  const doc = ["# Manual", "## Alpha Protocol\n\n" + facetA, "## Beta Recovery\n\n" + facetB].join(
+    "\n\n"
+  );
+  const path = testTmpPath(`agent-expand-tokens-${Date.now()}.md`);
+  writeFileSync(path, doc);
+  try {
+    const task = "What is the Alpha protocol, and what are the Beta recovery steps?";
+    const budget = 150;
+    const compiled = await compileContext(path, task, budget);
+    const compileTokens = compiled.selected_content_tokens ?? 0;
+    assert.ok(compileTokens > 0, "compile selects substance");
+    assert.ok(compiled.omitted_sections.length > 0, "budget leaves a section omitted");
+
+    const selectedText = compiled.selected_sections.map((s) => s.text ?? "").join("\n");
+    const omittedCandidates = compiled.omitted_sections
+      .filter((s) => {
+        if (/Beta/i.test(s.section) && !selectedText.includes("BETANEEDLE")) return true;
+        if (/Alpha/i.test(s.section) && !selectedText.includes("ALPHANEEDLE")) return true;
+        return false;
+      })
+      .sort((a, b) => b.tokens - a.tokens);
+    const omittedWithUniqueNeedle = omittedCandidates[0];
+    assert.ok(
+      omittedWithUniqueNeedle,
+      `precondition: an omitted facet needle must be missing from selected text (selected=${compiled.selected_sections
+        .map((s) => s.section)
+        .join(", ")}; omitted=${compiled.omitted_sections.map((s) => s.section).join(", ")})`
+    );
+    const expandId = omittedWithUniqueNeedle.id;
+    const needle = /Beta/i.test(omittedWithUniqueNeedle.section) ? "BETANEEDLE" : "ALPHANEEDLE";
+
+    let decideCalls = 0;
+    const { runAgent } = await import("../agent.js");
+    const r = await runAgent(path, task, {
+      startBudget: budget,
+      tokenCeiling: budget,
+      complete: async (prompt) => {
+        if (/ONLY a JSON object/.test(prompt)) {
+          decideCalls += 1;
+          if (decideCalls === 1) {
+            return JSON.stringify({
+              action: "expand",
+              section_id: expandId,
+              reasoning: "pull omitted facet",
+            });
+          }
+          return JSON.stringify({ action: "answer", reasoning: "have both facets" });
+        }
+        return "Alpha protocol ALPHANEEDLE; Beta recovery BETANEEDLE.";
+      },
+    });
+
+    const expandStep = r.steps.find((s) => s.action === "expand");
+    assert.ok(expandStep, "agent emits an expand step");
+    assert.ok(
+      r.final_context?.includes(needle),
+      `expand substance (${needle}) must land in final context (mustInclude reclaim)`
+    );
+    assert.ok(
+      r.tokens_read > compileTokens || expandStep.tokens_added > 0,
+      `tokens_read must move past compile-only (${compileTokens}) or expand must credit tokens ` +
+        `(tokens_read=${r.tokens_read}, tokens_added=${expandStep.tokens_added})`
+    );
+    assert.ok(
+      r.tokens_read <= budget + 5,
+      `soft ceiling respected (tokens_read=${r.tokens_read} vs ${budget})`
+    );
+    const finalSubstance = countContentTokens(r.final_context ?? "");
+    assert.ok(
+      r.tokens_read >= finalSubstance - 5,
+      `tokens_read (${r.tokens_read}) should cover final substance (${finalSubstance})`
+    );
+    assert.ok(
+      r.final_context_tokens <= budget + 5,
+      `final context stays under ceiling (${r.final_context_tokens})`
+    );
+    console.log(
+      `  agent expand tokens ok: compile=${compileTokens} → tokens_read=${r.tokens_read} ` +
+        `final=${finalSubstance} (expand +${expandStep.tokens_added}, ceiling ${budget})`
+    );
+  } finally {
+    unlinkSync(path);
+  }
+}
+
 async function testAgentRecompileTokensReadNoDoubleCount() {
   const doc = meridianNetProfitAtEndDoc();
   const path = testTmpPath(`agent-recompile-tokens-${Date.now()}.md`);
@@ -4225,6 +4316,7 @@ for (const fn of [
   testClientUxContracts,
   testExpandQueryAwareTruncation,
   testAgentQueryMissOnExpand,
+  testAgentExpandTokensCountedUnderCeiling,
   testAgentRecompileTokensReadNoDoubleCount,
   testAgentMultiFacetBudget200,
   testFormatConversion,

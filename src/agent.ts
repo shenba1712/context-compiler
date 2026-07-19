@@ -41,7 +41,7 @@ export type StopReason = "confident" | "max_steps" | "token_ceiling" | "whole_fi
 export interface AgentResult {
   answer: string;
   steps: AgentStep[];
-  tokens_read: number; // cumulative document tokens the agent actually pulled
+  tokens_read: number; // soft-ceiling progress: compile + expand spend (≤ ceiling; no stack past it)
   raw_tokens: number; // whole-file token count, for the "vs dumping it all" compare
   final_context_tokens: number; // size of the context the final answer was written from
   stopped_reason: StopReason;
@@ -343,7 +343,17 @@ export async function runAgent(
       expandedIds.add(id);
       manifest = manifest.filter((m) => m.id !== id);
       agentContext = reassembled.markdown;
-      tokensRead = reassembled.contentTokens;
+      const expandPacked = reassembled.selected.find((s) => s.id === id);
+      const packedTok = expandPacked?.tokens ?? 0;
+      // Working-set size after reclaim (may be flat or slightly down vs compile).
+      let nextRead = reassembled.contentTokens;
+      if (packedTok > 0 && nextRead <= prevTokensRead && prevTokensRead < tokenCeiling) {
+        // Expand reclaimed compile slots under a near-full ceiling — count the
+        // remaining headroom as spent so the meter isn't a misleading no-op,
+        // without stacking compile+expand past the soft ceiling.
+        nextRead = tokenCeiling;
+      }
+      tokensRead = nextRead;
       n += 1;
       const expandTruncated = reassembled.truncatedIds.includes(id);
       if (expandTruncated) hadPartialExpand = true;

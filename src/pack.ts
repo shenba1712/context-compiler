@@ -628,6 +628,74 @@ function oversizedTopForSelection(
   return topRanked;
 }
 
+/**
+ * Free budget for a mustInclude section by shrinking/dropping non-forced picks
+ * (lowest relevance first). Agent expands use this so a prior compile partial
+ * cannot silently starve the section the model asked to read.
+ */
+function freeRoomForMustInclude(
+  selected: PackedChunk[],
+  used: number,
+  usable: number,
+  need: number,
+  mustInclude: Set<string>,
+  rankPos: Map<string, number>,
+  queryTerms: string[] | undefined,
+  overheadOf: (c: Chunk) => number
+): { selected: PackedChunk[]; used: number } {
+  let next = [...selected];
+  let currentUsed = used;
+  const room = () => usable - currentUsed;
+  // truncateToBudget reserves marker tokens inside maxTokens — floor must clear that.
+  const minKeep = MIN_USEFUL_PARTIAL + countTokens(TRUNCATION_MARKER);
+
+  while (room() < need) {
+    let victimIdx = -1;
+    let victimRank = -1;
+    for (let i = 0; i < next.length; i++) {
+      const c = next[i]!;
+      if (mustInclude.has(c.id)) continue;
+      const r = rankPos.get(c.id) ?? 0;
+      if (r >= victimRank) {
+        victimRank = r;
+        victimIdx = i;
+      }
+    }
+    if (victimIdx < 0) break;
+
+    const victim = next[victimIdx]!;
+    const overhead = overheadOf(victim);
+    const deficit = need - room();
+    const shrinkTargets = [
+      Math.max(minKeep, victim.tokens - deficit),
+      minKeep,
+    ].filter((t, i, arr) => t < victim.tokens && arr.indexOf(t) === i);
+
+    let shrunk = false;
+    for (const tryTo of shrinkTargets) {
+      const partial = truncateToBudget(victim.text, victim.tokens, tryTo, queryTerms);
+      if (partial && partial.tokens < victim.tokens) {
+        currentUsed -= victim.tokens - partial.tokens;
+        next[victimIdx] = {
+          ...victim,
+          text: partial.text,
+          tokens: partial.tokens,
+          truncated: true,
+          full_tokens: victim.full_tokens ?? victim.tokens,
+        };
+        shrunk = true;
+        break;
+      }
+    }
+    if (shrunk) continue;
+
+    currentUsed -= victim.tokens + overhead;
+    next.splice(victimIdx, 1);
+  }
+
+  return { selected: next, used: Math.max(0, currentUsed) };
+}
+
 /** True when `selected` assembles (manifest degraded as needed) within `budget`. */
 function assembledFitsSelection(
   selected: PackedChunk[],
@@ -736,6 +804,8 @@ export function pack(
   let used = 0;
   let afterPartial = false;
   let stoppedEarly = false;
+  // Rank position for eviction priority (lower relevance = higher index = first victim).
+  const rankPos = new Map(ranked.map((c, i) => [c.id, i]));
   const markConsidered = (chunk: Chunk) => {
     clusterConsidered.add(chunk.id);
   };
@@ -909,6 +979,51 @@ export function pack(
     // Agent-expanded sections must appear — try without reserve if the reserved
     // slice would be too small to hold query-relevant lines.
     if (force && partialBudget < MIN_USEFUL_PARTIAL) partialBudget = remaining;
+    // Forced expands reclaim budget from non-mustInclude picks when a prior
+    // compile partial already filled the ceiling (otherwise mustInclude is a no-op).
+    if (force && partialBudget < MIN_USEFUL_PARTIAL && mustInclude) {
+      const hasOther = selected.some((c) => !mustInclude.has(c.id));
+      const minKeep = MIN_USEFUL_PARTIAL + countTokens(TRUNCATION_MARKER);
+      const need = Math.min(
+        chunk.tokens + overhead,
+        hasOther ? Math.max(MIN_USEFUL_PARTIAL, usable - minKeep) : usable
+      );
+      const freed = freeRoomForMustInclude(
+        selected,
+        used,
+        usable,
+        need,
+        mustInclude,
+        rankPos,
+        queryTerms,
+        sectionOverhead
+      );
+      selected.length = 0;
+      selected.push(...freed.selected);
+      used = freed.used;
+      afterPartial = selected.some((c) => c.truncated);
+      if (used + chunk.tokens + overhead <= usable) {
+        const candidate: PackedChunk[] = [...selected, chunk];
+        if (
+          assembledFitsSelection(
+            candidate,
+            ranked,
+            budget,
+            sourceName,
+            scores,
+            top,
+            includeManifest,
+            budgetMetric
+          )
+        ) {
+          selected.push(chunk);
+          used += chunk.tokens + overhead;
+          markConsidered(chunk);
+          continue;
+        }
+      }
+      partialBudget = usable - used - overhead;
+    }
     // Not enough room for a useful partial after reserving later wholes — skip
     // this oversized hit and keep walking ranked order.
     if (partialBudget < MIN_USEFUL_PARTIAL) {
@@ -953,7 +1068,6 @@ export function pack(
     stopped_early: stoppedEarly,
   });
 
-  const rankPos = new Map(ranked.map((c, i) => [c.id, i]));
   for (;;) {
     const selectedIds = new Set(selected.map((c) => c.id));
     // Selected content is assembled in DOCUMENT order (readable); the omitted
@@ -1040,7 +1154,22 @@ export function pack(
       }
       return finish(text, sel, omi);
     }
+    // Drop lowest-relevance content; never drop mustInclude while a voluntary
+    // pick remains (agent expands must survive the assemble budget check).
     selected.sort((a, b) => (rankPos.get(a.id) ?? 0) - (rankPos.get(b.id) ?? 0));
+    if (mustInclude?.size) {
+      let dropIdx = -1;
+      for (let i = selected.length - 1; i >= 0; i--) {
+        if (!mustInclude.has(selected[i]!.id)) {
+          dropIdx = i;
+          break;
+        }
+      }
+      if (dropIdx >= 0) {
+        selected.splice(dropIdx, 1);
+        continue;
+      }
+    }
     selected.pop();
   }
 }
