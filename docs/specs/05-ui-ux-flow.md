@@ -72,7 +72,7 @@ Edge: if LLM unavailable, Prove controls stay disabled with explanatory copy fro
 3. Steps render as compile / expand / recompile / answer with reasoning snippets.
 4. Optional **Compare to full file** uses opaque `parity_handle` from `done` (one-shot).
 
-Soft ceiling: slider budget is start compile budget and soft `tokens_read` ceiling; copy explains an in-flight expand may finish slightly over.
+Soft ceiling: slider budget is start compile budget and soft `tokens_read` **content-token** ceiling; copy explains an in-flight expand may finish slightly over. Compile meters the same substance basis (`selected_content_tokens`).
 
 ---
 
@@ -80,18 +80,23 @@ Soft ceiling: slider budget is start compile budget and soft `tokens_read` ceili
 
 | State | User-visible behavior |
 | --- | --- |
+| **Cold start** | Host note; wait for `/healthz` / first response |
 | **Cancel / disconnect** | Cancel button aborts in-flight compile/prove/agent; server aborts LLM work when the request closes mid-stream |
 | **Stale budget** | After a successful compile, moving the slider shows a note that on-screen results used a different budget; recompile or restore |
-| **Passthrough (0% reduction)** | File already fit budget — presented as correct, not a failure |
+| **Early-stopped (spare budget)** | Floor note: coverage complete under the ceiling — not a failure; larger budget may add nothing |
+| **0% reduction** | Selected content ≈ raw (everything kept that pack admitted) — presented as correct, not a failure. Not a “skip rank” shortcut |
+| **Budget-bound / nothing fit** | Hint or empty selection + expand / raise-budget guidance; omit buckets separate size-blocked vs lower-relevance |
 | **Rate limit (429)** | Error message; Retry-After; expect-box explains point costs |
 | **LLM busy (503)** | Retry shortly; concurrency capped |
+| **LLM unavailable** | Prove/Agent disabled with host note from `/api/config` |
 | **Conversion failure (422)** | Generic conversion error; file may be unsupported/corrupt/empty convert |
 | **Upload rejected (413/415)** | Inline file error (type, empty, bomb) |
 | **Expired handle (404 on expand)** | “Recompile the file” |
 | **Expired/consumed parity (410)** | Re-run agent, then compare |
+| **Agent soft overshoot** | Last expand may finish slightly over ceiling — expected |
 | **Loading** | Banner with spinner + title/detail; results panel not left showing stale empty chrome on first failure |
 | **No samples** | Soft error; upload still works |
-| **Multi-query task** | Floor/attribution notes when compound questions split |
+| **Multi-query task** | Attribution notes when compound questions split |
 
 ---
 

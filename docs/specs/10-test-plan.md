@@ -27,20 +27,22 @@ These are the contracts CI is meant to protect:
 
 ### Packing and budget
 
-- Assembled output stays ≤ budget (including wrappers/manifest).
-- Tables stay atomic; breadcrumbs present.
-- Manifest degradation before sacrificing content; never ship manifest-only when content can fit.
-- Relative relevance floor stops weak padding; flat score distributions still fill budget (recall insurance).
-- Oversized top section at tiny budget omits cleanly without overshoot.
-- `next_section_hint` when a strong omitted section remains.
+- Content-meter ceiling: `tokens_used` ≈ `selected_content_tokens`; omit-manifest not counted toward the budget.
+- Coverage-first: facets / discriminative terms before padding; `early_stopped` when spare budget left unused.
+- No whole-file dump when `raw_tokens ≤ budget` after a pointed query (zero-relevance fillers stay out).
+- Assembled fit checks + manifest degradation before sacrificing content; never ship manifest-only when content can fit.
+- Relative floor / early-stop / capped recall insurance (not floor-greedy fill-to-budget).
+- Oversized top section at tiny budget omits cleanly without overshoot; partials of needed sections beat weak wholes.
+- `next_section_hint` when a strong omitted / truncated section remains.
+- Omit buckets: budget-blocked vs lower-relevance.
 
 ### Ranking and multilingual
 
 - Lexical hits (e.g. Irene Adler / Scandal) rank correctly.
-- CJK / Hindi packing keeps answer substrings.
-- Honorific / Title-Case name expansion in `tokenizeQuery`.
-- Multi-query split + interleave; attribution tags the right sub-questions.
-- Compound “warranty + rain” keeps both needles under a shared budget.
+- CJK / Hindi / Spanish / Russian / Arabic packing keeps answer substrings.
+- Honorific / Title-Case name expansion in `tokenizeQuery`; name-intent boost for given-name asks.
+- Multi-query split (`query-aspects`, incl. non-English conjunctions) + interleave; attribution tags the right sub-questions.
+- Compound “warranty + rain” / FY25 multi-facet keeps both needles under a shared budget.
 
 ### Offline recall eval
 

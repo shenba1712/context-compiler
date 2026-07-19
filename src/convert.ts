@@ -78,7 +78,10 @@ export async function convertToMarkdown(path: string): Promise<string> {
   try {
     size = statSync(path).size;
   } catch {
-    throw new ConversionError(`Not a file: ${path}`);
+    // Never echo the absolute path — web/MCP error paths surface ConversionError
+    // messages to callers (recon fuel on a public demo).
+    log.error("convert: path missing or unreadable", { detail: path.slice(0, 200) });
+    throw new ConversionError("Not a readable file.");
   }
   if (size > MAX_FILE_BYTES) {
     throw new ConversionError(`File is ${size} bytes; limit is ${MAX_FILE_BYTES}. Refusing to parse.`);

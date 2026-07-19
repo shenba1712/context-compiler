@@ -16,11 +16,12 @@ export function checkPathWithin(root: string, filePath: string): string {
   const requested = resolve(filePath.replace(/^~(?=$|\/)/, homedir()));
   const st = statSync(requested, { throwIfNoEntry: false });
   if (!st?.isFile()) {
-    throw new Error(`Not a file: ${requested}`);
+    // Keep messages path-free — MCP returns Error.message to the caller.
+    throw new Error("Not a readable file under the allowed root.");
   }
   const real = realpathSync(requested);
   if (real !== realRoot && !real.startsWith(realRoot + sep)) {
-    throw new Error(`Access denied: resolved path is outside allowed root ${realRoot}`);
+    throw new Error("Access denied: path is outside the allowed root.");
   }
   return real;
 }

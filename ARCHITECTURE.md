@@ -45,7 +45,7 @@ Both call `pipeline.ts`: convert → chunk → rank → pack. Conversion is cont
 
 No database, session store, or background worker. The pipeline is a pure function of its inputs plus the conversion cache. Horizontal scaling is mostly “run more copies.”
 
-**Compile request (happy path):** hash file bytes → cache lookup → convert on miss (size-checked, time-boxed `execFile`, atomic write) → chunk on headings → short-circuit if the whole document fits the budget → BM25 rank (`tokenizeQuery` strips stopwords/fillers and expands honorific name forms) → pack under budget with document order restored → return markdown, stats, and the omission manifest.
+**Compile request (happy path):** hash file bytes → cache lookup → convert on miss (size-checked, time-boxed `execFile`, atomic write) → chunk on headings → BM25 rank (`tokenizeQuery` strips multilingual stopwords/fillers and expands honorific name forms; compound tasks split via `query-aspects`) → coverage-first pack under a content-token ceiling (document order restored) → return markdown, stats, omit buckets, and the omission manifest.
 
 ---
 
@@ -53,7 +53,7 @@ No database, session store, or background worker. The pipeline is a pure functio
 
 ### Tokens — `tokens.ts`
 
-js-tiktoken cl100k, with a ~4 characters/token fallback if the encoder fails. Budgets are contracts of intent, not cryptographic guarantees; a few percent of drift versus another model’s tokenizer is expected.
+js-tiktoken cl100k, with a ~4 characters/token fallback if the encoder fails. Budgets are contracts of intent, not cryptographic guarantees; a few percent of drift versus another model’s tokenizer is expected. Demo metering uses `countContentTokens` (HTML comments / wrappers stripped) so omit-manifest ballast does not inflate Compile / Prove / Agent numbers.
 
 ### Convert — `convert.ts`
 
@@ -65,11 +65,11 @@ Single pass over markdown with a heading trail so each section carries a breadcr
 
 ### Rank — `rank.ts`
 
-Okapi BM25 (literature defaults, untuned, zero dependencies) plus a heading boost when query terms hit the breadcrumb. Unicode-aware tokenization: CJK runs emit character unigrams and bigrams; Latin tokens get a light stem. Queries go through `tokenizeQuery` (stopword/filler cleanup; Title-Case name pairs expand to honorific forms). Compound tasks split into sub-questions and interleave round-robin so each facet sees budget. An LLM shortlist rerank is deferred — compile must stay free of model quota.
+Okapi BM25 (literature defaults, untuned, zero dependencies) plus a heading boost when query terms hit the breadcrumb. Unicode-aware tokenization: CJK runs emit character unigrams and bigrams; Latin tokens get a light stem; Arabic / Devanagari / Cyrillic stay script-aware. Queries go through `tokenizeQuery` (multilingual stopword/filler cleanup; Title-Case name pairs expand to honorific forms). Compound tasks split into sub-questions (`query-aspects.ts`, including non-English conjunctions) and interleave round-robin so each facet sees budget. An LLM shortlist rerank is deferred — compile must stay free of model quota.
 
 ### Pack — `pack.ts`
 
-Enforces the budget on the **assembled** artifact (selected chunks in document order, breadcrumb comments, omission list), then evicts lowest-ranked selected chunks until it fits. Manifest detail degrades in steps (40 → 20 → 10 → …) before content is sacrificed. A relative relevance floor (`CC_RELEVANCE_FLOOR`, default 0.4 × top score) stops padding a sharp query with weak runners-up; on flat score distributions the floor does nothing. Document order is restored so the packet reads as narrative, not a relevance-sorted collage.
+**Coverage-first** packing under a hard token ceiling (compile path meters **content** tokens of selected sections, not omit-manifest ballast). Priority order (never invert): multi-facet coverage → discriminative / name-intent goals → prefer a query-aware partial of a needed section over a weak whole that merely fits → stop when coverage is met (spare budget left unused) → vague/flat scores get capped recall insurance, never whole-corpus fill. After selection, assemble restores document order; manifest detail degrades in steps (40 → 20 → 10 → …) before content is sacrificed (**content beats metadata**). Relative floor / early-stop ratios still reject clear padding; they do not force fill-to-budget. Oversized rank-#1 gets a compact notice through degradation.
 
 ### Cache — `cache.ts`
 
@@ -79,7 +79,7 @@ Entries also age out by mtime (default 30 days) via a sweep triggered from `cach
 
 ### Pipeline — `pipeline.ts`
 
-Orchestrates stages and the passthrough rule: if raw tokens ≤ budget, skip ranking/packing loss and return everything. Results include applied budget, sub-queries, selected/omitted sections with relevance percentages, and optional query attribution for the demo. MCP strips duplicate section text before responding.
+Orchestrates stages. **Always ranks and packs** — there is no “raw ≤ budget → dump whole file” short-circuit (that path used to re-admit zero-relevance sections after a pointed query was already answerable). Results include applied budget, sub-queries, selected/omitted sections with relevance percentages, omit buckets (`budget_omitted_sections` / `relevance_omitted_sections`), compile hints (`early_stopped`, etc.), and optional query attribution for the demo. MCP strips duplicate section text before responding.
 
 ### LLM — `llm.ts`
 
@@ -87,7 +87,7 @@ Provider surface for opt-in features. Detection from env, tried in fixed priorit
 
 ### Agent — `agent.ts`
 
-Demo-controlled loop over the same two tools MCP exposes. The web path uses the token-budget slider as both the first compile budget and a soft reading ceiling (capped at file size). The loop stops *starting* new expands once `tokens_read` reaches that ceiling (an in-flight expand may finish slightly over). When start budget already equals the ceiling, recompile is omitted from the decide prompt. Whole-file fit short-circuits to a single full-file answer. Unusable decisions collapse to “answer with what we have.”
+Demo-controlled loop over the same two tools MCP exposes. The web path uses the token-budget slider as both the first compile budget and a soft **content-token** reading ceiling (capped at file size). The loop stops *starting* new expands once `tokens_read` reaches that ceiling (an in-flight expand may finish slightly over). When start budget already equals the ceiling, recompile is omitted from the decide prompt. If pack left nothing omitted (tiny / fully covered docs), the agent answers once with `stopped_reason: "whole_file"`. Unusable decisions collapse to “answer with what we have.”
 
 ### Surfaces — `server.ts`, `web.ts`, guards
 
@@ -104,12 +104,12 @@ Demo-controlled loop over the same two tools MCP exposes. The web path uses the 
 | ADR-001 / 002 | Buy conversion (MarkItDown); build selection | Rebuilding PDF/Office parsers would consume the entire complexity budget |
 | ADR-003 | BM25 for ranking; embeddings deferred | Local-first and reproducible demos; embeddings imply heavy local install or mandatory network |
 | ADR-004 | Heading-based chunking; atomic tables | Trust author segmentation; fixed windows destroy meaning; splitting tables silently changes answers |
-| ADR-005 | Enforce budget on assembled output | Sum-of-chunks minus a constant overshot when the manifest grew; eviction + regression test lock the contract |
+| ADR-005 | Enforce budget on assembled output; compile meters content | Sum-of-chunks minus a constant overshot when the manifest grew; content metric keeps omit UX out of the ceiling |
 | ADR-006 | Content-hash keys + age-out sweep | Edits cannot stale-hit; mtime sweep (`CC_CACHE_MAX_AGE_MS`) bounds disk on long-lived hosts without inventing freshness heuristics |
-| ADR-007 | Small-file passthrough | Ranking is lossy; if lossless fits, take it |
+| ADR-007 | Coverage-first pack; no whole-file dump | Budget is a ceiling; pointed queries must not re-admit zero-relevance fillers when raw ≤ budget |
 | ADR-008 | Local-first networking | No API key → no network; LLM features are opt-in |
 | ADR-009 | Exactly two MCP tools | `compile_context` + `expand_section` close compress → inspect → recover; more tools dilute choice and expand surface |
-| ADR-010 | Relative relevance floor | Absolute BM25 thresholds are uncalibrated; relative floor bites only when scores have signal |
+| ADR-010 | Relative relevance floor + early stop | Absolute BM25 thresholds are uncalibrated; floor/early-stop bite only when scores have signal; flat scores use capped recall insurance |
 
 **Provider failover as a chain** (newer than the numbered ADRs, same spirit): stay useful when a free tier fails; BM25 remains the offline floor.
 
@@ -194,14 +194,14 @@ Any stdio MCP client works. Runtimes: Node 20+, Python 3.10+ for the converter o
 ## Known limits and deferred work
 
 - **Recall** — BM25 can miss paraphrased relevance; mitigation is the manifest + `expand_section` (and Agent). Offline fixtures under `src/eval/` guard scenarios we care about, including a deliberate paraphrase miss that must remain expandable. Local embeddings as a second scorer are planned when they stay local-first.
-- **Multi-hop compare** — compound queries split and interleave, but a single greedy pack can still under-serve “compare §2 with appendix C.” Two calls remain a valid workaround.
+- **Multi-hop compare** — compound queries split and interleave with facet-first packing, but a single pack can still under-serve “compare §2 with appendix C” when one facet dominates. Two calls remain a valid workaround.
 - **Heading-less PDFs** — weaker chunks and weaker demo aesthetics.
 - **Token drift** — cl100k vs other tokenizers: a few percent.
 - **`expand_section` truncation** — character-ratio approximation, flagged in output.
 - **OCR / media transcription** — deferred so a bad transcript cannot silently corrupt answers.
 - **Hosted demo** — rate limits and cost caps, no accounts.
 
-Untuned knobs (BM25 k1/b, heading boost, chunk size, relevance floor) are defensible defaults, not the output of a sweep.
+Untuned knobs (BM25 k1/b, heading boost, chunk size, relevance floor / early-stop / cluster ratios) are defensible defaults, not the output of a sweep.
 
 ---
 
@@ -236,5 +236,7 @@ Defaults operators most often care about. Full install and key setup live in the
 | `CC_LLM_FAILOVER_COOLDOWN_MS` | 1500 (cap 10s) | Pause before next chain entry on soft 429 |
 | `CC_METRICS_TOKEN` | unset | Enables Bearer-gated `/metrics` |
 | `CC_RELEVANCE_FLOOR` | 0.4 | Relative pack / attribution floor |
+| `CC_CLUSTER_RATIO` | 0.98 | Top-score cluster for early stop / recall insurance |
+| `CC_EARLY_STOP_RATIO` | 0.5 | Legacy — ignored (coverage-first stop owns early-stop) |
 
 Shared budget floors and the upload size cap live in `config.ts` so web slider and MCP clamps cannot drift.

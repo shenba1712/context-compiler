@@ -24,12 +24,13 @@ MCP and web share `pipeline.ts`. Horizontal scale = more replicas (in-memory rat
 | --- | --- |
 | F1 | Convert supported office/text formats to markdown via MarkItDown; cache by content hash. |
 | F2 | Chunk markdown with heading breadcrumbs; keep tables atomic; split oversized sections. |
-| F3 | Rank with BM25 (+ heading boost, query cleanup, multi-query interleave); no LLM on compile path. |
-| F4 | Pack under **assembled** token budget (selected body + wrappers + manifest); restore document order. |
-| F5 | Passthrough when `raw_tokens ≤ budget`. |
+| F3 | Rank with BM25 (+ heading boost, multilingual query cleanup, multi-query interleave); no LLM on compile path. |
+| F4 | Pack **coverage-first** under a content-token ceiling; assemble restores document order; manifest degrades before content eviction. |
+| F5 | Never whole-file-dump when `raw_tokens ≤ budget` — zero-relevance fillers stay omitted after a pointed query. |
 | F6 | MCP: path confinement under `CC_ROOT` with realpath. |
 | F7 | Web: multipart upload only; opaque handles for expand; never accept caller paths. |
 | F8 | Optional LLM chain for Prove / Agent with concurrency gate and AbortSignal on disconnect. |
+| F9 | Split omitted sections into budget-relevant vs lower-relevance buckets for demo UX. |
 
 ---
 

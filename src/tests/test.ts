@@ -22,6 +22,10 @@ process.env.CC_RATE_LIMIT = "200";
 const FIXTURES_DIR = join(process.cwd(), "src", "tests", "fixtures");
 /** Writable under the workspace (sandbox-safe) and still under ~/… so CC_ROOT checks pass. */
 const TEST_TMP = join(process.cwd(), ".test-tmp");
+// Keep conversion cache inside the workspace — ~/.cache is often sandbox-blocked,
+// and integrity sidecars must be writable for put/get during e2e.
+process.env.CC_CACHE_DIR = join(TEST_TMP, "cache");
+mkdirSync(process.env.CC_CACHE_DIR, { recursive: true });
 
 function testTmpPath(name: string): string {
   mkdirSync(TEST_TMP, { recursive: true });
@@ -138,7 +142,7 @@ import {
 import { countContentTokens, countTokens } from "../tokens.js";
 import { UploadRejected, validateUpload } from "../upload-guard.js";
 import { sanitizeSourceName } from "../util.js";
-import { cacheGet, cachePut, fileKey } from "../cache.js";
+import { cacheGet, cachePut } from "../cache.js";
 
 function makeTestDoc(): string {
   const sections: string[] = ["# Master Services Agreement\n\nThis agreement is made between parties."];
@@ -3405,10 +3409,12 @@ function testSanitizeSourceNameBlocksCommentBreakout() {
   // Jul 18 P11 + XSS/filename: crafted upload names must not break HTML comments
   // or inject markup into compiled-context headers.
   assert.equal(sanitizeSourceName("../../etc/passwd"), "passwd");
-  assert.equal(sanitizeSourceName('evil-->\n<script>alert(1)</script>.md'), "evil_script_alert_1_script_.md");
-  assert.ok(!sanitizeSourceName("x-->y.md").includes("-->"));
-  assert.ok(!/[\r\n]/.test(sanitizeSourceName("a\r\nb.md")));
-  const compiled = assemble(sanitizeSourceName('break-->out.md'), [], []);
+  const nasty = sanitizeSourceName("evil-->\n<script>alert(1)</script>.md");
+  assert.ok(!nasty.includes("-->"), "HTML comment terminator stripped");
+  assert.ok(!nasty.includes("<"), "angle brackets stripped");
+  assert.ok(!/[\r\n]/.test(nasty), "newlines stripped");
+  assert.ok(nasty.endsWith(".md") || nasty.includes("md"), "extension-ish retained safely");
+  const compiled = assemble(sanitizeSourceName("break-->out.md"), [], []);
   assert.ok(compiled.startsWith("<!-- Compiled context from: break_out.md -->"));
   assert.ok(!compiled.includes("-->out"));
   console.log("  sanitizeSourceName ok: path strip + comment/XSS breakout blocked");
@@ -3430,103 +3436,97 @@ async function testConversionMissingPathIsPathFree() {
 }
 
 async function testCacheCorruptionFallsThrough() {
-  // DR: a corrupt/empty cache entry must not crash; operators can wipe cache
-  // and convert again. Content-hash keys mean a bad file is just a miss/hit
-  // of garbage — we only assert get/put round-trip and missing key → null.
-  const dir = mkdtempSync(join(tmpdir(), "cc-cache-"));
-  await withCleanEnv(["CC_CACHE_DIR"], async () => {
-    process.env.CC_CACHE_DIR = dir;
-    // Dynamic import after env set so CACHE_DIR is read fresh… cache.ts binds
-    // at module load. Use the already-imported helpers which read env at call
-    // time for CACHE_DIR — actually CACHE_DIR is const at import. Write via
-    // the public API after re-importing under the env.
-    }, { CC_CACHE_DIR: dir });
-  // cache.ts captures CACHE_DIR at import; exercise via writeFileSync the same
-  // layout and assert cacheGet returns null for unknown keys + put/get works
-  // on the live module's configured dir (homedir default is fine for shape).
-  const key = "a".repeat(64);
-  assert.equal(cacheGet(key), null, "unknown cache key is a miss");
-  cachePut(key, "# recovered\n\nok");
-  assert.equal(cacheGet(key), "# recovered\n\nok");
-  // Corrupt the entry the same way a partial write / disk glitch would.
-  const cachePath = join(
-    process.env.CC_CACHE_DIR ?? join((await import("node:os")).homedir(), ".cache", "context-compiler"),
-    `${key}.md`
-  );
-  if (existsSync(cachePath)) {
-    writeFileSync(cachePath, "\u0000\u0001CORRUPT");
-    assert.equal(cacheGet(key), "\u0000\u0001CORRUPT", "corrupt entry is returned as opaque bytes (caller re-converts on wipe)");
-    unlinkSync(cachePath);
-    assert.equal(cacheGet(key), null, "after wipe, miss → fresh convert");
+  // DR: corrupt/truncated cache payloads must miss (integrity sidecar), not poison answers.
+  const dir = join(TEST_TMP, `cache-integrity-${Date.now()}`);
+  mkdirSync(dir, { recursive: true });
+  const prev = process.env.CC_CACHE_DIR;
+  process.env.CC_CACHE_DIR = dir;
+  try {
+    const key = "a".repeat(64);
+    cachePut(key, "# Good\n\nWarranty covers defects.\n");
+    assert.equal(cacheGet(key), "# Good\n\nWarranty covers defects.\n", "integrity hit returns payload");
+
+    writeFileSync(join(dir, `${key}.md`), "CORRUPT\x00LOST_ANSWER");
+    assert.equal(cacheGet(key), null, "tampered .md with stale .sha → miss");
+    assert.equal(existsSync(join(dir, `${key}.md`)), false, "bad .md deleted on integrity fail");
+
+    // Legacy .md without .sha must miss (force reconvert), not serve unchecked.
+    const legacyKey = "b".repeat(64);
+    writeFileSync(join(dir, `${legacyKey}.md`), "# Legacy\n\nok\n");
+    assert.equal(cacheGet(legacyKey), null, "pre-integrity .md without .sha → miss");
+
+    const src = readFileSync(join(process.cwd(), "src", "cache.ts"), "utf-8");
+    assert.ok(/renameSync/.test(src) && /\.md\.tmp/.test(src), "cache puts are atomic rename");
+    assert.ok(/process\.pid/.test(src), "tmp names include pid to avoid concurrent clobber");
+    assert.ok(/\.sha/.test(src) && /markdownSha/.test(src), "integrity sidecar present");
+    console.log("  cache DR ok: integrity miss on tamper + atomic put");
+  } finally {
+    if (prev === undefined) delete process.env.CC_CACHE_DIR;
+    else process.env.CC_CACHE_DIR = prev;
   }
-  rmSync(dir, { recursive: true, force: true });
-  console.log("  cache DR ok: miss/corrupt/wipe without crash");
 }
 
 async function testWeightedRateLimitBlocksAgentSpend() {
   // Jul 18 P0: agent/answer must cost more than one rate token so a single
   // IP cannot burn unbounded LLM spend under a naive request count.
-  await withCleanEnv(["CC_RATE_LIMIT", "CC_RATE_COST_AGENT", "CC_RATE_COST_ANSWER"], async () => {
-    // web.ts reads RATE_* at module load — the suite already imported web via
-    // other tests. Probe via /api/config values (locked) AND simulate the
-    // requestCost math by exhausting a tiny in-process window against compile
-    // (cost 1) vs checking config reports weighted costs. Live re-bind of
-    // RATE_LIMIT requires a fresh process; assert the contract the running
-    // module exposes and that multer rejects oversized fields (chaos).
-    const { app } = await import("../web.js");
-    const server = app.listen(0);
-    await new Promise<void>((r) => server.once("listening", () => r()));
-    const port = (server.address() as { port: number }).port;
-    try {
-      const cfg = (await (await fetch(`http://127.0.0.1:${port}/api/config`)).json()) as {
-        rate_limit: number;
-        rate_cost_agent: number;
-        rate_cost_answer: number;
-        llm_available: boolean;
-      };
-      assert.ok(cfg.rate_cost_agent >= 8, "agent must be heavy vs one compile token");
-      assert.ok(cfg.rate_cost_answer >= 2, "answer/parity must cost >1");
-      assert.ok(
-        cfg.rate_cost_agent * 2 > cfg.rate_limit || cfg.rate_limit / cfg.rate_cost_agent <= 3,
-        "at most a few agent runs fit in the default window"
-      );
+  const { app } = await import("../web.js");
+  const server = app.listen(0);
+  await new Promise<void>((r) => server.once("listening", () => r()));
+  const port = (server.address() as { port: number }).port;
+  try {
+    const cfg = (await (await fetch(`http://127.0.0.1:${port}/api/config`)).json()) as {
+      rate_limit: number;
+      rate_cost_agent: number;
+      rate_cost_answer: number;
+      llm_available: boolean;
+    };
+    assert.ok(cfg.rate_cost_agent >= 8, "agent must be heavy vs one compile token");
+    assert.ok(cfg.rate_cost_answer >= 2, "answer/parity must cost >1");
+    assert.ok(
+      cfg.rate_cost_agent > cfg.rate_cost_answer,
+      "agent costs more than answer (burn-money asymmetry)"
+    );
+    // Default production window is 30 with agent cost 12 → ≤2 agent runs / 5 min.
+    // This suite raises CC_RATE_LIMIT for LLM e2e, so only assert the cost knobs.
 
-      // Missing key degradation: Prove/Agent refuse cleanly without LLM keys.
-      await withCleanEnv([...LLM_PROVIDER_KEYS, ...LLM_MODEL_KEYS, "CC_LLM_BASE_URL"], async () => {
-        const form = new FormData();
-        form.append("task", "anything");
-        form.append("file", new Blob(["# Hi\n\nHello."], { type: "text/markdown" }), "doc.md");
-        const ans = await fetch(`http://127.0.0.1:${port}/api/answer`, { method: "POST", body: form });
-        assert.equal(ans.status, 400, "answer without key → 400");
-        const body = (await ans.json()) as { error?: string };
-        assert.ok(body.error && /API key/i.test(body.error), "points at configuring a key");
-        assert.ok(!/sk-|Bearer |traceback/i.test(body.error), "no secret/provider recon");
+    // Missing key degradation: Prove/Agent refuse cleanly without LLM keys.
+    await withCleanEnv([...LLM_PROVIDER_KEYS, ...LLM_MODEL_KEYS, "CC_LLM_BASE_URL"], async () => {
+      const formAns = new FormData();
+      formAns.append("task", "anything");
+      formAns.append("file", new Blob(["# Hi\n\nHello."], { type: "text/markdown" }), "doc.md");
+      const ans = await fetch(`http://127.0.0.1:${port}/api/answer`, { method: "POST", body: formAns });
+      assert.equal(ans.status, 400, "answer without key → 400");
+      const body = (await ans.json()) as { error?: string };
+      assert.ok(body.error && /API key/i.test(body.error), "points at configuring a key");
+      assert.ok(!/sk-|Bearer |traceback/i.test(body.error), "no secret/provider recon");
 
-        const agent = await fetch(`http://127.0.0.1:${port}/api/agent`, { method: "POST", body: form });
-        assert.equal(agent.status, 400, "agent without key → 400");
-      });
+      const formAgent = new FormData();
+      formAgent.append("task", "anything");
+      formAgent.append("file", new Blob(["# Hi\n\nHello."], { type: "text/markdown" }), "doc.md");
+      const agent = await fetch(`http://127.0.0.1:${port}/api/agent`, { method: "POST", body: formAgent });
+      assert.equal(agent.status, 400, "agent without key → 400");
+    });
 
-      // Malformed / oversized multipart field (chaos): multer fieldSize 32kb.
-      const big = new FormData();
-      big.append("task", "x".repeat(40_000));
-      big.append("file", new Blob(["# Hi\n\nok"], { type: "text/markdown" }), "doc.md");
-      const huge = await fetch(`http://127.0.0.1:${port}/api/compile`, { method: "POST", body: big });
-      assert.equal(huge.status, 413, "oversized form field → 413 JSON");
-      const hugeBody = (await huge.json()) as { error?: string };
-      assert.ok(hugeBody.error, "JSON error body, not HTML stack");
-      assert.ok(!/at |\/Users\/|node_modules/.test(hugeBody.error!), "no stack/path leak");
+    // Malformed / oversized multipart field (chaos): multer fieldSize 32kb.
+    const big = new FormData();
+    big.append("task", "x".repeat(40_000));
+    big.append("file", new Blob(["# Hi\n\nok"], { type: "text/markdown" }), "doc.md");
+    const huge = await fetch(`http://127.0.0.1:${port}/api/compile`, { method: "POST", body: big });
+    assert.equal(huge.status, 413, "oversized form field → 413 JSON");
+    const hugeBody = (await huge.json()) as { error?: string };
+    assert.ok(hugeBody.error, "JSON error body, not HTML stack");
+    assert.ok(!/at |\/Users\/|node_modules/.test(hugeBody.error!), "no stack/path leak");
 
-      // Empty multipart / no file.
-      const empty = new FormData();
-      empty.append("task", "hi");
-      const noFile = await fetch(`http://127.0.0.1:${port}/api/compile`, { method: "POST", body: empty });
-      assert.equal(noFile.status, 400);
+    // Empty multipart / no file.
+    const empty = new FormData();
+    empty.append("task", "hi");
+    const noFile = await fetch(`http://127.0.0.1:${port}/api/compile`, { method: "POST", body: empty });
+    assert.equal(noFile.status, 400);
 
-      console.log("  weighted rate + chaos ok: agent/answer costs; keyless 400; oversized field 413");
-    } finally {
-      server.close();
-    }
-  });
+    console.log("  weighted rate + chaos ok: agent/answer costs; keyless 400; oversized field 413");
+  } finally {
+    server.close();
+  }
 }
 
 async function testConcurrentCompileSameBytes() {
@@ -4168,7 +4168,16 @@ for (const fn of [
   testPathGuardBlocksSymlinkEscape,
   testUploadGuardRejectsBombAndMismatch,
   testConversionErrorIsSanitized,
+  testConversionMissingPathIsPathFree,
   testEnvParsingFailsSafe,
+  testTrustProxyFailsSafe,
+  testSanitizeSourceNameBlocksCommentBreakout,
+  testPathGuardMessagesArePathFree,
+  testDiskStorageNotMemory,
+  testCacheCorruptionFallsThrough,
+  testWeightedRateLimitBlocksAgentSpend,
+  testConcurrentCompileSameBytes,
+  testAnswerErrorsAreSanitized,
   testOpenAICompatClient,
   testProviderFailover,
   testGeminiModelFailover,

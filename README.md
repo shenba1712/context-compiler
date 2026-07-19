@@ -10,18 +10,28 @@ The demo ships a sample library so you can feel that claim: novels and a science
 
 **Live demo:** [https://context-compiler.onrender.com](https://context-compiler.onrender.com)
 
+## Current behavior (short)
+
+- **Coverage-first packing.** Budget is a hard ceiling, not a fill quota. Multi-facet questions cover each aspect first; then discriminative terms / name-intent; then stop when marginal gain ≈ 0. Pointed queries leave spare budget unused instead of padding with weak sections.
+- **Always rank + pack.** Even when the raw file is smaller than the budget, compile does not dump the whole document — zero-relevance fillers stay omitted.
+- **Content metering.** Compile / Prove / Agent report *selected section* tokens (omit-manifest ballast is not counted toward the ceiling). Small HTML wrappers may ride on the wire; the meter strips them.
+- **Multilingual ranking.** BM25 tokenization and query splitting cover the demo languages (Latin, Devanagari, Cyrillic, Arabic, CJK bigrams). Suggested sample questions are checked against converted sample text.
+- **Honest recovery.** Misses stay in the omitted-sections manifest (budget vs lower-relevance buckets in the UI); `expand_section` / Agent recover them.
+
+For engineering depth, see [ARCHITECTURE.md](./ARCHITECTURE.md) and [docs/EXPERT-WALKTHROUGH.md](./docs/EXPERT-WALKTHROUGH.md).
+
+**Audits** (2026-07-19): [current / pack](./docs/AUDIT-CURRENT.md) · [UI / UX](./docs/AUDIT-UI.md) · [security / chaos](./docs/AUDIT-SECURITY.md).
+
 ## How it works
 
 The pipeline is convert → chunk → rank → pack:
 
 1. Convert the file to markdown via MarkItDown (docx, xlsx, pptx, pdf, and friends).
 2. Split into heading-aware chunks (tables stay whole).
-3. Rank against your question with local BM25.
-4. Pack under the budget, restoring document order. If the whole file already fits, ranking is skipped.
+3. Rank against your question with local BM25 (compound tasks split into sub-questions and interleave).
+4. Pack under the budget with **coverage-first** priorities, then restore document order. Manifest detail degrades before content is sacrificed.
 
 Compile itself never calls a model — BM25 only, free and offline. An LLM key is optional and only unlocks Prove and Agent. Conversion results are cached by content hash.
-
-For design depth, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
 ## Compile, Prove, and Agent
 
@@ -33,7 +43,7 @@ For design depth, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
 On the demo UI, **Compile once** is the default path. **Prove…** / **Prove answer parity** check answer quality for that compile (optionally including sections you marked **Include in Prove**). **Run agent** is a separate retrieval loop — not Prove.
 
-Budget by question breadth, not file size: ~1k tokens for a factual lookup, ~4k for synthesis across a few sections. “Summarize everything” needs a budget at least as large as the file (lossless passthrough). Leaving the slider at 4,000 is almost always fine.
+Budget by question breadth, not file size: ~1k tokens for a factual lookup, ~4k for synthesis across a few sections. A pointed question at 4,000 often stops early with spare headroom — that is intentional. “Summarize everything” still needs a budget large enough to hold the sections you care about; the packer will not invent coverage it cannot score. Leaving the slider at 4,000 is almost always fine for demos.
 
 ## Install
 
@@ -159,11 +169,27 @@ Untrusted files are size-capped, time-boxed, and parsed in a subprocess. Uploads
 
 Compiled output is wrapped in `UNTRUSTED DOCUMENT CONTENT` markers, and answer/agent prompts treat document text as data. That is mitigation, not a sandbox — a crafted document can still try to steer the model. The omitted-sections manifest keeps loss visible; `expand_section` recovers.
 
+## Try it (demo)
+
+Suggested questions come from the sample chips (they are grounded in the converted files — ask what is *in* the abridged text):
+
+| Sample | Strong question | What to watch |
+| --- | --- | --- |
+| Pride and Prejudice | What does Mr. Darcy say about Elizabeth at the Meryton assembly? | Huge cut at ~2k–4k; hero-style bars |
+| Meridian Annual Report | Which R&D programs were cancelled and why? | Early-stop: spare budget left unused once coverage is met |
+| Meridian Financials | What was net profit in FY25, and which quarter had the best gross margin? | Multi-facet pack under one budget |
+| Sherlock Holmes | What salary does the Red-Headed League offer, and what hours must Wilson keep? | Compound in-doc ask on a partial text |
+| छोटी कहानियाँ / Cuentos / … | Use a chip in that language | Multilingual BM25 + script-aware tokenize |
+
+Budget tips: **2,000** for a single-fact money shot; **4,000** default (often early-stops on pointed asks); drop to **~800** to force a controlled miss → peek / Include / expand.
+
+Timed walkthrough: [DEMO_SCRIPT.md](./DEMO_SCRIPT.md).
+
 ## Known limits
 
 Lexical BM25 can miss a paraphrased-but-relevant section. The mitigation is the omitted-sections manifest plus `expand_section` (or Agent mode). An offline recall@budget suite in `src/eval/` guards those claims in CI. Local embeddings as a second scorer are planned when they can stay local-first.
 
-Scanned image-only PDFs have nothing to rank. OCR and media transcription are deferred so a bad transcript cannot silently corrupt answers. Token budgets use cl100k; other tokenizers may drift by a couple of percent.
+Coverage-first packing can still under-serve a multi-hop “compare §2 with appendix C” if one facet dominates the budget — split the question or raise the budget. Heading-less PDFs get weaker chunks. Scanned image-only PDFs have nothing to rank; OCR is deferred so a bad transcript cannot silently corrupt answers. Token budgets use cl100k; other tokenizers may drift by a couple of percent.
 
 The hosted demo has rate limits and cost caps but no user accounts — fine for a public demo link, not a multi-tenant SaaS.
 

@@ -12,7 +12,15 @@
 import express from "express";
 import multer from "multer";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { mkdirSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, join, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -205,7 +213,7 @@ const MAX_AGENT_PARITY = intEnv("CC_AGENT_PARITY_MAX", 200, 10);
  *  otherwise treat "/etc/passwd" as absolute and escape STATIC_DIR. */
 function resolveSampleFile(file: string): string {
   const base = basename(file);
-  if (!base || base !== file || base.includes("\0") || !/^[\w.\-]+$/.test(base)) {
+  if (!base || base !== file || base.includes("\0") || !/^[\w.-]+$/.test(base)) {
     throw new Error("Invalid sample file name");
   }
   const samplesRoot = realpathSync(join(STATIC_DIR, "samples"));

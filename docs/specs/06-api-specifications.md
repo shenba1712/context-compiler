@@ -96,6 +96,8 @@ Multipart fields: `file`, `task`, `token_budget`.
 | `handle` | string | Opaque upload id for expand |
 | `llm_available` | boolean | |
 
+`CompileResult` highlights (see [`07-schema.md`](./07-schema.md)): `tokens_used` / `selected_content_tokens` meter selected **content** (not omit-manifest); `budget_omitted_sections` / `relevance_omitted_sections`; `compile_hints.early_stopped` when coverage met with spare budget. Always rank+pack — no whole-file dump when `raw_tokens ≤ budget`.
+
 ### 1.7 `POST /api/expand`
 
 JSON (`16kb` limit): `{ "handle": string, "section_id": string }`.

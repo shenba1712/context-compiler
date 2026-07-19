@@ -202,16 +202,8 @@ export function shouldDisableProveWhenStale(opts: {
   currentBudget: number;
 }): boolean {
   return (
-    shouldDisableProveAgentWhenQuestionStale(
-      opts.hasCompiledOnce,
-      opts.lastCompiledTask,
-      opts.currentTask
-    ) ||
-    shouldDisableProveWhenBudgetStale(
-      opts.hasCompiledOnce,
-      opts.lastCompiledBudget,
-      opts.currentBudget
-    )
+    shouldDisableProveAgentWhenQuestionStale(opts.hasCompiledOnce, opts.lastCompiledTask, opts.currentTask) ||
+    shouldDisableProveWhenBudgetStale(opts.hasCompiledOnce, opts.lastCompiledBudget, opts.currentBudget)
   );
 }
 

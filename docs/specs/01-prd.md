@@ -28,7 +28,8 @@ Context Compiler addresses the preparation step: given a file, a natural-languag
 
 Measured qualitatively in the demo and quantitatively in offline eval / tests — not as SLA SLIs:
 
-- **Token reduction** on representative docs at practical budgets (~1k–4k): routinely high double-digit to mid-90s percent when the whole file does not fit.
+- **Token reduction** on representative docs at practical budgets (~1k–4k): routinely high double-digit to mid-90s percent when the packer can stop at coverage (not when forced to “summarize everything”).
+- **Early stop honesty:** pointed queries leave spare budget unused rather than padding with weak sections.
 - **Answer intact:** gold substrings survive packing for curated fixtures (`src/eval/`); pack must not return over budget.
 - **Offline compile:** CI and local runs succeed with no LLM secrets; Prove/Agent remain opt-in.
 - **Recovery path:** omitted sections remain expandable by id after a deliberate miss.
@@ -63,7 +64,7 @@ Measured qualitatively in the demo and quantitatively in offline eval / tests �
 **Input:** file + task + token budget.  
 **Output:** packed markdown, token stats, selected/omitted section manifests, optional next-section budget hint.
 
-Pipeline: convert (MarkItDown) → chunk → BM25 rank → pack under assembled-output budget. If raw tokens ≤ budget, passthrough (no ranking loss).
+Pipeline: convert (MarkItDown) → chunk → BM25 rank → **coverage-first** pack under a content-token ceiling (document order restored). Always rank+pack — no whole-file dump when `raw_tokens ≤ budget`. Budget is a ceiling; pointed queries may early-stop with spare headroom.
 
 ### 5.2 Expand
 

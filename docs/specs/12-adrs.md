@@ -46,13 +46,13 @@
 
 ---
 
-## ADR-005 — Enforce budget on assembled output
+## ADR-005 — Enforce budget on assembled output *(amended: content metering)*
 
-**Context:** Sum-of-chunk-tokens minus a constant overshot once the omission manifest and wrappers grew.
+**Context:** Sum-of-chunk-tokens minus a constant overshot once the omission manifest and wrappers grew. Later, metering omit-manifest ballast against the same ceiling made Compile / Prove / Agent disagree with “what the model will answer from.”
 
-**Decision:** Count tokens on the fully assembled artifact; evict lowest-ranked selected chunks until it fits; degrade manifest detail in steps before sacrificing content. Regression tests lock the contract.
+**Decision:** Fit checks still run on assembled text (evict / degrade until under budget). **Amendment:** the compile / agent **contract ceiling** meters **selected content tokens** (`countContentTokens` / `PackBudgetMetric: "content"`) — omit-list UX is not counted toward the budget. Manifest detail still degrades in steps before sacrificing content. Regression tests lock both contracts.
 
-**Consequences:** `tokens_used` can exceed the sum of section bodies (documented in UI). Pack never returns over budget when tests pass.
+**Consequences:** Demo bars and Agent `tokens_read` track substance. Wire markdown may still include wrappers/manifest; those are stripped for metering.
 
 ---
 
@@ -66,13 +66,13 @@
 
 ---
 
-## ADR-007 — Small-file passthrough
+## ADR-007 — Coverage-first pack; no whole-file dump *(supersedes small-file passthrough)*
 
-**Context:** Ranking is lossy. If the whole document already fits the budget, loss is unjustified.
+**Context:** An earlier “if `raw_tokens ≤ budget`, return everything” short-circuit re-admitted zero-relevance sections after a pointed query was already answerable. Budget looked like a fill quota.
 
-**Decision:** When `raw_tokens ≤ token_budget`, skip rank/pack loss and return everything assembled.
+**Decision:** Always rank + pack. Priority: multi-facet coverage → discriminative / name-intent goals → query-aware partials over weak wholes → **early stop** when coverage is met. Vague queries get capped recall insurance, never whole-corpus fill. Agent `stopped_reason: "whole_file"` remains only when pack left `omitted_sections` empty (nothing left to fetch).
 
-**Consequences:** 0% reduction is a valid success; UI must not treat it as failure. Agent can short-circuit to a whole-file answer in the same spirit.
+**Consequences:** Pointed asks at large budgets leave spare headroom (`compile_hints.early_stopped`). 0% reduction still means selected content ≈ raw (everything needed was kept) — not a silent passthrough shortcut. UI must not treat early-stop spare as failure.
 
 ---
 
@@ -96,13 +96,13 @@
 
 ---
 
-## ADR-010 — Relative relevance floor
+## ADR-010 — Relative relevance floor + early stop
 
-**Context:** Absolute BM25 thresholds are uncalibrated across documents and languages.
+**Context:** Absolute BM25 thresholds are uncalibrated across documents and languages. Floor-only greedy fill still padded sharp queries when the budget was large.
 
-**Decision:** Relative floor (`CC_RELEVANCE_FLOOR`, default 0.4 × top score) stops packing weak runners-up when scores have a clear peak; on flat distributions the floor does nothing so recall is preserved.
+**Decision:** Relative floor (`CC_RELEVANCE_FLOOR`, default 0.4 × top) plus coverage-first stop and top-score cluster (`CC_CLUSTER_RATIO`) reject clear padding once coverage goals are met. Flat / vague distributions use **capped** recall insurance (top cluster), not “fill until budget.” Legacy `CC_EARLY_STOP_RATIO` / `CC_SATURATION_STOP_RATIO` env knobs are ignored.
 
-**Consequences:** Sharp queries pack tighter; vague queries still fill budget. Same ratio feeds multi-query attribution.
+**Consequences:** Sharp queries pack tighter and may leave spare budget. Vague queries still get a small top cluster. Same relative idea feeds multi-query attribution.
 
 ---
 
@@ -120,9 +120,9 @@
 
 **Context:** An unbounded expand loop can burn tokens and free-tier quota. A hard cut mid-expand is awkward.
 
-**Decision:** On the web path, the token-budget slider is both the first compile budget and a soft ceiling on cumulative `tokens_read`. The loop stops *starting* new expands once at/over the ceiling; an in-flight expand may finish slightly over. When start budget already equals the ceiling, omit recompile from the decide prompt. Unusable model decisions collapse to “answer with what we have.”
+**Decision:** On the web path, the token-budget slider is both the first compile budget and a soft ceiling on cumulative **content** `tokens_read` (same substance basis as `selected_content_tokens`). The loop stops *starting* new expands once at/over the ceiling; an in-flight expand may finish slightly over. When start budget already equals the ceiling, omit recompile from the decide prompt. Unusable model decisions collapse to “answer with what we have.”
 
-**Consequences:** Aligns Agent with Compile UX; predictable cost vs unbounded exploration. Slight overshoot is documented in UI copy.
+**Consequences:** Aligns Agent with Compile UX; predictable cost vs unbounded exploration. Slight overshoot is documented in UI copy. Omit-manifest ballast does not inflate the reading meter.
 
 ---
 

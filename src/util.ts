@@ -18,6 +18,13 @@ export function maxOf(nums: number[]): number {
  */
 export function sanitizeSourceName(name: string): string {
   const base = name.replace(/^.*[/\\]/, "").slice(0, 120);
-  const cleaned = base.replace(/[^\w.\- ()[\]]+/g, "_").replace(/_+/g, "_");
+  // Drop CR/LF/NUL and HTML-comment terminators so a crafted upload name cannot
+  // break out of `<!-- Compiled context from: … -->` or confuse agents.
+  const cleaned = [...base]
+    .filter((ch) => ch !== "\r" && ch !== "\n" && ch !== "\0")
+    .join("")
+    .replace(/-->/g, "_")
+    .replace(/[^\w.\- ()[\]]+/g, "_")
+    .replace(/_+/g, "_");
   return cleaned.replace(/^[_.]+|[_.]+$/g, "") || "document";
 }

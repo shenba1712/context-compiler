@@ -17,6 +17,9 @@ Primary definitions: `src/pipeline.ts`, `src/agent.ts`, `src/client/types.ts`, `
   section: string;         // breadcrumb, e.g. "Warranty > Exclusions"
   tokens: number;
   relevance: number | null; // % of top BM25 score; null if no signal
+  truncated?: boolean;     // budget partial of the source section
+  full_tokens?: number;    // full section size when truncated
+  remainder_tokens?: number;
   matched_queries?: number[]; // multi-query attribution indices
   text?: string;           // selected sections on web; stripped on MCP compile
 }
@@ -34,7 +37,7 @@ Primary definitions: `src/pipeline.ts`, `src/agent.ts`, `src/client/types.ts`, `
 } | null
 ```
 
-Present when budget-bound and a strong omitted section still did not fit.
+Present when budget-bound and a strong omitted (or truncated) section still did not fit.
 
 ### `CompileResult` (pipeline)
 
@@ -42,15 +45,24 @@ Present when budget-bound and a strong omitted section still did not fit.
 {
   markdown: string;
   raw_tokens: number;
-  tokens_used: number;
+  tokens_used: number;              // selected content tokens (meter)
+  selected_content_tokens: number;  // same substance basis as tokens_used
   tokens_saved: number;
-  reduction_pct: number;     // one decimal place style (e.g. 92.6)
+  reduction_pct: number;            // one decimal place style (e.g. 92.6)
   cache_hit: boolean;
-  token_budget: number;      // applied after clamp
-  queries: string[];         // split sub-questions; length 1 if single
+  token_budget: number;             // applied after clamp
+  queries: string[];                // split sub-questions; length 1 if single
   selected_sections: SectionInfo[];
-  omitted_sections: SectionInfo[];
+  omitted_sections: SectionInfo[];  // full omit list (MCP + agent)
+  budget_omitted_sections: OmitBucketSection[];    // task-relevant, size-blocked
+  relevance_omitted_sections: SectionInfo[];       // lower-relevance for this task
   next_section_hint: NextSectionHint;
+  compile_hints: {
+    multi_part_nudge: boolean;
+    omit_action: boolean;
+    named_omit: SectionInfo | null;
+    early_stopped: boolean;         // coverage met with spare budget
+  };
 }
 ```
 
