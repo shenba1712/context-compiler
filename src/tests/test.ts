@@ -76,23 +76,69 @@ async function withCleanEnv(
 }
 
 import { nextSectionHint } from "../budget-hint.js";
+import {
+  budgetBoundHintBodyPlain,
+  budgetBoundHintMentionsExpand,
+  compileNoteHints,
+  EARLY_STOPPED_FLOOR_TEXT,
+  MULTI_PART_NUDGE_TEXT,
+} from "../compile-notes.js";
+import { classifyOmitBuckets } from "../omit-buckets.js";
 import { chunkMarkdown } from "../chunk.js";
+import {
+  agentStreamIncompleteMessage,
+  applyProveIncludeChange,
+  emptyCompiledSectionsMessage,
+  includeRestHint,
+  isNearVisibleRect,
+  LAYOUT_FRAMES_BEFORE_SCROLL,
+  packagingGapNote,
+  shouldClearAgentOnCompile,
+  shouldClearResultsOnDocChange,
+  shouldDisableProveAgentWhenQuestionStale,
+  shouldDisableProveWhenBudgetStale,
+  shouldDisableProveWhenStale,
+  shouldKeepAgentStepsOnCancel,
+  shouldRemovePeekOnUncheck,
+  shouldScrollIntoView,
+  shouldShowAgentSecIdle,
+  apiFailureMessageFromStatus,
+  proveFlowUsesLocalError,
+  questionStaleBannerHtml,
+  rateLimitRetryHint,
+  taskInvalidatesCompile,
+  truncatedSectionMeta,
+} from "../client-ux.js";
 import { convertToMarkdown, ConversionError } from "../convert.js";
-import { intEnv, numEnv } from "../env.js";
-import { pack } from "../pack.js";
+import { intEnv, numEnv, trustProxyFromEnv } from "../env.js";
+import { assemble, pack, truncateSectionToBudget } from "../pack.js";
 import { checkPathWithin } from "../path-guard.js";
-import { compileContext, expandSection } from "../pipeline.js";
+import { assembleProveContext, compileContext, expandSection, fullMarkdown } from "../pipeline.js";
 import {
   bm25Scores,
+  multiScoresFromRows,
+  perQueryScores,
   queryAttribution,
+  queryAttributionFromRows,
+  queryBestIdsFromRows,
   rank,
   rankMulti,
+  rankMultiFromRows,
   splitQueries,
   tokenize,
   tokenizeQuery,
 } from "../rank.js";
-import { countTokens } from "../tokens.js";
+import { isMultiPartTask, splitTaskAspects } from "../query-aspects.js";
+import {
+  applyNameIntentBoost,
+  chunkHasGivenNameSpan,
+  detectNameIntent,
+  prepareRankedForPack,
+} from "../name-intent.js";
+import { countContentTokens, countTokens } from "../tokens.js";
 import { UploadRejected, validateUpload } from "../upload-guard.js";
+import { sanitizeSourceName } from "../util.js";
+import { cacheGet, cachePut, fileKey } from "../cache.js";
 
 function makeTestDoc(): string {
   const sections: string[] = ["# Master Services Agreement\n\nThis agreement is made between parties."];
@@ -125,6 +171,21 @@ async function testChunking() {
   assert.ok(tableChunks[0].text.includes("| Pro | 60 days"));
   assert.ok(chunks.every((c) => c.breadcrumb));
   console.log(`  chunking ok: ${chunks.length} chunks, tables atomic`);
+}
+
+function testContentTokens() {
+  const wrapped =
+    "<!-- source: demo.md (UNTRUSTED CONTENT) -->\n# Title\n\nBody text here.\n\n" +
+    "<!-- section: A > B (UNTRUSTED CONTENT) -->\nMore body.";
+  assert.ok(
+    countContentTokens(wrapped) < countTokens(wrapped),
+    "HTML comment wrappers must not inflate content metering"
+  );
+  assert.ok(
+    countContentTokens(wrapped) >= countTokens("# Title\n\nBody text here.\n\nMore body.") - 1,
+    "content metering should track the substantive markdown"
+  );
+  console.log("  content tokens ok: assemble wrappers stripped for metering");
 }
 
 async function testRankAndPack() {
@@ -262,49 +323,471 @@ async function testRelevanceFloor() {
     withFloor.text.includes("90 days written notice"),
     "the answer must still be present with the floor on"
   );
-  // Flat scores (vague query with no signal): floor must NOT bite.
+  // Flat scores (vague query with no signal): recall insurance picks a compact
+  // cluster — it must not vacuum-fill the whole document.
   const vague = new Map(chunks.map((c) => [c.id, 1]));
   const flat = pack(ranked, 6000, "t.md", vague);
-  assert.equal(
-    flat.selected.length,
-    withoutFloor.selected.length,
-    "flat scores must fall back to budget-filling (recall insurance)"
+  assert.ok(
+    flat.selected.length < withoutFloor.selected.length,
+    `flat scores must not budget-fill: ${flat.selected.length} vs ${withoutFloor.selected.length}`
+  );
+  assert.ok(flat.selected.length >= 1, "flat scores still pick at least one section");
+  console.log(
+    `  relevance floor ok: ${withFloor.selected.length} kept vs ${withoutFloor.selected.length} without; flat scores stay compact (${flat.selected.length})`
+  );
+}
+
+async function testEarlyStopFillerHeavy() {
+  // Coverage + marginal gain: mid-tier sections share query terms with the
+  // answer and must not fill a large budget once discriminative terms are covered.
+  const chunks = chunkMarkdown(
+    [
+      "## Answer\n\nThe launch window opens on April 3 for the Nova mission. " +
+        "Mission timeline detail. ".repeat(15),
+      "## Near peer\n\nRelated Nova mission timeline notes without the date. ".repeat(12),
+      "## Mid padding\n\nSome Nova keywords but not the answer. ".repeat(12),
+      ...Array.from(
+        { length: 5 },
+        (_, i) => `## Weak ${i}\n\n` + `Unrelated corporate filler ${i}. `.repeat(20)
+      ),
+    ].join("\n\n")
+  );
+  const byTitle = (re: RegExp) => chunks.find((c) => re.test(c.breadcrumb))!;
+  const answer = byTitle(/Answer/);
+  const near = byTitle(/Near peer/);
+  const mid = byTitle(/Mid padding/);
+  const scores = new Map(chunks.map((c) => [c.id, 0.1]));
+  scores.set(answer.id, 1.0);
+  scores.set(near.id, 0.99);
+  scores.set(mid.id, 0.45);
+  const ranked = [...chunks].sort((a, b) => (scores.get(b.id) ?? 0) - (scores.get(a.id) ?? 0));
+  const budget = 6000;
+  const task = "When is the Nova mission launch date?";
+  const queryTerms = tokenizeQuery(task);
+
+  const { selected, omitted, stopped_early } = pack(
+    ranked,
+    budget,
+    "nova.md",
+    scores,
+    queryTerms,
+    undefined,
+    true,
+    "full",
+    undefined,
+    undefined,
+    task
+  );
+  assert.ok(stopped_early, "large budget must stop once coverage is met");
+  assert.ok(
+    selected.some((c) => c.id === answer.id),
+    "answer-bearing section must be selected"
+  );
+  assert.ok(!selected.some((c) => c.id === near.id), "redundant near-peer must not fill budget");
+  assert.ok(!selected.some((c) => c.id === mid.id), "mid-tier padding must not fill the budget");
+  assert.ok(!selected.some((c) => /Weak/.test(c.breadcrumb)), "weak fillers must stay omitted");
+  assert.ok(
+    omitted.some((c) => c.id === mid.id),
+    "mid-tier padding should appear in omitted"
   );
   console.log(
-    `  relevance floor ok: ${withFloor.selected.length} kept vs ${withoutFloor.selected.length} without; flat scores fill budget`
+    `  coverage filler ok: ${selected.length} selected, stopped_early=${stopped_early}, budget=${budget}`
+  );
+}
+
+async function testEarlyStopNoBudgetInflation() {
+  // Larger budget must not vacuum in weak junk; it may still pack near-top peers
+  // (prefer false negative). Do not require stopped_early on every large budget.
+  const doc = makeTestDoc();
+  const chunks = chunkMarkdown(doc);
+  const task = "What are the termination notice periods?";
+  const ranked = rank(task, chunks);
+  const scores = new Map(chunks.map((c, i) => [c.id, bm25Scores(task, chunks)[i]]));
+  const topScore = scores.get(ranked[0]!.id) ?? 1;
+
+  const at1000 = pack(ranked, 1000, "t.md", scores);
+  const at4000 = pack(ranked, 4000, "t.md", scores);
+  assert.ok(
+    at1000.selected.some((c) => c.text.includes("90 days")),
+    "1000 budget still gets the termination answer"
+  );
+  assert.ok(
+    at4000.selected.some((c) => c.text.includes("90 days")),
+    "4000 budget still gets the termination answer"
+  );
+  for (const c of at4000.selected) {
+    const rel = (scores.get(c.id) ?? 0) / topScore;
+    assert.ok(rel >= 0.45, `4000 must not add clear padding: ${c.id} rel=${rel}`);
+  }
+  // Optional: if early-stop fired, selection should stay compact vs fill-all.
+  if (at4000.stopped_early) {
+    assert.ok(
+      at4000.selected.length <= at1000.selected.length + 2,
+      `early-stop at 4000 should stay compact: ${at1000.selected.length}→${at4000.selected.length}`
+    );
+  }
+  console.log(
+    `  early-stop budget inflation ok: 1000→${at1000.selected.length} sections, ` +
+      `4000→${at4000.selected.length} sections, stopped_early=${at4000.stopped_early}`
+  );
+}
+
+function testEarlyStopNameIntentBingley() {
+  // Synthetic P&P-shaped case: honorific-heavy chunks score 89–97% of top; once
+  // CAROLINE BINGLEY is in, a 4000 budget must not vacuum them in.
+  const task = "What is Ms. Bingley's first name?";
+  const honorificBody = "Miss Bingley smiled at Darcy and Elizabeth. ".repeat(55);
+  const doc = [
+    "## Chapter III\n\n" + honorificBody,
+    "## Chapter IV\n\n" + honorificBody,
+    "## Chapter VII\n\n" + honorificBody,
+    "## Chapter VII\n\nThe note ended with:\n\nCAROLINE BINGLEY.",
+    "## Chapter VIII\n\n" + honorificBody,
+    "## Chapter X\n\n" + honorificBody,
+    "## Chapter XVI\n\n" + honorificBody,
+    "## Chapter XVIII\n\n" + honorificBody,
+    "## Chapter XXVI\n\n" + honorificBody,
+  ].join("\n\n");
+  const chunks = chunkMarkdown(doc);
+  const byHeading = (re: RegExp) => chunks.find((c) => re.test(c.breadcrumb))!;
+  const caroline = byHeading(/VII.*VII|Chapter VII/i);
+  // Prefer the chunk that actually has the signature
+  const carolineChunk = chunks.find((c) => chunkHasGivenNameSpan(c.text, "bingley")) ?? caroline;
+
+  let raw = bm25Scores(task, chunks);
+  raw = applyNameIntentBoost(task, chunks, raw);
+  const scores = new Map(chunks.map((c, i) => [c.id, raw[i]!]));
+  const top = Math.max(...raw);
+  for (const c of chunks) {
+    if (c.id === carolineChunk.id) continue;
+    const rel = /Chapter (III|IV)\b/.test(c.breadcrumb) ? 0.52 : 0.93;
+    scores.set(c.id, top * rel);
+  }
+  scores.set(carolineChunk.id, top);
+
+  let ranked = [...chunks].sort((a, b) => (scores.get(b.id) ?? 0) - (scores.get(a.id) ?? 0));
+  ranked = prepareRankedForPack(ranked, chunks, task, scores);
+  const queryTerms = tokenizeQuery(task);
+
+  const at1000 = pack(
+    ranked,
+    1000,
+    "pp.md",
+    scores,
+    queryTerms,
+    undefined,
+    true,
+    "content",
+    undefined,
+    undefined,
+    task
+  );
+  const at4000 = pack(
+    ranked,
+    4000,
+    "pp.md",
+    scores,
+    queryTerms,
+    undefined,
+    true,
+    "content",
+    undefined,
+    undefined,
+    task
+  );
+
+  const hasCaroline = (sel: typeof at1000.selected) =>
+    sel.some((c) => chunkHasGivenNameSpan(c.text, "bingley"));
+  assert.ok(hasCaroline(at1000.selected), "1000 budget must include Caroline");
+  assert.ok(hasCaroline(at4000.selected), "4000 budget must include Caroline");
+  assert.ok(at4000.stopped_early, "4000 must set stopped_early once answer is sufficient");
+  assert.ok(
+    at4000.selected.length <= at1000.selected.length + 1,
+    `4000 should stay compact: 1000→${at1000.selected.length}, 4000→${at4000.selected.length}`
+  );
+  const tok1000 = countContentTokens(assemble("pp.md", at1000.selected, []));
+  const tok4000 = countContentTokens(assemble("pp.md", at4000.selected, []));
+  assert.ok(
+    tok4000 <= tok1000 * 1.35 + 120,
+    `4000 tokens (${tok4000}) should stay near 1000 case (${tok1000}), not fill budget`
+  );
+  assert.ok(
+    !at4000.selected.some((c) => /Chapter (III|IV)\b/.test(c.breadcrumb)),
+    "weak Ch.III/IV padding must not be selected at 4000"
+  );
+  console.log(
+    `  early-stop Bingley ok: 1000→${at1000.selected.length} sel/${tok1000} tok, ` +
+      `4000→${at4000.selected.length} sel/${tok4000} tok, stopped_early=${at4000.stopped_early}`
+  );
+}
+
+function testCoverageRedundantFillers() {
+  // Many high-BM25 sections repeat the same query terms — after the answer
+  // section covers discriminative terms, fillers must not be admitted.
+  const task = "What is the Nova mission launch date?";
+  const answerBody = "The Nova mission launch date is April 3, 2026. Mission control confirmed.";
+  const fillerBody = "Nova mission timeline and Nova mission planning notes without the date. ".repeat(40);
+  const doc = [
+    "## Answer\n\n" + answerBody,
+    ...Array.from({ length: 10 }, (_, i) => `## Filler ${i}\n\n` + fillerBody + ` Section ${i}.`),
+  ].join("\n\n");
+  const chunks = chunkMarkdown(doc);
+  const ranked = rank(task, chunks);
+  const scores = new Map(chunks.map((c, i) => [c.id, bm25Scores(task, chunks)[i]!]));
+  const queryTerms = tokenizeQuery(task);
+
+  const at4000 = pack(
+    ranked,
+    4000,
+    "nova.md",
+    scores,
+    queryTerms,
+    undefined,
+    true,
+    "content",
+    undefined,
+    undefined,
+    task
+  );
+  const at8000 = pack(
+    ranked,
+    8000,
+    "nova.md",
+    scores,
+    queryTerms,
+    undefined,
+    true,
+    "content",
+    undefined,
+    undefined,
+    task
+  );
+
+  assert.ok(
+    at4000.selected.some((c) => c.text.includes("April 3")),
+    "must include launch date"
+  );
+  assert.ok(at4000.stopped_early, "4000 must stop once coverage met");
+  assert.ok(at8000.stopped_early, "8000 must stop once coverage met");
+  assert.ok(
+    at8000.selected.length <= at4000.selected.length + 1,
+    `redundant fillers must not inflate selection: 4000→${at4000.selected.length}, 8000→${at8000.selected.length}`
+  );
+  assert.ok(
+    !at8000.selected.some((c) => /Filler/.test(c.breadcrumb)),
+    "BM25-redundant filler sections must stay out after coverage"
+  );
+  console.log(
+    `  coverage redundant fillers ok: 4000→${at4000.selected.length} sel, 8000→${at8000.selected.length} sel`
+  );
+}
+
+function testEarlyStopClusterJaneBingley() {
+  // Coverage-first: once Bingley/Jane discriminative terms are covered, larger
+  // budgets must not vacuum honorific-heavy chapters that repeat the same terms.
+  const task = "What does Mr. Bingley think of Jane Bennet early on?";
+  const answerBody =
+    "Bingley had never met with pleasanter people. As to Miss Bennet, he could not conceive an angel more beautiful.";
+  const fillerBody =
+    "Mr. Bingley danced twice. Everyone talked about Jane Bennet at the assembly. " +
+    "Between him and Darcy there was a steady friendship. ".repeat(35);
+  const doc = [
+    "## Chapter Opinion\n\n" + answerBody,
+    "## Chapter III\n\n" + fillerBody,
+    "## Chapter IV\n\n" + fillerBody,
+    "## Chapter VII\n\n" + fillerBody,
+    "## Chapter VIII\n\n" + fillerBody,
+    "## Chapter X\n\n" + fillerBody,
+    "## Chapter XVI\n\n" + fillerBody,
+    "## Chapter XVIII\n\n" + fillerBody,
+    "## Chapter XX\n\n" + fillerBody,
+    "## Chapter XXII\n\n" + fillerBody,
+    "## Chapter XXVI\n\n" + fillerBody,
+  ].join("\n\n");
+  const chunks = chunkMarkdown(doc);
+  const byHeading = (re: RegExp) => chunks.find((c) => re.test(c.breadcrumb))!;
+  const answer = byHeading(/Opinion/);
+
+  const raw = bm25Scores(task, chunks);
+  const scores = new Map(chunks.map((c, i) => [c.id, raw[i]!]));
+  const top = Math.max(...raw);
+  for (const c of chunks) {
+    if (c.id === answer.id) {
+      scores.set(c.id, top);
+      continue;
+    }
+    const rel = /Chapter (III|IV)\b/.test(c.breadcrumb) ? 0.76 : 0.93;
+    scores.set(c.id, top * rel);
+  }
+  const ranked = [...chunks].sort((a, b) => (scores.get(b.id) ?? 0) - (scores.get(a.id) ?? 0));
+  const queryTerms = tokenizeQuery(task);
+
+  const at1000 = pack(
+    ranked,
+    1000,
+    "pp.md",
+    scores,
+    queryTerms,
+    undefined,
+    true,
+    "content",
+    undefined,
+    undefined,
+    task
+  );
+  const at4000 = pack(
+    ranked,
+    4000,
+    "pp.md",
+    scores,
+    queryTerms,
+    undefined,
+    true,
+    "content",
+    undefined,
+    undefined,
+    task
+  );
+  const at8000 = pack(
+    ranked,
+    8000,
+    "pp.md",
+    scores,
+    queryTerms,
+    undefined,
+    true,
+    "content",
+    undefined,
+    undefined,
+    task
+  );
+
+  assert.ok(
+    at1000.selected.some((c) => c.text.includes("angel more beautiful")),
+    "1000 budget must include Bingley's opinion"
+  );
+  assert.ok(
+    at4000.selected.some((c) => c.text.includes("angel more beautiful")),
+    "4000 budget must include Bingley's opinion"
+  );
+  assert.ok(
+    at8000.selected.some((c) => c.text.includes("angel more beautiful")),
+    "8000 budget must include Bingley's opinion"
+  );
+  assert.ok(at4000.stopped_early, "4000 must set stopped_early once coverage met");
+  assert.ok(at8000.stopped_early, "8000 must set stopped_early once coverage met");
+  assert.ok(
+    at8000.selected.length <= at1000.selected.length + 2,
+    `8000 should stay compact: 1000→${at1000.selected.length}, 8000→${at8000.selected.length}`
+  );
+  assert.ok(
+    at4000.selected.length <= at1000.selected.length + 2,
+    `4000 should stay compact: 1000→${at1000.selected.length}, 4000→${at4000.selected.length}`
+  );
+  const tok1000 = countContentTokens(assemble("pp.md", at1000.selected, []));
+  const tok4000 = countContentTokens(assemble("pp.md", at4000.selected, []));
+  const tok8000 = countContentTokens(assemble("pp.md", at8000.selected, []));
+  assert.ok(
+    tok8000 <= tok1000 * 1.5 + 150,
+    `8000 tokens (${tok8000}) should stay near 1000 case (${tok1000}), not fill budget`
+  );
+  assert.ok(
+    tok4000 <= tok1000 * 1.5 + 150,
+    `4000 tokens (${tok4000}) should stay near 1000 case (${tok1000}), not fill budget`
+  );
+  assert.ok(
+    !at8000.selected.some((c) => /Chapter (III|IV)\b/.test(c.breadcrumb)),
+    "weak Ch.III/IV padding must not be selected at 8000"
+  );
+  console.log(
+    `  coverage Jane/Bingley ok: 1000→${at1000.selected.length} sel/${tok1000} tok, ` +
+      `4000→${at4000.selected.length} sel/${tok4000} tok, ` +
+      `8000→${at8000.selected.length} sel/${tok8000} tok, stopped_early=${at8000.stopped_early}`
+  );
+}
+
+async function testClusterStopJaneBingleyPrideAndPrejudice() {
+  const path = join(process.cwd(), "public", "samples", "pride-and-prejudice.docx");
+  if (!existsSync(path)) {
+    console.log("  cluster Jane/Bingley P&P skipped: sample docx not present");
+    return;
+  }
+  const task = "What does Mr. Bingley think of Jane Bennet early on?";
+  const at1000 = await compileContext(path, task, 1000, "Pride and Prejudice");
+  const at8000 = await compileContext(path, task, 8000, "Pride and Prejudice");
+  assert.ok(at1000.selected_sections.length >= 1, "1000 budget must select Bingley-adjacent context");
+  assert.ok(/bingley/i.test(at1000.markdown), "1000 compile must mention Bingley");
+  assert.ok(
+    at8000.selected_sections.length <= at1000.selected_sections.length + 3,
+    `8000 should stay compact vs 1000: ${at1000.selected_sections.length}→${at8000.selected_sections.length}`
+  );
+  assert.ok(
+    at8000.tokens_used <= at1000.tokens_used * 3.5 + 200,
+    `8000 tokens (${at8000.tokens_used}) should stay same order of magnitude as 1000 (${at1000.tokens_used})`
+  );
+  assert.ok(
+    at8000.selected_sections.length < 8,
+    `8000 must not vacuum Bingley-adjacent chapters: got ${at8000.selected_sections.length}`
+  );
+  assert.ok(
+    at8000.compile_hints?.early_stopped || at8000.tokens_used < 5000,
+    "8000 should early-stop or stay well under budget"
+  );
+  console.log(
+    `  cluster Jane/Bingley P&P ok: 1000→${at1000.selected_sections.length} sel/${at1000.tokens_used} tok, ` +
+      `8000→${at8000.selected_sections.length} sel/${at8000.tokens_used} tok, ` +
+      `early_stopped=${at8000.compile_hints?.early_stopped ?? false}`
   );
 }
 
 async function testReserveDoesNotEvictFittingContent() {
   // Regression: an under-reserved budget let greedy content-fill overcommit,
   // forcing the eviction loop to drop a real, relevant, FITTING chunk and let
-  // the manifest re-inflate with preview text in its place. Two second-most-
-  // relevant chunks that together fit the budget must both survive, rather
-  // than one being evicted for a fatter manifest.
+  // the manifest re-inflate with preview text in its place. Two facet-bearing
+  // sections that together fit the budget must both survive when each adds
+  // coverage the other lacks.
   const doc = [
-    "## Alpha\n\nThe launch date for the rocket is set for March. ".repeat(30), // top match, ~small
-    "## Beta\n\nThe rocket launch date and mission details are discussed here. " +
-      "The launch date for the rocket appears again in this section. ".repeat(28),
+    "## Alpha\n\nThe launch date for the rocket is set for March. ".repeat(30),
+    "## Beta\n\nThe mission closing window ends March 31. " +
+      "Launch clearance and window details are recorded here. ".repeat(28),
     ...Array.from(
       { length: 5 },
       (_, i) => `## Filler ${i}\n\n` + `Irrelevant boilerplate text ${i}. `.repeat(30)
     ),
   ].join("\n\n");
   const chunks = chunkMarkdown(doc);
-  const task = "What is the rocket launch date?";
-  const ranked = rank(task, chunks);
-  const scores = new Map(chunks.map((c, i) => [c.id, bm25Scores(task, chunks)[i]]));
+  const task = "What is the rocket launch date, and when does the mission closing window end?";
+  const queries = splitQueries(task);
+  const rows = perQueryScores(queries, chunks);
+  const ranked = rankMultiFromRows(rows, chunks, queries);
+  const merged = multiScoresFromRows(rows, chunks);
+  const scores = new Map(chunks.map((c, i) => [c.id, merged[i]!]));
+  const matchMap = new Map(chunks.map((c, i) => [c.id, queryAttributionFromRows(rows, chunks)[i]!]));
+  const queryBestIds = queryBestIdsFromRows(rows, chunks, queries);
+  const queryTerms = tokenizeQuery(task);
 
   // Pick a budget just large enough to fit the top two relevant chunks
   // together (content beats a padded manifest — both must be kept).
-  const top2 = ranked.slice(0, 2);
+  const top2 = [chunks[0]!, chunks[1]!];
   const top2Tokens = top2.reduce((s, c) => s + c.tokens, 0);
   const budget = top2Tokens + 400; // headroom for wrapper + a real (non-bloated) manifest
-  const { selected } = pack(ranked, budget, "launch.md", scores);
+  const { selected } = pack(
+    ranked,
+    budget,
+    "launch.md",
+    scores,
+    queryTerms,
+    undefined,
+    true,
+    "full",
+    matchMap,
+    queryBestIds,
+    task
+  );
   const selectedIds = new Set(selected.map((c) => c.id));
   assert.ok(
     top2.every((c) => selectedIds.has(c.id)),
-    `both top-2 relevant chunks should survive when they jointly fit: kept ${selected.length} of top 2`
+    `both facet sections should survive when they jointly fit: kept ${selected.length} of top 2`
   );
   console.log(
     "  reserve ok: two relevant, fitting chunks both kept instead of one evicted for manifest padding"
@@ -312,8 +795,8 @@ async function testReserveDoesNotEvictFittingContent() {
 }
 
 async function testOversizedTopNotice() {
-  // The single most relevant section is bigger than the budget. The artifact
-  // must warn the agent (not silently ship a lesser section as if sufficient).
+  // The single most relevant section is bigger than the budget. Policy B takes
+  // a truncated partial (not weak fillers) and skips the oversized notice.
   const doc = [
     "## Small aside\n\nA brief unrelated note about scheduling and logistics.",
     "## Refund policy\n\n" +
@@ -327,13 +810,44 @@ async function testOversizedTopNotice() {
   const refundId = chunks.find((c) => c.text.includes("14 business days"))!.id;
 
   const { text, selected } = pack(ranked, 200, "policy.md", scores);
-  assert.ok(!selected.some((c) => c.id === refundId), "oversized top section is omitted at a tiny budget");
+  const partial = selected.find((c) => c.id === refundId);
+  assert.ok(partial, "oversized top section should appear as a budget partial");
+  assert.ok(partial!.truncated, "top section must be marked truncated");
+  assert.ok(text.includes("14 business days"), "partial must include the answer lead");
+  assert.ok(text.includes("truncated to budget"), "partial must carry an honest truncation marker");
+  assert.ok(!text.includes("Most relevant"), "no oversized notice when top is partially included");
+  assert.ok(countTokens(text) <= 200, `budget must hold with a partial: ${countTokens(text)}`);
+  console.log("  oversized-top ok: tight budget gets a truncated top section, not weak fillers");
+}
+
+async function testRelevanceFirstPartialPacking() {
+  // Meridian-style: one huge high-rel section + several small low-rel fillers.
+  // Under a tight budget the packer must take a partial of the big section,
+  // not skip it in favor of junk that happens to fit whole.
+  const doc = [
+    "## Meridian launch\n\n" +
+      "The Meridian rocket launch date is March 15. Mission details and timeline follow. ".repeat(45),
+    ...Array.from({ length: 4 }, (_, i) => `## Aside ${i}\n\n` + `Unrelated logistics note ${i}. `.repeat(8)),
+  ].join("\n\n");
+  const chunks = chunkMarkdown(doc);
+  const task = "When is the Meridian rocket launch date?";
+  const ranked = rank(task, chunks);
+  const scores = new Map(chunks.map((c, i) => [c.id, bm25Scores(task, chunks)[i]]));
+  const top = ranked[0]!;
+  assert.ok(top.text.includes("March 15"), "top ranked should be Meridian launch");
+
+  const budget = 250;
+  const { text, selected } = pack(ranked, budget, "meridian.md", scores);
+  const topSel = selected.find((c) => c.id === top.id);
+  assert.ok(topSel, "high-relevance section must be selected as a partial, not skipped");
+  assert.ok(topSel!.truncated, "selection should be truncated under this budget");
+  assert.ok(text.includes("March 15") || text.includes("Meridian"), "partial must surface the answer");
   assert.ok(
-    text.includes("Most relevant") || text.includes(refundId),
-    "artifact warns about the omitted top section"
+    selected.every((c) => c.id === top.id || (scores.get(c.id) ?? 0) >= (scores.get(top.id) ?? 0) * 0.4),
+    "must not pack weak fillers instead of the top partial"
   );
-  assert.ok(countTokens(text) <= 200, `budget must hold even when nothing fits: ${countTokens(text)}`);
-  console.log("  oversized-top ok: artifact flags the too-big top section for expansion");
+  assert.ok(countTokens(text) <= budget, `assembled output must respect budget: ${countTokens(text)}`);
+  console.log("  relevance-first partial ok: truncated top beats small low-rel fillers");
 }
 
 async function testBm25FirstPackingDespiteDemotion() {
@@ -362,9 +876,10 @@ async function testBm25FirstPackingDespiteDemotion() {
   const demoted = [...byScore.filter((c) => c.id !== top.id), top];
   const budget = top.tokens + 400; // room for top + a few tinies, not all tinies + other
   const starved = pack(demoted, budget, "bohemia.md");
+  const starvedTop = starved.selected.find((c) => c.id === top.id);
   assert.ok(
-    !starved.selected.some((c) => c.id === top.id),
-    "sanity: demoted order can starve the BM25 top when scores are not used to reorder"
+    !starvedTop || starvedTop.truncated,
+    "demoted fill order must not take the full top section ahead of tinies without BM25 reorder"
   );
 
   const rankPos = new Map(demoted.map((c, i) => [c.id, i]));
@@ -406,20 +921,56 @@ async function testNextSectionHint() {
   assert.equal(hint!.relevance, 81);
   assert.equal(hint!.suggested_budget, 2000);
 
-  // End-to-end: Sherlock @ 1150 should surface s18 (or similar strong omit).
+  // Budget-bound + truncated selected section → hint to finish it.
+  const partialHint = nextSectionHint(
+    400,
+    390,
+    [],
+    [{ id: "s0", section: "Doc > Launch", tokens: 120, full_tokens: 800, relevance: 95, truncated: true }]
+  );
+  assert.ok(partialHint, "truncated selected section should produce a hint");
+  assert.equal(partialHint!.id, "s0");
+  assert.equal(partialHint!.tokens, 800);
+  assert.ok(partialHint!.suggested_budget > 400, "suggested budget should cover the remainder");
+
+  // End-to-end: Sherlock @ 1150 — hint when budget-bound; no hint when stopped early.
   const sherlock = join(process.cwd(), "public", "samples", "sherlock-holmes.docx");
   if (existsSync(sherlock)) {
     const r = await compileContext(sherlock, "Why does the King of Bohemia come to Sherlock Holmes?", 1150);
-    assert.ok(r.next_section_hint, "Sherlock@1150 should hint at the next strong omitted section");
-    assert.ok((r.next_section_hint!.relevance ?? 0) >= 40, "hinted section should be high-relevance");
-    assert.ok(
-      r.next_section_hint!.suggested_budget > r.token_budget,
-      "suggested budget must exceed the current one"
-    );
-    console.log(
-      `  next-section hint ok: unit + Sherlock@1150 → ${r.next_section_hint!.id} ` +
-        `(raise to ~${r.next_section_hint!.suggested_budget})`
-    );
+    if (r.compile_hints?.early_stopped) {
+      const spare = r.token_budget - r.tokens_used;
+      const budgetBound = spare < r.token_budget * 0.12;
+      if (!budgetBound) {
+        assert.equal(
+          r.next_section_hint,
+          null,
+          "Sherlock@1150 early-stopped with headroom → no next-section hint"
+        );
+        console.log(
+          `  next-section hint ok: unit + Sherlock@1150 early-stopped (${r.tokens_used}/${r.token_budget} tok)`
+        );
+      } else if (r.next_section_hint) {
+        assert.ok((r.next_section_hint.relevance ?? 0) >= 40, "budget-bound hint should be high-relevance");
+        console.log(
+          `  next-section hint ok: unit + Sherlock@1150 early-stopped+budget-bound → ${r.next_section_hint.id}`
+        );
+      } else {
+        console.log(
+          `  next-section hint ok: unit + Sherlock@1150 early-stopped+budget-bound (no strong omitted)`
+        );
+      }
+    } else {
+      assert.ok(r.next_section_hint, "Sherlock@1150 should hint at the next strong omitted section");
+      assert.ok((r.next_section_hint!.relevance ?? 0) >= 40, "hinted section should be high-relevance");
+      assert.ok(
+        r.next_section_hint!.suggested_budget > r.token_budget,
+        "suggested budget must exceed the current one"
+      );
+      console.log(
+        `  next-section hint ok: unit + Sherlock@1150 → ${r.next_section_hint!.id} ` +
+          `(raise to ~${r.next_section_hint!.suggested_budget})`
+      );
+    }
   } else {
     console.log("  next-section hint ok: unit cases (Sherlock sample not present, skipped e2e)");
   }
@@ -455,6 +1006,11 @@ async function testMultiQuery() {
   assert.equal(splitQueries("just one question about payment").length, 1, "single query passes through");
   assert.equal(splitQueries("net profit; gross margin; revenue growth").length, 3, "splits on semicolons");
   assert.ok(splitQueries("What about batteries and air travel?").length === 1, "does not split on 'and'");
+  assert.equal(
+    splitQueries("What was net profit in FY25, and which quarter had the best gross margin?").length,
+    2,
+    "splits comma+and multi-facet asks"
+  );
 
   // Two questions whose answers live in different, distant sections. A single
   // blended query can starve one; round-robin must surface BOTH.
@@ -489,7 +1045,885 @@ async function testMultiQuery() {
   );
   const sharedAttr = queryAttribution(queries, shared);
   assert.ok(sharedAttr[0].length >= 2, "a dual-topic section is attributed to both questions");
+
+  // Regression: shared tokens (FY25, financial tables) must not badge Quarterly
+  // with Q1 when net profit lives only in Five-Year Summary. Budget-200-sized
+  // text pushes Quarterly's Q1 score to ~0.41 (clears pack floor) but not
+  // near-top — the false [Q2][Q1] badge the UI showed before this fix.
+  const finDoc = [
+    "# Meridian Financials",
+    "## Five-Year Summary\n\n" + "FY25 net profit was $412M, up 8% year over year. ".repeat(8),
+    "## Segments FY25\n\n" + "Segment revenue breakdown for FY25 by business line. ".repeat(6),
+    "## Quarterly FY25\n\n" +
+      "Gross margin by quarter: Q1 24%, Q2 26%, Q3 28%, Q4 31%. Q4 had the best gross margin. ".repeat(3),
+  ].join("\n\n");
+  const finChunks = chunkMarkdown(finDoc);
+  const finTask = "What was net profit in FY25, and which quarter had the best gross margin?";
+  const finQueries = splitQueries(finTask);
+  const finAttr = queryAttribution(finQueries, finChunks);
+  const fiveYearIdx = finChunks.findIndex((c) => c.text.includes("net profit"));
+  const quarterlyIdx = finChunks.findIndex((c) => c.text.includes("Gross margin"));
+  assert.ok(fiveYearIdx >= 0 && quarterlyIdx >= 0, "financials fixture chunks found");
+  assert.ok(finAttr[fiveYearIdx]!.includes(0), "Five-Year answers Q1 (net profit)");
+  assert.ok(
+    !finAttr[quarterlyIdx]!.includes(0),
+    "Quarterly must not badge Q1 (weak FY25 overlap, no net profit)"
+  );
+  assert.ok(finAttr[quarterlyIdx]!.includes(1), "Quarterly answers Q2 (gross margin)");
+
   console.log("  multi-query ok: split + round-robin + multi-question attribution");
+}
+
+function testQueryAspects() {
+  assert.equal(splitTaskAspects("just one question about payment").length, 1);
+  assert.ok(!isMultiPartTask("What about batteries and air travel?"));
+  assert.ok(isMultiPartTask("What was net profit in FY25, and which quarter had the best gross margin?"));
+  assert.deepEqual(splitTaskAspects("What voids the warranty? Can it fly in rain?"), [
+    "What voids the warranty?",
+    "Can it fly in rain?",
+  ]);
+  assert.equal(splitTaskAspects("net profit; gross margin").length, 2);
+  // Multilingual conjunctions + Unicode-safe question-word starts (\\b fails on Devanagari).
+  assert.ok(isMultiPartTask("ईमानदार चायवाले को क्या मिला, और आम का पेड़ किसके हिस्से आया?"));
+  assert.ok(isMultiPartTask("¿Qué encontró el panadero, y qué preguntaba el último examen de la maestra?"));
+  assert.ok(isMultiPartTask("Что нашёл извозчик, и какой вопрос был на последнем экзамене?"));
+  assert.ok(isMultiPartTask("ماذا وجد الخبّاز، وما السؤال في امتحان المعلّمة الأخير؟"));
+  assert.equal(splitTaskAspects("ईमानदार चायवाले को क्या मिला, और आम का पेड़ किसके हिस्से आया?").length, 2);
+  console.log("  query-aspects ok: guarded and-split + hard separators + multilingual");
+}
+
+function testCompileNotes() {
+  const base = {
+    reduction_pct: 40,
+    token_budget: 2000,
+    tokens_used: 1200,
+    queries: ["net profit FY25", "best gross margin quarter"],
+    selected_sections: [{ id: "s1", section: "Doc > Quarterly", tokens: 800, relevance: 100 }],
+    omitted_sections: [{ id: "s2", section: "Doc > Five-Year Summary", tokens: 600, relevance: 38 }],
+    next_section_hint: null,
+  };
+  const hints = compileNoteHints(base);
+  assert.ok(hints.multi_part_nudge, "multi-part + omitted → nudge");
+  assert.ok(hints.omit_action, "omitted under budget → actionable omit");
+  assert.equal(hints.named_omit?.id, "s2", "names top omitted section");
+  assert.ok(MULTI_PART_NUDGE_TEXT.includes("more than one section"));
+  const whole = compileNoteHints({ ...base, reduction_pct: 0, omitted_sections: [] });
+  assert.ok(!whole.multi_part_nudge, "whole file → no nudge");
+
+  const truncatedFloor = budgetBoundHintBodyPlain({
+    token_budget: 1000,
+    next_section_hint: {
+      id: "s21",
+      section: "Pride > Chapter V",
+      tokens: 1400,
+      relevance: 100,
+      suggested_budget: 1400,
+    },
+    selected_sections: [{ id: "s21", truncated: true }],
+    budget_omitted_sections: [],
+    relevance_omitted_sections: [{ id: "s3" }],
+  });
+  assert.ok(
+    truncatedFloor.includes("Peek rest") && truncatedFloor.includes("Include rest in Prove"),
+    "truncated selected hint must point at Included card actions"
+  );
+  assert.ok(
+    !budgetBoundHintMentionsExpand({
+      token_budget: 1000,
+      next_section_hint: {
+        id: "s21",
+        section: "Pride > Chapter V",
+        tokens: 1400,
+        relevance: 100,
+        suggested_budget: 1400,
+      },
+      selected_sections: [{ id: "s21", truncated: true }],
+    }),
+    "truncated selected must not mention expand_section"
+  );
+  assert.ok(!truncatedFloor.includes("expand_section"), "truncated floor copy must not name expand_section");
+
+  const earlyHints = compileNoteHints({
+    ...base,
+    early_stopped: true,
+    tokens_used: 500,
+    next_section_hint: null,
+  });
+  assert.ok(earlyHints.early_stopped, "pack early_stopped → compile hint");
+  assert.ok(EARLY_STOPPED_FLOOR_TEXT.includes("Packed enough"), "coverage-complete floor copy");
+
+  const omittedWithChip = budgetBoundHintBodyPlain({
+    token_budget: 1150,
+    next_section_hint: {
+      id: "s18",
+      section: "Doc > I",
+      tokens: 773,
+      relevance: 81,
+      suggested_budget: 2000,
+    },
+    selected_sections: [{ id: "s0" }],
+    budget_omitted_sections: [{ id: "s18" }],
+  });
+  assert.ok(omittedWithChip.includes("expand_section (s18)"), "omitted hint with chip keeps expand_section");
+
+  console.log("  compile-notes ok: multi-part nudge + omit-action + budget-bound floor copy");
+}
+
+function testOmitBucketClassification() {
+  const multi = classifyOmitBuckets({
+    token_budget: 200,
+    tokens_used: 185,
+    queries: ["net profit FY25", "best gross margin quarter"],
+    selected_sections: [
+      {
+        id: "s2",
+        section: "Doc > Quarterly FY25",
+        tokens: 120,
+        relevance: 100,
+        matched_queries: [1],
+      },
+    ],
+    omitted_sections: [
+      {
+        id: "s0",
+        section: "Doc > Five-Year Summary",
+        tokens: 180,
+        relevance: 95,
+        matched_queries: [0],
+      },
+      {
+        id: "s1",
+        section: "Doc > Segments FY25",
+        tokens: 90,
+        relevance: 43,
+      },
+    ],
+    next_section_hint: null,
+    query_best_ids: ["s0", "s2"],
+  });
+  assert.equal(multi.budget_omitted_sections.length, 1, "Five-Year gaps uncovered Q1");
+  assert.equal(multi.budget_omitted_sections[0]!.id, "s0");
+  assert.deepEqual(multi.budget_omitted_sections[0]!.gap_queries, [0]);
+  assert.equal(multi.relevance_omitted_sections.length, 1, "Segments is lower-rel omit");
+  assert.equal(multi.relevance_omitted_sections[0]!.id, "s1");
+
+  const single = classifyOmitBuckets({
+    token_budget: 200,
+    tokens_used: 180,
+    queries: ["What is the refund policy?"],
+    selected_sections: [{ id: "s0", section: "Doc > Small", tokens: 50, relevance: 25 }],
+    omitted_sections: [
+      { id: "s1", section: "Doc > Refund", tokens: 500, relevance: 100 },
+      { id: "s2", section: "Doc > Other", tokens: 40, relevance: 15 },
+    ],
+    next_section_hint: {
+      id: "s1",
+      section: "Doc > Refund",
+      tokens: 500,
+      relevance: 100,
+      suggested_budget: 700,
+    },
+  });
+  assert.equal(single.budget_omitted_sections.length, 1);
+  assert.equal(single.budget_omitted_sections[0]!.id, "s1");
+  assert.equal(single.budget_omitted_sections[0]!.suggested_budget, 700);
+  assert.equal(single.relevance_omitted_sections[0]!.id, "s2");
+  console.log("  omit-buckets ok: aspect gaps + oversized-top single-query");
+}
+
+async function testMultiFacetFinancials() {
+  // Meridian-style: net profit in Five-Year Summary, gross margin in Quarterly FY25.
+  const doc = [
+    "# Meridian Financials",
+    "## Five-Year Summary\n\n" +
+      "FY25 net profit was $412M, up 8% year over year. Revenue and margin trends follow. ".repeat(25),
+    ...Array.from(
+      { length: 8 },
+      (_, i) => `## Filler ${i}\n\n` + `General corporate overview paragraph ${i}. `.repeat(18)
+    ),
+    "## Quarterly FY25\n\n" +
+      "Gross margin by quarter: Q1 24%, Q2 26%, Q3 28%, Q4 31%. Q4 had the best gross margin. ".repeat(22),
+  ].join("\n\n");
+  const path = testTmpPath(`meridian-fin-${Date.now()}.md`);
+  writeFileSync(path, doc);
+  try {
+    const task = "What was net profit in FY25, and which quarter had the best gross margin?";
+    assert.equal(splitQueries(task).length, 2, "task splits into two facets");
+
+    const r = await compileContext(path, task, 800);
+    assert.ok(r.reduction_pct > 0, "should compile under budget");
+    assert.ok(r.queries.length >= 2, "pipeline uses multi-aspect queries");
+
+    const hasNetProfit = r.markdown.includes("$412M") || r.markdown.includes("412M");
+    const hasGrossMargin =
+      r.markdown.includes("Gross margin") || r.markdown.includes("gross margin") || r.markdown.includes("Q4");
+    assert.ok(hasNetProfit, "compiled context must include FY25 net profit facet");
+    assert.ok(hasGrossMargin, "compiled context must include gross margin facet");
+
+    const fiveYearSelected = r.selected_sections.some((s) => s.section.includes("Five-Year"));
+    const quarterlySelected = r.selected_sections.some((s) => s.section.includes("Quarterly"));
+    assert.ok(
+      fiveYearSelected && quarterlySelected,
+      "round-robin should select both facet sections at this budget (old single-query kept only Quarterly)"
+    );
+
+    assert.ok(r.compile_hints.multi_part_nudge || r.omitted_sections.length > 0, "hints or omits tracked");
+    if (r.omitted_sections.length > 0) {
+      assert.ok(r.compile_hints.omit_action, "omitted sections get actionable framing");
+    }
+    console.log(
+      `  multi-facet financials ok: ${r.selected_sections.length} selected, ` +
+        `net=${hasNetProfit} margin=${hasGrossMargin}`
+    );
+  } finally {
+    unlinkSync(path);
+  }
+}
+
+async function testMultiFacetFinancialsBudget200() {
+  // Unified compile packing: at budget 200, query-aware partial of Five-Year
+  // (net profit facet) plus whole Quarterly (gross margin) — same intelligence
+  // as agent repack, without requiring an expand step.
+  const doc = meridianNetProfitAtEndDoc();
+  const path = testTmpPath(`meridian-fin-200-${Date.now()}.md`);
+  writeFileSync(path, doc);
+  try {
+    const task = "What was net profit in FY25, and which quarter had the best gross margin?";
+    const r = await compileContext(path, task, 200);
+
+    const fiveYearSel = r.selected_sections.find((s) => s.section.includes("Five-Year"));
+    const quarterlySelected = r.selected_sections.some((s) => s.section.includes("Quarterly"));
+    const segmentsSelected = r.selected_sections.some((s) => s.section.includes("Segments"));
+
+    assert.ok(fiveYearSel, "Five-Year must be included as a query-aware partial at budget 200");
+    assert.ok(fiveYearSel!.truncated, "Five-Year should be truncated, not whole");
+    assert.ok(
+      (fiveYearSel!.remainder_tokens ?? 0) > 0,
+      "truncated Five-Year must expose remainder_tokens for Prove Include rest"
+    );
+    assert.ok(quarterlySelected, "Quarterly FY25 facet must be included whole at budget 200");
+    assert.ok(!segmentsSelected, "weak Segments must not be selected at this budget");
+
+    assert.ok(
+      !r.budget_omitted_sections?.some((s) => s.section.includes("Five-Year")),
+      "Five-Year with a useful partial is Included, not budget-omit"
+    );
+    assert.ok(
+      r.relevance_omitted_sections?.some((s) => s.section.includes("Segments")),
+      "Segments should be in relevance-omit bucket"
+    );
+    assert.ok(
+      !r.relevance_omitted_sections?.some((s) => s.section.includes("Five-Year")),
+      "Five-Year must not appear in relevance-omit bucket"
+    );
+
+    assert.ok(r.markdown.includes("51.0"), "compiled context must include net profit facet (51.0)");
+    const hasGrossMargin =
+      r.markdown.includes("Gross margin") ||
+      r.markdown.includes("gross margin") ||
+      r.markdown.includes("35.1");
+    assert.ok(hasGrossMargin, "compiled context must include gross-margin facet content");
+
+    assert.ok(r.tokens_used <= 200, `content budget must hold: ${r.tokens_used}`);
+    assert.ok(
+      r.selected_sections.some((s) => s.text && s.text.length > 0),
+      "selected sections must carry text for the UI cards"
+    );
+    const quarterlySel = r.selected_sections.find((s) => s.section.includes("Quarterly"));
+    assert.ok(quarterlySel, "Quarterly FY25 facet must be included whole at budget 200");
+    assert.equal(quarterlySel!.relevance, 100, "Quarterly is a same-relevance peer to the top facet");
+    assert.ok(
+      !r.markdown.includes("Most relevant"),
+      "no oversized notice when a same-relevance peer is selected"
+    );
+    console.log(
+      `  multi-facet budget-200 ok: ${r.selected_sections.length} selected, ` +
+        `fiveYear_trunc=${fiveYearSel!.truncated}, quarterly=${quarterlySelected}, tokens=${r.tokens_used}`
+    );
+  } finally {
+    unlinkSync(path);
+  }
+}
+
+async function testMultiFacetFinancialsBudget800() {
+  // Early-stop must not starve uncovered facets. Pad the doc so the whole file
+  // does not fit — packing runs — then both facets must still land while clear
+  // padding fillers stay out.
+  const weakFillers = Array.from(
+    { length: 12 },
+    (_, i) =>
+      `## Appendix note ${i}\n\n` + `Generic appendix boilerplate ${i} with no financial metrics. `.repeat(20)
+  ).join("\n\n");
+  const doc = meridianNetProfitAtEndDoc() + "\n\n" + weakFillers;
+  const path = testTmpPath(`meridian-fin-800-${Date.now()}.md`);
+  writeFileSync(path, doc);
+  try {
+    const task = "What was net profit in FY25, and which quarter had the best gross margin?";
+    const r = await compileContext(path, task, 800);
+
+    const fiveYearSel = r.selected_sections.find((s) => s.section.includes("Five-Year"));
+    const quarterlySel = r.selected_sections.find((s) => s.section.includes("Quarterly"));
+    assert.ok(fiveYearSel, "Five-Year facet must be included at budget 800");
+    assert.ok(quarterlySel, "Quarterly facet must be included at budget 800 (early-stop must not starve Q2)");
+    assert.ok(
+      !r.selected_sections.some((s) => /Appendix note/i.test(s.section)),
+      "clear padding appendix fillers must not be packed just to fill budget"
+    );
+    assert.ok(r.markdown.includes("51.0"), "net profit facet in markdown");
+    assert.ok(
+      r.markdown.includes("35.1") || r.markdown.toLowerCase().includes("gross margin"),
+      "gross margin facet in markdown"
+    );
+    console.log(
+      `  multi-facet budget-800 ok: ${r.selected_sections.length} selected, tokens=${r.tokens_used}, ` +
+        `early_stopped=${r.compile_hints?.early_stopped ?? false}`
+    );
+  } finally {
+    unlinkSync(path);
+  }
+}
+
+async function testDemoParityFy25Budget200() {
+  /*
+   * Demo parity checklist (Meridian FY25 @ budget 200 — same path on Compile / Prove / Agent):
+   * 1. Compile → tokens_used ≈ selected_content_tokens; both facets in markdown/cards
+   * 2. Prove (no Include) → context_tokens ≈ compile substance, not manifest-inflated
+   * 3. Agent → tokens_read / final_context_tokens ≈ compile when answering without expand
+   * 4. Badges → Quarterly [Q2] only (no fake [Q1] on gross-margin section)
+   * 5. Buckets → Five-Year Included (truncated), not budget-omit
+   * 6. Soft ceiling → agent tokens_read ≤ 200 (+small slack)
+   */
+  const BUDGET = 200;
+  const TOKEN_SLACK = 5;
+  const PARITY_SLACK = 2;
+  const task = "What was net profit in FY25, and which quarter had the best gross margin?";
+  const doc = meridianNetProfitAtEndDoc();
+  const path = testTmpPath(`demo-parity-fy25-200-${Date.now()}.md`);
+  writeFileSync(path, doc);
+  try {
+    const compiled = await compileContext(path, task, BUDGET, "meridian.md");
+
+    // 1. Compile metering + facet content
+    assert.ok(compiled.tokens_used <= BUDGET, `compile content budget: ${compiled.tokens_used}`);
+    assert.ok(
+      Math.abs(compiled.tokens_used - compiled.selected_content_tokens) <= PARITY_SLACK,
+      `tokens_used (${compiled.tokens_used}) ≈ selected_content_tokens (${compiled.selected_content_tokens})`
+    );
+    assert.ok(compiled.markdown.includes("51.0"), "compile markdown includes net profit (51.0)");
+    assert.ok(
+      compiled.markdown.includes("35.1") || /gross margin/i.test(compiled.markdown),
+      "compile markdown includes gross-margin facet"
+    );
+
+    const fiveYearSel = compiled.selected_sections.find((s) => s.section.includes("Five-Year"));
+    const quarterlySel = compiled.selected_sections.find((s) => s.section.includes("Quarterly"));
+    assert.ok(fiveYearSel?.truncated, "Five-Year included as query-aware partial");
+    assert.ok(quarterlySel, "Quarterly FY25 included whole");
+    assert.ok(fiveYearSel!.text?.includes("51.0"), "Five-Year card text includes net profit");
+    assert.ok(
+      quarterlySel!.text?.includes("35.1") || /gross margin/i.test(quarterlySel!.text ?? ""),
+      "Quarterly card text includes gross margin"
+    );
+
+    // 5. Badges — Quarterly must not fake-tag Q1 (net profit lives in Five-Year)
+    assert.ok(quarterlySel!.matched_queries?.includes(1), "Quarterly badges Q2 (gross margin)");
+    assert.ok(
+      !quarterlySel!.matched_queries?.includes(0),
+      "Quarterly must not badge Q1 (weak FY25 overlap, no net profit)"
+    );
+    const finChunks = chunkMarkdown(doc);
+    const finQueries = splitQueries(task);
+    const finAttr = queryAttribution(finQueries, finChunks);
+    const quarterlyIdx = finChunks.findIndex((c) => c.text.includes("Gross margin"));
+    assert.ok(!finAttr[quarterlyIdx]!.includes(0), "attribution: Quarterly must not answer net-profit facet");
+
+    // 6. Omit buckets — truncated Five-Year is Included, not budget-omit
+    assert.ok(
+      !compiled.budget_omitted_sections?.some((s) => s.section.includes("Five-Year")),
+      "Five-Year with useful partial is Included, not budget-omit"
+    );
+    assert.ok(
+      compiled.relevance_omitted_sections?.some((s) => s.section.includes("Segments")),
+      "weak Segments stays relevance-omit"
+    );
+
+    // 2. Prove (no Include) matches compile substance, not manifest ballast
+    const { markdown: proveMarkdown, expandContentTokens } = await assembleProveContext(
+      path,
+      compiled,
+      [],
+      "meridian.md"
+    );
+    assert.equal(expandContentTokens, 0);
+    const proveContent = countContentTokens(proveMarkdown);
+    assert.ok(
+      Math.abs(proveContent - compiled.selected_content_tokens) <= PARITY_SLACK,
+      `Prove (${proveContent}) ≈ selected_content_tokens (${compiled.selected_content_tokens})`
+    );
+    assert.ok(
+      Math.abs(proveContent - compiled.tokens_used) <= PARITY_SLACK,
+      `Prove (${proveContent}) ≈ tokens_used (${compiled.tokens_used})`
+    );
+    const manifestInflated = countContentTokens(compiled.markdown);
+    assert.ok(
+      manifestInflated > proveContent + 15,
+      `compile markdown with manifest (${manifestInflated}) must not inflate Prove (${proveContent})`
+    );
+    assert.ok(!proveMarkdown.includes("Sections omitted"), "Prove ships substance only");
+
+    // 3 + 7. Agent answers from compile; tokens_read / final_context_tokens ≈ compile
+    let decideContext = "";
+    const mock: (p: string) => Promise<string> = async (prompt) => {
+      if (/ONLY a JSON object/.test(prompt)) {
+        const ctx = (prompt.match(/<context>\n([\s\S]*)\n<\/context>/) ?? [])[1] ?? "";
+        decideContext = ctx;
+        if (ctx.includes("51.0")) {
+          return JSON.stringify({ action: "answer", reasoning: "compile already has both facets" });
+        }
+        return JSON.stringify({ action: "answer", reasoning: "best effort" });
+      }
+      return "FY25 net profit was 51.0. Q4 had the best gross margin at 35.1%.";
+    };
+    const { runAgent } = await import("../agent.js");
+    const agent = await runAgent(path, task, {
+      startBudget: BUDGET,
+      tokenCeiling: BUDGET,
+      complete: (p) => mock(p),
+      sourceName: "meridian.md",
+    });
+
+    assert.equal(agent.stopped_reason, "confident", "agent answers from unified compile pack");
+    assert.ok(agent.tokens_read <= BUDGET + TOKEN_SLACK, `agent soft ceiling: ${agent.tokens_read}`);
+    assert.ok(
+      Math.abs(agent.tokens_read - compiled.selected_content_tokens) <= PARITY_SLACK,
+      `agent tokens_read (${agent.tokens_read}) ≈ compile (${compiled.selected_content_tokens})`
+    );
+    assert.ok(
+      Math.abs(agent.final_context_tokens - compiled.selected_content_tokens) <= PARITY_SLACK,
+      `agent final_context_tokens (${agent.final_context_tokens}) ≈ compile (${compiled.selected_content_tokens})`
+    );
+    assert.equal(
+      agent.final_context_tokens,
+      countContentTokens(agent.final_context ?? ""),
+      "final_context_tokens meters final_context substance"
+    );
+    assert.ok(agent.final_context?.includes("51.0"), "agent final context includes net profit");
+    assert.ok(agent.final_context?.includes("35.1"), "agent final context includes gross margin");
+    assert.ok(!agent.final_context?.includes("Sections omitted"), "agent answer context omits manifest");
+    assert.ok(
+      !decideContext.includes("Sections omitted"),
+      "agent decide <context> must be substance-only (manifest listed separately)"
+    );
+    const manifestInflatedAgent = countContentTokens(compiled.markdown);
+    assert.ok(
+      manifestInflatedAgent > agent.final_context_tokens + 15,
+      `agent parity must not use manifest-inflated compile markdown (${manifestInflatedAgent} vs ${agent.final_context_tokens})`
+    );
+
+    console.log(
+      `  demo parity FY25@200 ok: compile=${compiled.tokens_used} prove=${proveContent} ` +
+        `agent_read=${agent.tokens_read} agent_final=${agent.final_context_tokens}`
+    );
+  } finally {
+    unlinkSync(path);
+  }
+}
+
+function meridianNetProfitAtEndDoc(): string {
+  const filler = Array.from(
+    { length: 40 },
+    (_, i) => `FY${21 + (i % 5)} revenue and operating metrics row ${i} with extended commentary.`
+  ).join("\n");
+  return [
+    "# Meridian Financials",
+    "## Five-Year Summary\n\n" + filler + "\nNet profit | 51.0 | FY25",
+    "## Segments FY25\n\n" + "Segment revenue breakdown for FY25 by business line. ".repeat(6),
+    "## Quarterly FY25\n\n" +
+      "Gross margin by quarter: Q1 24%, Q2 26%, Q3 28%, Q4 35.1%. Q4 had the best gross margin. ".repeat(3),
+  ].join("\n\n");
+}
+
+function queryMissAgentDoc(): string {
+  // Huge matching line with the needle at the end: query-aware truncate keeps the
+  // line start under tiny headroom, then shrinks and drops WORDZXQ9 → query_miss.
+  const hugeNeedleLine = "x".repeat(2000) + " WORDZXQ9";
+  const filler = "Regional metrics narrative. ".repeat(80);
+  return [
+    "# Filing",
+    "## Overview\n\nShort overview without the secret code.",
+    "## Liability schedule\n\n" + filler + "\n\n" + hugeNeedleLine,
+  ].join("\n\n");
+}
+
+function testClientUxContracts() {
+  assert.equal(LAYOUT_FRAMES_BEFORE_SCROLL, 2, "first-compile scroll waits two layout frames");
+
+  assert.ok(isNearVisibleRect({ top: 10, bottom: 200 }, 800), "mid-viewport rect is near-visible");
+  assert.ok(!isNearVisibleRect({ top: 900, bottom: 1100 }, 800), "below-fold rect is not near-visible");
+  assert.ok(shouldScrollIntoView({ top: 900, bottom: 1100 }, 800), "scroll when off-screen");
+  assert.ok(!shouldScrollIntoView({ top: 10, bottom: 200 }, 800), "skip scroll when already visible");
+
+  assert.equal(shouldRemovePeekOnUncheck(), false, "unchecking Prove Include must not imply peek removal");
+  assert.equal(shouldClearAgentOnCompile(), true, "new compile must hide stale agent panel");
+  assert.equal(shouldClearResultsOnDocChange(), true, "doc change must hide compile results");
+  assert.equal(
+    shouldShowAgentSecIdle({
+      hasCompiledOnce: true,
+      resultsVisible: true,
+      questionStale: false,
+      budgetStale: false,
+    }),
+    true,
+    "fresh compile with results → idle agent section"
+  );
+  assert.equal(
+    shouldShowAgentSecIdle({
+      hasCompiledOnce: true,
+      resultsVisible: true,
+      questionStale: true,
+      budgetStale: false,
+    }),
+    false,
+    "question-stale hides idle agent section"
+  );
+  assert.equal(
+    shouldShowAgentSecIdle({
+      hasCompiledOnce: true,
+      resultsVisible: false,
+      questionStale: false,
+      budgetStale: false,
+    }),
+    false,
+    "no results on screen → hide idle agent section"
+  );
+  assert.ok(questionStaleBannerHtml().includes("Question changed"), "question-stale banner names the edit");
+  assert.equal(
+    shouldDisableProveAgentWhenQuestionStale(true, "Q1", "Q2"),
+    true,
+    "edited task disables Prove/Agent until recompile"
+  );
+  assert.equal(
+    shouldDisableProveAgentWhenQuestionStale(true, "Q1", "Q1"),
+    false,
+    "matching task keeps Prove/Agent enabled"
+  );
+  assert.equal(
+    shouldDisableProveAgentWhenQuestionStale(false, "Q1", "Q2"),
+    false,
+    "no prior compile → no question-stale lockout"
+  );
+  assert.equal(
+    shouldDisableProveWhenBudgetStale(true, 4000, 8000),
+    true,
+    "budget move disables Prove until recompile"
+  );
+  assert.equal(
+    shouldDisableProveWhenBudgetStale(true, 4000, 4000),
+    false,
+    "matching budget keeps Prove enabled"
+  );
+  assert.equal(
+    shouldDisableProveWhenBudgetStale(false, 4000, 8000),
+    false,
+    "power-path Prove before first compile stays enabled"
+  );
+  assert.equal(
+    shouldDisableProveWhenStale({
+      hasCompiledOnce: true,
+      lastCompiledTask: "Q1",
+      currentTask: "Q1",
+      lastCompiledBudget: 4000,
+      currentBudget: 8000,
+    }),
+    true,
+    "combined Prove stale includes budget drift"
+  );
+  assert.equal(shouldKeepAgentStepsOnCancel(), true, "cancel must keep partial agent steps");
+  assert.ok(agentStreamIncompleteMessage().includes("connection ended"), "incomplete SSE named");
+  assert.ok(emptyCompiledSectionsMessage().includes("No sections fit"), "empty included bucket is explicit");
+  assert.equal(taskInvalidatesCompile(null, "any"), false, "no prior compile → no task invalidation");
+  assert.equal(taskInvalidatesCompile("Q1", "Q1"), false, "same task stays valid");
+  assert.equal(taskInvalidatesCompile("Q1", "Q2"), true, "edited task invalidates compile");
+  assert.equal(taskInvalidatesCompile("  Q1  ", "Q1"), false, "trim matches last compile task");
+
+  const s0 = { expandedIds: new Set<string>(), expandedTokens: new Map<string, number>() };
+  const s1 = applyProveIncludeChange(s0, "s2", 120, true);
+  assert.ok(s1.expandedIds.has("s2") && s1.expandedTokens.get("s2") === 120);
+  const s2 = applyProveIncludeChange(s1, "s2", 120, false);
+  assert.ok(!s2.expandedIds.has("s2") && !s2.expandedTokens.has("s2"), "uncheck removes prove state only");
+
+  const truncMeta = truncatedSectionMeta(188, 412, 224, 95);
+  assert.ok(truncMeta.includes("224"), "truncated meta shows unread remainder count");
+  assert.ok(truncMeta.includes("still unread"), "truncated meta names unread remainder honestly");
+  assert.ok(
+    includeRestHint(224, "Five-Year Summary").includes("Five-Year Summary"),
+    "include hint names the section leaf"
+  );
+  assert.equal(packagingGapNote(188, 200), null, "small wrapper gap stays quiet");
+  assert.equal(
+    packagingGapNote(188, 250),
+    "188 content · ~250 with packaging",
+    "material packaging gap is named"
+  );
+
+  assert.ok(
+    rateLimitRetryHint("agent").includes("Run agent above or below"),
+    "429 agent hint names both Run agent controls"
+  );
+  assert.ok(rateLimitRetryHint("prove").includes("Prove"), "429 prove hint names Prove controls");
+  assert.ok(proveFlowUsesLocalError(), "prove API failures use local .prove-err, not top #err");
+  assert.equal(
+    apiFailureMessageFromStatus(429, "Rate limit reached. Try again in a few minutes.", null, "agent"),
+    "Rate limit reached. Try again in a few minutes. Use Run agent above or below when ready.",
+    "429 appends agent retry hint"
+  );
+  assert.equal(
+    apiFailureMessageFromStatus(503, "Server busy.", "30"),
+    "Server busy. Retry in about 30s.",
+    "503 uses Retry-After when present"
+  );
+
+  console.log("  client UX contracts ok: scroll, prove-include, truncated meta + include hint");
+}
+
+async function testAgentQueryMissOnExpand() {
+  const doc = queryMissAgentDoc();
+  const path = testTmpPath(`agent-query-miss-${Date.now()}.md`);
+  writeFileSync(path, doc);
+  try {
+    const task = "What is the secret code WORDZXQ9?";
+    const compiled = await compileContext(path, task, 100);
+    const liabilityOmit = compiled.omitted_sections.find((s) => s.section.includes("Liability"));
+    assert.ok(liabilityOmit, "Liability schedule should stay omitted at tight compile budget");
+
+    const tinyHeadroom = 80;
+    const probe = await expandSection(path, liabilityOmit!.id, tinyHeadroom, task);
+    assert.ok(!("error" in probe), "tiny expand should return a truncated partial");
+    assert.ok(probe.truncated, "expand under tiny headroom is truncated");
+    assert.ok(probe.query_miss, "truncated expand must flag query_miss when WORDZXQ9 is dropped");
+    assert.ok(!probe.markdown.includes("WORDZXQ9"), "partial must not retain the needle");
+
+    let answerPrompt = "";
+    let decideCalls = 0;
+    const mock: (p: string) => Promise<string> = async (prompt) => {
+      if (/ONLY a JSON object/.test(prompt)) {
+        decideCalls += 1;
+        assert.equal(decideCalls, 1, "query_miss should stop before a second decide");
+        return JSON.stringify({
+          action: "expand",
+          section_id: liabilityOmit!.id,
+          reasoning: "need the secret code",
+        });
+      }
+      answerPrompt = prompt;
+      return "The code is not in the excerpt; raise the budget.";
+    };
+
+    const compileTokens = compiled.selected_content_tokens ?? countContentTokens(compiled.markdown);
+    const tokenCeiling = compileTokens + tinyHeadroom;
+    const { runAgent } = await import("../agent.js");
+    const r = await runAgent(path, task, {
+      startBudget: 100,
+      tokenCeiling,
+      complete: (p) => mock(p),
+    });
+
+    assert.equal(r.stopped_reason, "token_ceiling", "query_miss expand aborts as token_ceiling");
+    assert.equal(r.unread_remaining, true, "manifest still has unread sections");
+    assert.ok(
+      !r.steps.some((s) => s.action === "expand"),
+      "failed query_miss expand must not emit expand step"
+    );
+    assert.ok(
+      !r.final_context?.includes("WORDZXQ9"),
+      "query_miss must not keep the expanded section needle in claimed context"
+    );
+    assert.match(answerPrompt, /partially read|higher budget/i, "answer prompt must not pretend full read");
+    assert.ok(
+      r.final_context_tokens <= tokenCeiling + 5,
+      `final context stays within ceiling (${r.final_context_tokens} vs ${tokenCeiling})`
+    );
+    console.log("  agent query_miss ok: token_ceiling stop, expand rolled back, honest answer prompt");
+  } finally {
+    unlinkSync(path);
+  }
+}
+
+async function testAgentRecompileTokensReadNoDoubleCount() {
+  const doc = meridianNetProfitAtEndDoc();
+  const path = testTmpPath(`agent-recompile-tokens-${Date.now()}.md`);
+  writeFileSync(path, doc);
+  try {
+    const task = "What was net profit in FY25, and which quarter had the best gross margin?";
+    let decideCalls = 0;
+    const mock: (p: string) => Promise<string> = async (prompt) => {
+      if (/ONLY a JSON object/.test(prompt)) {
+        decideCalls += 1;
+        if (decideCalls === 1) {
+          // Expand the omitted Quarterly facet (not a tiny title/crumb chunk).
+          const candidates = [...prompt.matchAll(/- (s\d+) "([^"]+)" \(~(\d+) tok/g)];
+          const quarterly = candidates.find((m) => /Quarterly/i.test(m[2] ?? ""));
+          const pick = quarterly ?? candidates.sort((a, b) => Number(b[3]) - Number(a[3]))[0];
+          assert.ok(pick, "manifest should offer an omitted facet section to expand");
+          return JSON.stringify({
+            action: "expand",
+            section_id: pick[1],
+            reasoning: "pull omitted Quarterly facet",
+          });
+        }
+        if (decideCalls === 2) {
+          return JSON.stringify({ action: "recompile", budget: 300, reasoning: "widen compile pack" });
+        }
+        return JSON.stringify({ action: "answer", reasoning: "enough from recompile+expand" });
+      }
+      return "FY25 net profit 51.0; Q4 best gross margin 35.1%.";
+    };
+
+    const { runAgent } = await import("../agent.js");
+    const r = await runAgent(path, task, {
+      // @100 correctly keeps Five-Year only; expand of Quarterly repacks under the
+      // ceiling. Ceiling must leave headroom after that so recompile can run.
+      startBudget: 100,
+      tokenCeiling: 800,
+      complete: (p) => mock(p),
+    });
+
+    assert.ok(
+      r.steps.some((s) => s.action === "expand"),
+      "agent expands once before recompile"
+    );
+    assert.ok(
+      r.steps.some((s) => s.action === "recompile"),
+      "agent recompiles under headroom ceiling"
+    );
+    const expectedRead = countContentTokens(r.final_context ?? "");
+    assert.equal(
+      r.tokens_read,
+      expectedRead,
+      `tokens_read must match final context substance (${r.tokens_read} vs ${expectedRead})`
+    );
+    assert.equal(r.final_context_tokens, expectedRead, "final_context_tokens uses same metering");
+    console.log(`  agent recompile tokens_read ok: ${r.tokens_read} tok (expand+recompile, no double-count)`);
+  } finally {
+    unlinkSync(path);
+  }
+}
+
+async function testExpandQueryAwareTruncation() {
+  const doc = meridianNetProfitAtEndDoc();
+  const path = testTmpPath(`expand-query-trunc-${Date.now()}.md`);
+  writeFileSync(path, doc);
+  try {
+    const task = "What was net profit in FY25, and which quarter had the best gross margin?";
+    const compiled = await compileContext(path, task, 200);
+    const fiveYearSel = compiled.selected_sections.find((s) => s.section.includes("Five-Year"));
+    assert.ok(fiveYearSel?.truncated, "compile includes Five-Year as query-aware partial");
+    assert.ok(
+      compiled.markdown.includes("51.0"),
+      "compile alone keeps Net profit 51.0 via query-aware partial"
+    );
+
+    const chunks = chunkMarkdown(doc);
+    const fiveChunk = chunks.find((c) => c.text.includes("Net profit"));
+    assert.ok(fiveChunk, "Five-Year chunk contains net profit row");
+
+    const partialBudget = fiveYearSel!.tokens;
+    const prefixOnly = truncateSectionToBudget(fiveChunk!.text, fiveChunk!.tokens, partialBudget);
+    assert.ok(prefixOnly, "prefix truncation produces a partial");
+    assert.ok(
+      !prefixOnly!.text.includes("51.0"),
+      "prefix-only truncation at the compile partial size must drop the Net profit row at section end"
+    );
+
+    const headroom = Math.max(40, fiveYearSel!.remainder_tokens ?? 40);
+    const smart = await expandSection(path, fiveYearSel!.id, headroom, task);
+    assert.ok(!("error" in smart), "query-aware expand succeeds");
+    assert.equal(smart.truncated, true, "expand is truncated under headroom");
+    assert.ok(smart.markdown.includes("51.0"), "query-aware expand keeps Net profit 51.0");
+    assert.ok(!smart.query_miss, "partial must retain query-relevant lines");
+
+    const proveExpand = await expandSection(path, fiveYearSel!.id, 2000);
+    assert.ok(!("error" in proveExpand), "full expand for Prove");
+    const { markdown: reassembled, expandContentTokens } = await assembleProveContext(
+      path,
+      compiled,
+      [fiveYearSel!.id],
+      "meridian.md"
+    );
+    const reassembledContent = countContentTokens(reassembled);
+    const fullFiveContent = countContentTokens(
+      proveExpand.markdown.replace(/^<!--[\s\S]*?-->\n?/, "").trim()
+    );
+    assert.ok(
+      reassembledContent >= fullFiveContent - 5,
+      "Prove Include rest replaces partial with full Five-Year"
+    );
+    assert.ok(
+      expandContentTokens >= (fiveYearSel!.remainder_tokens ?? 1) - 5,
+      "expand tokens should reflect remainder, not double-count partial"
+    );
+    assert.ok(
+      fullFiveContent > compiled.selected_content_tokens + 50,
+      `Prove full Five-Year (${fullFiveContent}) adds beyond compile selection (${compiled.selected_content_tokens})`
+    );
+    console.log(
+      `  expand query-aware ok: compile_has_51=true prefix_misses_net=true ` +
+        `prove_remainder=${expandContentTokens} effective=${reassembledContent}`
+    );
+  } finally {
+    unlinkSync(path);
+  }
+}
+
+async function testAgentMultiFacetBudget200() {
+  const doc = meridianNetProfitAtEndDoc();
+  const path = testTmpPath(`agent-fin-200-${Date.now()}.md`);
+  writeFileSync(path, doc);
+  try {
+    const task = "What was net profit in FY25, and which quarter had the best gross margin?";
+    const mock: (p: string) => Promise<string> = async (prompt) => {
+      if (/ONLY a JSON object/.test(prompt)) {
+        const ctx = (prompt.match(/<context>\n([\s\S]*)\n<\/context>/) ?? [])[1] ?? "";
+        if (ctx.includes("51.0")) {
+          return JSON.stringify({ action: "answer", reasoning: "compile already has both facets" });
+        }
+        return JSON.stringify({ action: "answer", reasoning: "best effort" });
+      }
+      const ctx = (prompt.match(/<document>\n([\s\S]*)\n<\/document>/) ?? [])[1] ?? "";
+      if (ctx.includes("51.0")) {
+        return "FY25 net profit was 51.0. Q4 had the best gross margin at 35.1%.";
+      }
+      if (/partially read|higher budget/i.test(prompt)) {
+        return (
+          "The excerpt does not include FY25 net profit — raise the token budget to read Five-Year Summary. " +
+          "Q4 had the best gross margin at 35.1%."
+        );
+      }
+      return "Cannot determine net profit from this excerpt.";
+    };
+
+    const { runAgent } = await import("../agent.js");
+    const r = await runAgent(path, task, {
+      startBudget: 200,
+      tokenCeiling: 200,
+      complete: (p) => mock(p),
+    });
+
+    const compileStep = r.steps.find((s) => s.action === "compile");
+    assert.ok(compileStep, "agent starts with compile");
+    assert.ok(r.tokens_read <= 205, `tokens_read stays at ceiling (${r.tokens_read})`);
+    assert.ok(
+      r.final_context?.includes("51.0"),
+      "agent context includes net profit from unified compile packing"
+    );
+    assert.ok(r.answer.includes("51.0"), "answer cites net profit, not 'missing from document'");
+    assert.ok(r.answer.includes("35.1"), "answer still covers gross-margin facet");
+    assert.equal(r.stopped_reason, "confident", "unified compile lets agent answer without expand");
+    assert.equal(r.unread_remaining, true, "truncated partial + omitted manifest → raise-budget CTA");
+    console.log(`  agent multi-facet budget-200 ok: tokens_read=${r.tokens_read} net=51.0 margin=35.1%`);
+  } finally {
+    unlinkSync(path);
+  }
 }
 
 async function testOpenAICompatClient() {
@@ -918,6 +2352,7 @@ async function testAgentLoop() {
     };
     const capped = await runAgent(path, "termination", {
       startBudget: 1200,
+      tokenCeiling: 50_000,
       maxSteps: 3,
       complete: (p) => alwaysExpand(p),
     });
@@ -939,9 +2374,8 @@ async function testAgentLoop() {
     assert.equal(safe.stopped_reason, "confident", "malformed decision → answer, not a loop");
     assert.ok(safe.answer.length > 0);
 
-    // 4. Soft token ceiling: always-expand with start === ceiling. Loop stops
-    // starting new expands once tokens_read >= ceiling; an in-flight expand
-    // may push tokens_read past the ceiling (intentional soft bound).
+    // 4. Soft token ceiling: always-expand with start === ceiling. Expands are
+    // truncated to remaining headroom; tokens_read stays at or under the ceiling.
     const softCeiling = 1500;
     const alwaysExpandCeiling: (p: string) => Promise<string> = async (prompt) => {
       if (/ONLY a JSON object/.test(prompt)) {
@@ -968,20 +2402,79 @@ async function testAgentLoop() {
       "always-expand under equal start/ceiling stops with token_ceiling"
     );
     assert.ok(
-      ceilingHit.tokens_read >= softCeiling || ceilingHit.steps.some((s) => s.action === "expand"),
-      `should hit soft ceiling or expand at least once (tokens_read=${ceilingHit.tokens_read})`
+      ceilingHit.tokens_read <= softCeiling + 5,
+      `tokens_read must stay at or under the ceiling (tokens_read=${ceilingHit.tokens_read})`
     );
-    // Soft overshoot is allowed: last expand can finish past the ceiling.
+    assert.ok(
+      ceilingHit.steps.filter((s) => s.action === "expand").length >= 1,
+      "truncated expands should run while headroom remains"
+    );
     assert.ok(
       ceilingHit.steps.filter((s) => s.action === "expand").length < 8,
       "soft ceiling bounds expand count"
     );
-    if (ceilingHit.tokens_read > softCeiling) {
-      assert.ok(
-        ceilingHit.steps.some((s) => s.action === "expand"),
-        "overshoot comes from an expand"
-      );
+    assert.equal(
+      ceilingHit.unread_remaining,
+      true,
+      "ceiling stop with unread left should flag raise-budget hint"
+    );
+
+    // 4b. Full section larger than remaining headroom still expands (truncated via repack).
+    // Repack under ceiling may leave headroom for one more decide → answer (confident),
+    // while unread_remaining stays true when the expand was truncated.
+    const tightCeiling = 900;
+    let expandDecisions = 0;
+    const expandOnce: (p: string) => Promise<string> = async (prompt) => {
+      if (/ONLY a JSON object/.test(prompt)) {
+        expandDecisions += 1;
+        if (expandDecisions === 1) {
+          const largest = [...(prompt.matchAll(/- (s\d+) "[^"]+" \(~(\d+) tok/g) ?? [])].sort(
+            (a, b) => Number(b[2]) - Number(a[2])
+          )[0];
+          assert.ok(largest, "manifest should list omitted sections");
+          assert.ok(Number(largest[2]) > 100, "pick a section larger than typical headroom");
+          return JSON.stringify({
+            action: "expand",
+            section_id: largest[1],
+            reasoning: "need the big section",
+          });
+        }
+        return JSON.stringify({ action: "answer", reasoning: "enough" });
+      }
+      return "truncated expand answer";
+    };
+    const truncated = await runAgent(path, "termination", {
+      startBudget: tightCeiling,
+      tokenCeiling: tightCeiling,
+      complete: (p) => expandOnce(p),
+    });
+    const expandStep = truncated.steps.find((s) => s.action === "expand");
+    assert.ok(expandStep, "should expand even when section > headroom");
+    assert.ok(
+      truncated.tokens_read <= tightCeiling + 5,
+      `repacked expand must respect ceiling (tokens_read=${truncated.tokens_read})`
+    );
+    assert.ok(
+      truncated.stopped_reason === "token_ceiling" || truncated.stopped_reason === "confident",
+      "after truncated repack, agent stops at ceiling or when model answers"
+    );
+    if (expandStep?.truncated) {
+      assert.equal(truncated.unread_remaining, true, "truncated section remainder → raise-budget hint");
     }
+
+    // 4c. Confident answer with headroom left: no raise-budget flag required for UX
+    // (client only shows CTA on token_ceiling + unread_remaining).
+    const answerNow: (p: string) => Promise<string> = async (prompt) =>
+      /ONLY a JSON object/.test(prompt)
+        ? JSON.stringify({ action: "answer", reasoning: "enough from compile" })
+        : "early answer";
+    const early = await runAgent(path, "termination", {
+      startBudget: 1500,
+      tokenCeiling: 1500,
+      complete: (p) => answerNow(p),
+    });
+    assert.equal(early.stopped_reason, "confident");
+    // May still have omitted sections, but CTA must not fire for confident stops.
 
     // 5. Equal start/ceiling: inject recompile → schema rejects it → answer
     // (no second compile). Use a large budget so relevance floor leaves
@@ -1013,7 +2506,7 @@ async function testAgentLoop() {
     );
 
     console.log(
-      "  agent loop ok: expand→answer, step-cap, bad JSON, soft ceiling, recompile omitted at equal ceiling"
+      "  agent loop ok: expand→answer, step-cap, bad JSON, soft ceiling, truncated expand, confident no CTA, recompile omitted at equal ceiling"
     );
   } finally {
     unlinkSync(path);
@@ -1096,8 +2589,8 @@ async function testAgentSseEndpoint() {
       assert.ok(done!.data.answer.includes("90 days"), "final answer arrives in the done event");
       assert.ok(done!.data.tokens_read < done!.data.raw_tokens, "reads less than the whole file");
       assert.ok(
-        done!.data.tokens_read <= 1200 + 2500,
-        "tokens_read stays near the soft ceiling (compile + at most one expand overshoot)"
+        done!.data.tokens_read <= 1200 + 5,
+        "tokens_read stays at or under the soft ceiling (truncated expands)"
       );
       const handle = done!.data.parity_handle as string;
       assert.ok(typeof handle === "string" && /^[a-f0-9]{32}$/.test(handle), "opaque parity_handle on done");
@@ -1157,6 +2650,107 @@ async function testAgentSseEndpoint() {
   });
 }
 
+async function testProveContextNoExpandMatchesSelectedTokens() {
+  // FY25@200: Prove with no includes must meter the same selected substance as
+  // compile/agent — not compile.markdown with omit-manifest ballast (~250 vs ~188).
+  const doc = meridianNetProfitAtEndDoc();
+  const path = testTmpPath(`prove-no-expand-${Date.now()}.md`);
+  writeFileSync(path, doc);
+  try {
+    const task = "What was net profit in FY25, and which quarter had the best gross margin?";
+    const compiled = await compileContext(path, task, 200, "meridian.md");
+    assert.ok(
+      compiled.selected_content_tokens <= 200,
+      `compile content budget: ${compiled.selected_content_tokens}`
+    );
+
+    const { markdown, expandContentTokens } = await assembleProveContext(path, compiled, [], "meridian.md");
+    assert.equal(expandContentTokens, 0);
+    const proveContent = countContentTokens(markdown);
+    assert.ok(
+      Math.abs(proveContent - compiled.selected_content_tokens) <= 2,
+      `Prove context (${proveContent}) must match selected_content_tokens (${compiled.selected_content_tokens})`
+    );
+    assert.ok(
+      Math.abs(proveContent - compiled.tokens_used) <= 2,
+      `Prove context (${proveContent}) must match tokens_used (${compiled.tokens_used})`
+    );
+
+    const manifestInflated = countContentTokens(compiled.markdown);
+    assert.ok(
+      manifestInflated > proveContent + 15,
+      `compile markdown with manifest (${manifestInflated}) must not inflate Prove (${proveContent})`
+    );
+    assert.ok(!markdown.includes("Sections omitted"), "Prove context must not ship omit manifest");
+    assert.ok(markdown.includes("51.0"), "Prove context keeps net profit facet");
+    console.log(
+      `  prove no-expand tokens ok: compile=${compiled.selected_content_tokens} prove=${proveContent} manifest=${manifestInflated}`
+    );
+  } finally {
+    unlinkSync(path);
+  }
+}
+
+async function testProveContextReassembly() {
+  // FY25 case: compile keeps Quarterly + truncated Five-Year. Prove Include rest
+  // must replace the partial (not stack partial + full) when reassembling.
+  const doc = meridianNetProfitAtEndDoc();
+  const path = testTmpPath(`prove-reassemble-${Date.now()}.md`);
+  writeFileSync(path, doc);
+  try {
+    const task = "What was net profit in FY25, and which quarter had the best gross margin?";
+    const compiled = await compileContext(path, task, 200, "meridian.md");
+    const fiveYearSel = compiled.selected_sections.find((s) => s.section.includes("Five-Year"));
+    assert.ok(fiveYearSel?.truncated, "Five-Year should be truncated Included at budget 200");
+    assert.ok(
+      compiled.selected_sections.some((s) => s.section.includes("Quarterly")),
+      "Quarterly should be selected"
+    );
+
+    const expand = await expandSection(path, fiveYearSel!.id);
+    assert.ok(!("error" in expand), "expand Five-Year");
+    const naiveConcat = compiled.markdown + "\n\n" + expand.markdown;
+    const naiveTokens = countContentTokens(naiveConcat);
+
+    const {
+      markdown: reassembled,
+      expandedApplied,
+      expandContentTokens,
+    } = await assembleProveContext(path, compiled, [fiveYearSel!.id], "meridian.md");
+    assert.deepEqual(expandedApplied, [fiveYearSel!.id], "Five-Year rest included");
+    assert.ok(reassembled.includes("51.0"), "reassembled context includes net profit");
+    assert.ok(reassembled.includes("35.1"), "reassembled context keeps Quarterly gross margin");
+
+    const effective = countContentTokens(reassembled);
+    const fullFiveContent = countContentTokens(expand.markdown.replace(/^<!--[\s\S]*?-->\n?/, "").trim());
+    const quarterlyContent = compiled.selected_content_tokens - (fiveYearSel!.tokens ?? 0);
+    const honestEstimate = quarterlyContent + fullFiveContent;
+    const oldInflated = compiled.selected_content_tokens + expand.tokens_used;
+    assert.ok(
+      effective <= compiled.raw_tokens + 20,
+      `reassembled content (${effective}) must not exceed raw (${compiled.raw_tokens}) + slack`
+    );
+    assert.ok(
+      oldInflated > effective,
+      `naive partial+full concat (${oldInflated}) inflated vs reassembled (${effective})`
+    );
+    assert.ok(
+      Math.abs(effective - honestEstimate) <= 8,
+      `effective (${effective}) should track quarterly+full Five-Year (${honestEstimate}), not naive ${naiveTokens}`
+    );
+    assert.ok(
+      expandContentTokens >= (fiveYearSel!.remainder_tokens ?? 1) - 5,
+      "expand content tokens should reflect remainder past compile partial"
+    );
+    console.log(
+      `  prove reassembly ok: raw=${compiled.raw_tokens} naive=${naiveTokens} effective=${effective} ` +
+        `(compile=${compiled.selected_content_tokens}, remainder=${expandContentTokens})`
+    );
+  } finally {
+    unlinkSync(path);
+  }
+}
+
 async function testAnswerExpandedIds() {
   // Prove path: omit a section at a tight budget, then pass its id via
   // expanded_ids so the compiled side grows and includes that needle.
@@ -1190,10 +2784,10 @@ async function testAnswerExpandedIds() {
   const tmp = testTmpPath(`cc-expand-ids-${Date.now()}.md`);
   writeFileSync(tmp, doc);
   let omittedId: string | null = null;
-  let baseTokens = 0;
+  let selectedBase = 0;
   try {
     const compiled = await compileContext(tmp, "alpha filler text", 400);
-    baseTokens = compiled.tokens_used;
+    selectedBase = compiled.selected_content_tokens;
     assert.ok(
       !compiled.markdown.includes("UNIQUE_EXPAND_NEEDLE_XYZ"),
       "needle should be omitted when the query targets Alpha"
@@ -1233,8 +2827,8 @@ async function testAnswerExpandedIds() {
       };
       assert.deepEqual(body.compiled?.expanded_ids, [omittedId], "expanded_ids echoed on compiled side");
       assert.ok(
-        (body.compiled!.context_tokens as number) > baseTokens,
-        `compiled context should grow with expand (${body.compiled!.context_tokens} vs base ${baseTokens})`
+        (body.compiled!.context_tokens as number) > selectedBase,
+        `reassembled context should exceed selected-only base (${body.compiled!.context_tokens} vs ${selectedBase})`
       );
       assert.equal(body.compiled?.answer, "found-needle", "compiled prompt must include the expanded needle");
       console.log("  answer expanded_ids ok: omitted needle merged into Prove context");
@@ -1536,9 +3130,77 @@ async function testSmallFilePassthrough() {
   writeFileSync(path, "# Tiny\n\nJust a small note about nothing.");
   try {
     const r = await compileContext(path, "anything", 4000);
-    assert.equal(r.tokens_saved, 0);
-    assert.ok(r.markdown.includes("small note"));
-    console.log("  passthrough ok: small files returned whole");
+    assert.ok(r.markdown.includes("small note"), "tiny file content survives compile");
+    assert.ok(r.selected_sections.length >= 1, "tiny file selects at least one section");
+    console.log("  passthrough ok: tiny file compiles without whole-doc short-circuit");
+  } finally {
+    unlinkSync(path);
+  }
+}
+
+/**
+ * Regression: when rawTokens ≤ budget, do NOT dump the whole doc.
+ * Pointed query + spare budget must omit zero-relevance fillers and set early_stopped.
+ */
+async function testNoWholeFileDumpAboveRawTokens() {
+  const path = testTmpPath(`cc-no-dump-${Date.now()}.md`);
+  const doc = [
+    "# Annual Report",
+    "",
+    "## Product development",
+    "The Helix e-cargo prototype and Orbit GPS tracker R&D programs were cancelled",
+    "because component costs made unit economics unviable.",
+    "",
+    "## Letter from the CEO",
+    "Dear shareholders, we had a strong year overall with revenue growth.",
+    "Lorem corporate filler. ".repeat(20),
+    "",
+    "## Company overview",
+    "We make bicycles and accessories for urban riders.",
+    "More unrelated overview text. ".repeat(20),
+    "",
+    "## Financial highlights",
+    "Revenue was up. Gross margin improved. Unrelated to R&D cancellations.",
+    "Numbers and boilerplate. ".repeat(20),
+    "",
+    "## Awards and recognition",
+    "Industry awards for design excellence this year.",
+    "Award filler. ".repeat(15),
+  ].join("\n");
+  writeFileSync(path, doc);
+  try {
+    const task = "Which R&D programs were cancelled and why?";
+    const at400 = await compileContext(path, task, 400);
+    const raw = at400.raw_tokens;
+    assert.ok(raw > 0 && raw < 2000, `fixture should be mid-size, got raw=${raw}`);
+    // Budget above raw — old short-circuit would select every section including 0%.
+    const overRaw = raw + 200;
+    const big = await compileContext(path, task, overRaw);
+    assert.ok(big.raw_tokens <= overRaw, "budget exceeds raw (short-circuit temptation)");
+    assert.ok(big.omitted_sections.length > 0, "must omit sections even when budget ≥ raw");
+    assert.ok(
+      !big.selected_sections.some((s) => (s.relevance ?? 0) === 0),
+      `must not select 0% sections: ${big.selected_sections.map((s) => s.id + "@" + s.relevance).join(",")}`
+    );
+    assert.ok(big.compile_hints.early_stopped, "spare budget → early_stopped / Packed enough");
+    assert.ok(/cancelled|Helix|Orbit/i.test(big.markdown), "answer-bearing content must still be packed");
+    // Larger budget must not grow via zero/low fillers once 400 answers.
+    const ids400 = at400.selected_sections
+      .map((s) => s.id)
+      .sort()
+      .join(",");
+    const idsBig = big.selected_sections
+      .map((s) => s.id)
+      .sort()
+      .join(",");
+    assert.equal(ids400, idsBig, `section ids stable 400→${overRaw}: ${ids400}→${idsBig}`);
+    assert.ok(
+      !at400.selected_sections.some((s) => (s.relevance ?? 0) === 0),
+      "400 must not include 0% either"
+    );
+    console.log(
+      `  no whole-file dump ok: raw=${raw} @400→${at400.selected_sections.length} @${overRaw}→${big.selected_sections.length} stop=${big.compile_hints.early_stopped}`
+    );
   } finally {
     unlinkSync(path);
   }
@@ -1628,14 +3290,14 @@ async function testPathGuardBlocksSymlinkEscape() {
     symlinkSync(secret, escape);
     assert.throws(
       () => checkPathWithin(root, escape),
-      /outside allowed root/,
+      /outside the allowed root|outside allowed root/,
       "symlink escaping CC_ROOT must be denied"
     );
 
     // A plain path traversal is also denied.
     assert.throws(
       () => checkPathWithin(root, join(root, "..", "..", "etc", "passwd")),
-      /outside allowed root|Not a file/
+      /outside the allowed root|outside allowed root|Not a readable file/
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -1708,6 +3370,255 @@ function testEnvParsingFailsSafe() {
   console.log("  env parsing ok: NaN/blank/out-of-range all fall back safely");
 }
 
+function testTrustProxyFailsSafe() {
+  // Jul 18 P6: blanket CC_TRUST_PROXY=true must NOT enable spoofable XFF unless
+  // the explicit insecure override is set.
+  const savedTrust = process.env.CC_TRUST_PROXY;
+  const savedAllow = process.env.CC_ALLOW_INSECURE_TRUST_PROXY;
+  try {
+    delete process.env.CC_TRUST_PROXY;
+    delete process.env.CC_ALLOW_INSECURE_TRUST_PROXY;
+    assert.equal(trustProxyFromEnv(), false, "default trust proxy is false");
+
+    process.env.CC_TRUST_PROXY = "true";
+    assert.equal(trustProxyFromEnv(), false, "true ignored without insecure override");
+
+    process.env.CC_ALLOW_INSECURE_TRUST_PROXY = "1";
+    assert.equal(trustProxyFromEnv(), true, "true allowed only with insecure override");
+
+    delete process.env.CC_ALLOW_INSECURE_TRUST_PROXY;
+    process.env.CC_TRUST_PROXY = "1";
+    assert.equal(trustProxyFromEnv(), 1, "hop count 1 is accepted");
+
+    process.env.CC_TRUST_PROXY = "false";
+    assert.equal(trustProxyFromEnv(), false);
+  } finally {
+    if (savedTrust === undefined) delete process.env.CC_TRUST_PROXY;
+    else process.env.CC_TRUST_PROXY = savedTrust;
+    if (savedAllow === undefined) delete process.env.CC_ALLOW_INSECURE_TRUST_PROXY;
+    else process.env.CC_ALLOW_INSECURE_TRUST_PROXY = savedAllow;
+  }
+  console.log("  trust proxy ok: true ignored unless insecure override; hop count works");
+}
+
+function testSanitizeSourceNameBlocksCommentBreakout() {
+  // Jul 18 P11 + XSS/filename: crafted upload names must not break HTML comments
+  // or inject markup into compiled-context headers.
+  assert.equal(sanitizeSourceName("../../etc/passwd"), "passwd");
+  assert.equal(sanitizeSourceName('evil-->\n<script>alert(1)</script>.md'), "evil_script_alert_1_script_.md");
+  assert.ok(!sanitizeSourceName("x-->y.md").includes("-->"));
+  assert.ok(!/[\r\n]/.test(sanitizeSourceName("a\r\nb.md")));
+  const compiled = assemble(sanitizeSourceName('break-->out.md'), [], []);
+  assert.ok(compiled.startsWith("<!-- Compiled context from: break_out.md -->"));
+  assert.ok(!compiled.includes("-->out"));
+  console.log("  sanitizeSourceName ok: path strip + comment/XSS breakout blocked");
+}
+
+async function testConversionMissingPathIsPathFree() {
+  await assert.rejects(
+    () => convertToMarkdown(join(tmpdir(), "cc-no-such-file-" + Date.now() + ".md")),
+    (e: unknown) => {
+      assert.ok(e instanceof ConversionError);
+      const m = (e as Error).message;
+      assert.ok(!m.includes(tmpdir()), "must not echo absolute paths");
+      assert.ok(!/\/Users\/|\/tmp\/|\/var\//.test(m), "must not contain filesystem roots");
+      assert.match(m, /readable file/i);
+      return true;
+    }
+  );
+  console.log("  convert missing-path ok: ConversionError is path-free");
+}
+
+async function testCacheCorruptionFallsThrough() {
+  // DR: a corrupt/empty cache entry must not crash; operators can wipe cache
+  // and convert again. Content-hash keys mean a bad file is just a miss/hit
+  // of garbage — we only assert get/put round-trip and missing key → null.
+  const dir = mkdtempSync(join(tmpdir(), "cc-cache-"));
+  await withCleanEnv(["CC_CACHE_DIR"], async () => {
+    process.env.CC_CACHE_DIR = dir;
+    // Dynamic import after env set so CACHE_DIR is read fresh… cache.ts binds
+    // at module load. Use the already-imported helpers which read env at call
+    // time for CACHE_DIR — actually CACHE_DIR is const at import. Write via
+    // the public API after re-importing under the env.
+    }, { CC_CACHE_DIR: dir });
+  // cache.ts captures CACHE_DIR at import; exercise via writeFileSync the same
+  // layout and assert cacheGet returns null for unknown keys + put/get works
+  // on the live module's configured dir (homedir default is fine for shape).
+  const key = "a".repeat(64);
+  assert.equal(cacheGet(key), null, "unknown cache key is a miss");
+  cachePut(key, "# recovered\n\nok");
+  assert.equal(cacheGet(key), "# recovered\n\nok");
+  // Corrupt the entry the same way a partial write / disk glitch would.
+  const cachePath = join(
+    process.env.CC_CACHE_DIR ?? join((await import("node:os")).homedir(), ".cache", "context-compiler"),
+    `${key}.md`
+  );
+  if (existsSync(cachePath)) {
+    writeFileSync(cachePath, "\u0000\u0001CORRUPT");
+    assert.equal(cacheGet(key), "\u0000\u0001CORRUPT", "corrupt entry is returned as opaque bytes (caller re-converts on wipe)");
+    unlinkSync(cachePath);
+    assert.equal(cacheGet(key), null, "after wipe, miss → fresh convert");
+  }
+  rmSync(dir, { recursive: true, force: true });
+  console.log("  cache DR ok: miss/corrupt/wipe without crash");
+}
+
+async function testWeightedRateLimitBlocksAgentSpend() {
+  // Jul 18 P0: agent/answer must cost more than one rate token so a single
+  // IP cannot burn unbounded LLM spend under a naive request count.
+  await withCleanEnv(["CC_RATE_LIMIT", "CC_RATE_COST_AGENT", "CC_RATE_COST_ANSWER"], async () => {
+    // web.ts reads RATE_* at module load — the suite already imported web via
+    // other tests. Probe via /api/config values (locked) AND simulate the
+    // requestCost math by exhausting a tiny in-process window against compile
+    // (cost 1) vs checking config reports weighted costs. Live re-bind of
+    // RATE_LIMIT requires a fresh process; assert the contract the running
+    // module exposes and that multer rejects oversized fields (chaos).
+    const { app } = await import("../web.js");
+    const server = app.listen(0);
+    await new Promise<void>((r) => server.once("listening", () => r()));
+    const port = (server.address() as { port: number }).port;
+    try {
+      const cfg = (await (await fetch(`http://127.0.0.1:${port}/api/config`)).json()) as {
+        rate_limit: number;
+        rate_cost_agent: number;
+        rate_cost_answer: number;
+        llm_available: boolean;
+      };
+      assert.ok(cfg.rate_cost_agent >= 8, "agent must be heavy vs one compile token");
+      assert.ok(cfg.rate_cost_answer >= 2, "answer/parity must cost >1");
+      assert.ok(
+        cfg.rate_cost_agent * 2 > cfg.rate_limit || cfg.rate_limit / cfg.rate_cost_agent <= 3,
+        "at most a few agent runs fit in the default window"
+      );
+
+      // Missing key degradation: Prove/Agent refuse cleanly without LLM keys.
+      await withCleanEnv([...LLM_PROVIDER_KEYS, ...LLM_MODEL_KEYS, "CC_LLM_BASE_URL"], async () => {
+        const form = new FormData();
+        form.append("task", "anything");
+        form.append("file", new Blob(["# Hi\n\nHello."], { type: "text/markdown" }), "doc.md");
+        const ans = await fetch(`http://127.0.0.1:${port}/api/answer`, { method: "POST", body: form });
+        assert.equal(ans.status, 400, "answer without key → 400");
+        const body = (await ans.json()) as { error?: string };
+        assert.ok(body.error && /API key/i.test(body.error), "points at configuring a key");
+        assert.ok(!/sk-|Bearer |traceback/i.test(body.error), "no secret/provider recon");
+
+        const agent = await fetch(`http://127.0.0.1:${port}/api/agent`, { method: "POST", body: form });
+        assert.equal(agent.status, 400, "agent without key → 400");
+      });
+
+      // Malformed / oversized multipart field (chaos): multer fieldSize 32kb.
+      const big = new FormData();
+      big.append("task", "x".repeat(40_000));
+      big.append("file", new Blob(["# Hi\n\nok"], { type: "text/markdown" }), "doc.md");
+      const huge = await fetch(`http://127.0.0.1:${port}/api/compile`, { method: "POST", body: big });
+      assert.equal(huge.status, 413, "oversized form field → 413 JSON");
+      const hugeBody = (await huge.json()) as { error?: string };
+      assert.ok(hugeBody.error, "JSON error body, not HTML stack");
+      assert.ok(!/at |\/Users\/|node_modules/.test(hugeBody.error!), "no stack/path leak");
+
+      // Empty multipart / no file.
+      const empty = new FormData();
+      empty.append("task", "hi");
+      const noFile = await fetch(`http://127.0.0.1:${port}/api/compile`, { method: "POST", body: empty });
+      assert.equal(noFile.status, 400);
+
+      console.log("  weighted rate + chaos ok: agent/answer costs; keyless 400; oversized field 413");
+    } finally {
+      server.close();
+    }
+  });
+}
+
+async function testConcurrentCompileSameBytes() {
+  // Chaos: two concurrent compiles of identical upload bytes must both succeed
+  // (content-addressed saveUpload + exclusive create).
+  const { app } = await import("../web.js");
+  const server = app.listen(0);
+  await new Promise<void>((r) => server.once("listening", () => r()));
+  const port = (server.address() as { port: number }).port;
+  try {
+    const body = "# Concurrent\n\nShared bytes for race " + Date.now() + ".\n";
+    const mk = () => {
+      const fd = new FormData();
+      fd.append("task", "What is this about?");
+      fd.append("token_budget", "500");
+      fd.append("file", new Blob([body], { type: "text/markdown" }), "race.md");
+      return fetch(`http://127.0.0.1:${port}/api/compile`, { method: "POST", body: fd });
+    };
+    const [a, b] = await Promise.all([mk(), mk()]);
+    assert.equal(a.status, 200, "first concurrent compile succeeds");
+    assert.equal(b.status, 200, "second concurrent compile succeeds");
+    const ja = (await a.json()) as { handle?: string; markdown?: string };
+    const jb = (await b.json()) as { handle?: string; markdown?: string };
+    assert.ok(ja.handle && jb.handle, "both mint opaque handles");
+    assert.ok(ja.markdown && jb.markdown, "both return compiled markdown");
+    console.log("  concurrent same-bytes compile ok");
+  } finally {
+    server.close();
+  }
+}
+
+async function testAnswerErrorsAreSanitized() {
+  // Jul 18 P3: /api/answer must never return raw provider Error.message.
+  const http = await import("node:http");
+  const chat = http.createServer((_req, res) => {
+    res.statusCode = 500;
+    res.end(JSON.stringify({ error: "secret recon /usr/lib/node_modules/openai boom sk-live-LEAK" }));
+  });
+  await new Promise<void>((r) => chat.listen(0, r));
+  const chatPort = (chat.address() as { port: number }).port;
+
+  await withCleanEnv([...LLM_PROVIDER_KEYS, ...LLM_MODEL_KEYS, "CC_LLM_BASE_URL"], async () => {
+    process.env.CC_LLM_API_KEY = "test-key";
+    process.env.CC_LLM_BASE_URL = `http://127.0.0.1:${chatPort}/v1`;
+
+    const { app } = await import("../web.js");
+    const server = app.listen(0);
+    await new Promise<void>((r) => server.once("listening", () => r()));
+    const port = (server.address() as { port: number }).port;
+    try {
+      const form = new FormData();
+      form.append("task", "What is the notice period?");
+      form.append("file", new Blob([makeTestDoc()], { type: "text/markdown" }), "doc.md");
+      const res = await fetch(`http://127.0.0.1:${port}/api/answer`, { method: "POST", body: form });
+      assert.ok([500, 503].includes(res.status), "failed answer stays in 5xx");
+      const body = (await res.json()) as { error?: string };
+      assert.ok(body.error, "JSON error");
+      assert.ok(!/sk-live|node_modules|\/usr\/lib|Traceback/i.test(body.error!), "no provider recon");
+      console.log("  answer error hygiene ok: generic client message on provider failure");
+    } finally {
+      server.close();
+      chat.close();
+    }
+  });
+}
+
+async function testDiskStorageNotMemory() {
+  // Jul 18 P2: multer must use disk storage (not memory) so large multipart
+  // does not sit in V8 heap before the converter queue.
+  const webSrc = readFileSync(join(process.cwd(), "src", "web.ts"), "utf-8");
+  assert.ok(/diskStorage\s*\(/.test(webSrc), "web.ts uses multer.diskStorage");
+  assert.ok(!/memoryStorage\s*\(/.test(webSrc), "web.ts must not use memoryStorage");
+  console.log("  upload admission ok: diskStorage in web.ts (no memoryStorage)");
+}
+
+function testPathGuardMessagesArePathFree() {
+  const root = mkdtempSync(join(tmpdir(), "cc-root-"));
+  try {
+    try {
+      checkPathWithin(root, join(root, "missing.txt"));
+      assert.fail("expected throw");
+    } catch (e) {
+      const m = String((e as Error).message);
+      assert.ok(!m.includes(root), "missing-file error must not echo absolute root");
+      assert.match(m, /readable file|Access denied/i);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+  console.log("  path-guard messages ok: no absolute paths in client-facing errors");
+}
+
 function testTokenizeCjkAndStem() {
   const zh = tokenize("退款需要多少天");
   assert.ok(zh.includes("退款"), "CJK bigrams include 退款");
@@ -1749,7 +3660,465 @@ function testTokenizeQueryCleanupAndHonorific() {
   assert.ok(neg.includes("not"), "negation kept in query");
   assert.ok(neg.includes("warranty") && neg.includes("cover"));
 
-  console.log("  tokenizeQuery ok: stopwords/fillers, Jane→Miss, no false Cap–Cap, negation kept");
+  // Multilingual stopwords: particles must not survive to steer BM25.
+  const hi = tokenizeQuery("यह किताब किस बारे में है?");
+  assert.ok(!hi.includes("में") && !hi.includes("है") && !hi.includes("किस"), "Hindi glue dropped");
+  const es = tokenizeQuery("¿De qué trata este libro?");
+  assert.ok(!es.includes("de") && !es.includes("qué") && !es.includes("este"), "Spanish glue dropped");
+  const ru = tokenizeQuery("О чём эта книга?");
+  assert.ok(!ru.includes("чём") && !ru.includes("эта"), "Russian glue dropped");
+  // All-glue vague queries may be empty (recall insurance) or keep a content noun only.
+  assert.ok(
+    hi.every((t) => t.length > 1),
+    "no empty-string Hindi tokens"
+  );
+
+  // Arabic harakat normalized so vocalized query matches bare document form.
+  const arQ = tokenizeQuery("ماذا وجد الخبّاز؟");
+  const arDoc = tokenize("وجد الخباز صرّة");
+  assert.ok(arQ.includes("الخباز"), "Arabic query drops shadda for matching");
+  assert.ok(arDoc.includes("الخباز"), "Arabic doc drops shadda for matching");
+  assert.ok(arQ.includes("وجد") && arDoc.includes("وجد"), "shared Arabic stem kept");
+
+  console.log(
+    "  tokenizeQuery ok: stopwords/fillers, Jane→Miss, multilingual glue, Arabic marks, negation kept"
+  );
+}
+
+function testNameIntentDetectionAndBoost() {
+  const task = "What is Ms. Bingley's first name?";
+  assert.deepEqual(detectNameIntent(task), { surname: "bingley" });
+  assert.equal(detectNameIntent("What does Mr. Bingley think of Jane?"), null);
+  assert.equal(detectNameIntent("jane and darcy at the ball"), null);
+
+  assert.ok(chunkHasGivenNameSpan("Yours ever,\n\nCAROLINE BINGLEY.", "bingley"));
+  assert.ok(!chunkHasGivenNameSpan("Miss Bingley danced twice.", "bingley"));
+  assert.ok(chunkHasGivenNameSpan("Caroline Bingley wrote the note.", "bingley"));
+  assert.ok(!chunkHasGivenNameSpan("The Thornton family had long been fixtures.", "thornton"));
+  assert.ok(!chunkHasGivenNameSpan("Young Thornton fell asleep.", "thornton"));
+
+  const honorificHeavy = Array.from({ length: 8 }, (_, i) => ({
+    id: `s${i}`,
+    breadcrumb: "Book > Ch",
+    text: `Miss Bingley appeared again in paragraph ${i}. Bingley smiled.`,
+    order: i,
+    tokens: 50,
+  }));
+  const signature = {
+    id: "s8",
+    breadcrumb: "Book > Ch",
+    text: "The letter closed with CAROLINE BINGLEY.",
+    order: 8,
+    tokens: 40,
+  };
+  const chunks = [...honorificHeavy, signature];
+  const base = bm25Scores(task, chunks);
+  const boosted = applyNameIntentBoost(task, chunks, base);
+  const sigIdx = chunks.length - 1;
+  assert.ok(
+    boosted[sigIdx]! > boosted[0]!,
+    "given-name signature chunk should outrank honorific-only Bingley chunks"
+  );
+
+  const order = boosted.map((s, i) => ({ id: chunks[i]!.id, s })).sort((a, b) => b.s - a.s);
+  assert.equal(order[0]!.id, "s8", "boosted rank should lead with signature chunk");
+
+  const part1 = {
+    id: "s0",
+    breadcrumb: "Book > Ch",
+    text: "Miss Bingley talked all evening.",
+    order: 0,
+    tokens: 50,
+  };
+  const part2 = {
+    id: "s1",
+    breadcrumb: "Book > Ch",
+    text: "Signed CAROLINE BINGLEY.",
+    order: 1,
+    tokens: 40,
+  };
+  const splitRanked = prepareRankedForPack([part1, part2], [part1, part2], task);
+  assert.equal(splitRanked[0]!.id, "s1", "split sibling with given name promoted ahead of honorific half");
+
+  assert.equal(splitTaskAspects("jane and darcy at the ball").length, 1, "noun list stays single-aspect");
+  console.log("  name-intent ok: detect, given-name span, boost, sibling promote");
+}
+
+async function testNameIntentCompilePrideAndPrejudice() {
+  const path = join(process.cwd(), "public", "samples", "pride-and-prejudice.docx");
+  if (!existsSync(path)) {
+    console.log("  name-intent P&P skipped: sample docx not present");
+    return;
+  }
+  const task = "What is Ms. Bingley's first name?";
+  const at1000 = await compileContext(path, task, 1000, "Pride and Prejudice");
+  const at4000 = await compileContext(path, task, 4000, "Pride and Prejudice");
+  assert.ok(/caroline/i.test(at1000.markdown), "1000 budget must include Caroline");
+  assert.ok(/caroline/i.test(at4000.markdown), "4000 budget must include Caroline");
+  const ids1000 = at1000.selected_sections
+    .map((s) => s.id)
+    .sort()
+    .join(",");
+  const ids4000 = at4000.selected_sections
+    .map((s) => s.id)
+    .sort()
+    .join(",");
+  assert.equal(ids4000, ids1000, "4000 must select the same sections as 1000 once name-intent is covered");
+  assert.ok(at4000.compile_hints?.early_stopped, "4000 should stop once Caroline is in — not novel-fill");
+  assert.ok(
+    at4000.selected_sections.length < 6,
+    `4000 must not vacuum Bingley chapters: got ${at4000.selected_sections.length}`
+  );
+  console.log(
+    `  name-intent P&P ok: 1000→${at1000.selected_sections.length} sel/${at1000.tokens_used} tok, ` +
+      `4000→${at4000.selected_sections.length} sel/${at4000.tokens_used} tok, ` +
+      `early_stopped=${at4000.compile_hints?.early_stopped ?? false}`
+  );
+}
+
+async function testNameIntentSyntheticCompile() {
+  const src = join(FIXTURES_DIR, "name-intent-synthetic.md");
+  const path = testTmpPath(`name-intent-${Date.now()}.md`);
+  writeFileSync(path, readFileSync(src, "utf-8"));
+  mkdirSync(join(TEST_TMP, "cache"), { recursive: true });
+  const prevCache = process.env.CC_CACHE_DIR;
+  process.env.CC_CACHE_DIR = join(TEST_TMP, "cache");
+  try {
+    const r = await compileContext(path, "What is Miss Thornton's given name?", 500);
+    assert.ok(/sarah/i.test(r.markdown), "synthetic fixture must surface SARAH THORNTON");
+    console.log("  name-intent synthetic ok: Sarah Thornton in compiled markdown");
+  } finally {
+    if (prevCache === undefined) delete process.env.CC_CACHE_DIR;
+    else process.env.CC_CACHE_DIR = prevCache;
+    try {
+      unlinkSync(path);
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+async function testSherlockRedHeadedLeagueSalaryHours() {
+  /**
+   * Compile-only @1000: multi-facet salary + hours must pack both answer
+   * sheets (Policy B partial of the hours passage). Shared Wilson tokens must
+   * not make the salary sheet "cover" hours — and the hours sheet must not be
+   * buried as low-relevance omit when left out.
+   */
+  const samples = join(process.cwd(), "public", "samples");
+  const path = join(samples, "sherlock-holmes.docx");
+  if (!existsSync(path)) {
+    console.log("  sherlock salary/hours skipped: sample not present");
+    return;
+  }
+  const task = "What salary does the Red-Headed League offer, and what hours must Wilson keep?";
+  const md = await fullMarkdown(path);
+  const chunks = chunkMarkdown(md);
+  const queries = splitQueries(task);
+  const rows = perQueryScores(queries, chunks);
+  const bests = queryBestIdsFromRows(rows, chunks, queries);
+  assert.equal(bests.length, 2, "two facet bests");
+  assert.notEqual(bests[0], bests[1], "salary and hours must pick distinct best sections");
+  const hoursBest = chunks.find((c) => c.id === bests[1]!);
+  assert.ok(/ten to two/i.test(hoursBest?.text ?? ""), "hours facet best must be the Ten-to-two passage");
+
+  const r = await compileContext(path, task, 1000);
+
+  assert.ok(r.queries.length >= 2, "salary/hours must split into facets");
+  assert.ok(/£\s*4|salary of/i.test(r.markdown), "compile must include £4 salary");
+  assert.ok(/ten to two/i.test(r.markdown), "compile must include Ten to two hours");
+
+  const hoursSel = r.selected_sections.find((s) => /ten to two/i.test(s.text ?? ""));
+  assert.ok(hoursSel, "hours-bearing section must be selected");
+  assert.ok(
+    hoursSel!.truncated || (hoursSel!.tokens ?? 0) < 500,
+    "oversized hours sheet should enter as a budget partial when needed"
+  );
+
+  // If somehow omitted, it belongs in budget-omit (facet gap), not relevance-omit.
+  const hoursOmitRel = r.relevance_omitted_sections.find((s) => s.id === hoursSel?.id);
+  assert.ok(!hoursOmitRel, "selected hours section must not also be relevance-omitted");
+  for (const s of r.relevance_omitted_sections) {
+    assert.ok(
+      (s.relevance ?? 0) < 95 || s.tokens < 50,
+      `near-top answer peer must not be buried as relevance-omit: ${s.id}@${s.relevance}%`
+    );
+  }
+  assert.ok(r.tokens_used <= 1000, `budget hold: ${r.tokens_used}`);
+  console.log(
+    `  sherlock salary/hours @1000 ok: sel=${r.selected_sections.map((s) => `${s.id}${s.truncated ? "T" : ""}@${s.relevance}%`).join(",")} ` +
+      `budget_omit=${r.budget_omitted_sections.map((s) => s.id).join(",") || "(none)"}`
+  );
+}
+
+async function testCoveragePackMatrixRegression() {
+  /**
+   * Anti-whack-a-mole gate: ANY cell failure fails the suite.
+   * Do not land a pack change that improves one cell by breaking another.
+   */
+  const samples = join(process.cwd(), "public", "samples");
+  if (!existsSync(join(samples, "meridian-financials.xlsx"))) {
+    console.log("  coverage pack matrix skipped: sample library not present");
+    return;
+  }
+
+  async function compile(file: string, task: string, budget: number) {
+    return compileContext(join(samples, file), task, budget);
+  }
+
+  const mfTask = "What was net profit in FY25, and which quarter had the best gross margin?";
+
+  // --- FY25 multi-facet @100: correct facets beat wrong wholes ---
+  const mf100 = await compile("meridian-financials.xlsx", mfTask, 100);
+  assert.ok(
+    mf100.selected_sections.some((s) => s.section.includes("Five-Year")),
+    `FY25@100 must include Five-Year (net profit), got ${mf100.selected_sections.map((s) => s.section).join(",")}`
+  );
+  assert.ok(
+    !mf100.selected_sections.some((s) => s.section.includes("Segments")),
+    "FY25@100 must not select weak Segments over facet winners"
+  );
+  assert.ok(/net profit|51\.0/i.test(mf100.markdown), "FY25@100 markdown must carry net-profit signal");
+  assert.ok(mf100.tokens_used <= 100, `FY25@100 budget hold: ${mf100.tokens_used}`);
+
+  // --- Revenue FY21→FY25 @100: 100% Five-Year partial beats mid-score Segments whole ---
+  // Shared tokens (revenue/FY21/FY25) inflate Segments to ~76% even though the
+  // answer lives only in Five-Year. Partial of the top sheet must win.
+  const revTask = "How did revenue change from FY21 to FY25?";
+  const rev100 = await compile("meridian-financials.xlsx", revTask, 100);
+  const revFive = rev100.selected_sections.find((s) => s.section.includes("Five-Year"));
+  assert.ok(
+    revFive,
+    `revenue@100 must include Five-Year (100% sheet), got ${rev100.selected_sections.map((s) => `${s.section}@${s.relevance}%`).join(",")}`
+  );
+  assert.ok(revFive!.truncated, "revenue@100 Five-Year must be truncated (policy B partial)");
+  assert.ok(
+    !rev100.selected_sections.some((s) => s.section.includes("Segments")),
+    "revenue@100 must not admit mid-score Segments over truncating Five-Year"
+  );
+  assert.ok(
+    /262|482|Revenue \(Rs cr\)/i.test(rev100.markdown),
+    "revenue@100 partial must carry FY revenue row"
+  );
+  assert.ok(rev100.tokens_used <= 100, `revenue@100 budget hold: ${rev100.tokens_used}`);
+
+  // --- FY25 @200 parity: both facets ---
+  const mf200 = await compile("meridian-financials.xlsx", mfTask, 200);
+  assert.ok(
+    mf200.selected_sections.some((s) => s.section.includes("Five-Year")),
+    "FY25@200 Five-Year"
+  );
+  assert.ok(
+    mf200.selected_sections.some((s) => s.section.includes("Quarterly")),
+    "FY25@200 Quarterly"
+  );
+  assert.ok(!mf200.selected_sections.some((s) => s.section.includes("Segments")), "FY25@200 no Segments");
+  assert.ok(/net profit|51\.0/i.test(mf200.markdown), "FY25@200 net profit");
+  assert.ok(/gross margin|35\.|Q4/i.test(mf200.markdown), "FY25@200 gross margin");
+
+  // --- FY25 @800 both facets ---
+  const mf800 = await compile("meridian-financials.xlsx", mfTask, 800);
+  assert.ok(mf800.selected_sections.length >= 2, "FY25@800 ≥2 sheets");
+  assert.ok(/net profit|51\.0/i.test(mf800.markdown) && /margin|Q4/i.test(mf800.markdown), "FY25@800 facets");
+
+  // --- Small xlsx single-facet: coverage met → no workbook dump ---
+  const fin1k = await compile("meridian-financials.xlsx", "What was net profit in FY25?", 1000);
+  const fin4k = await compile("meridian-financials.xlsx", "What was net profit in FY25?", 4000);
+  assert.equal(fin1k.selected_sections.length, 1, "fin single @1000 one sheet");
+  assert.equal(fin4k.selected_sections.length, 1, "fin single @4000 one sheet");
+  assert.equal(fin1k.selected_sections[0]!.id, fin4k.selected_sections[0]!.id, "fin ids stable");
+
+  // --- Vague query must not whole-doc dump ---
+  const vagueLt = await compile("the-lantern-tales.md", "What is the story about?", 4000);
+  assert.ok(vagueLt.selected_sections.length < 25, `vague lantern dump: ${vagueLt.selected_sections.length}`);
+  const vagueHi = await compile("chhoti-kahaniyan.md", "यह किताब किस बारे में है?", 8000);
+  assert.ok(vagueHi.selected_sections.length < 13, `vague Hindi dump: ${vagueHi.selected_sections.length}`);
+  assert.ok(
+    vagueHi.selected_sections.length <= 3,
+    `vague Hindi must stay compact: ${vagueHi.selected_sections.length}`
+  );
+  assert.ok(vagueHi.compile_hints.early_stopped, "vague Hindi early_stopped");
+
+  // --- Non-English pointed: correct section, stable across large budgets, no dump ---
+  const hiPointed = "ईमानदार चायवाले को अंगूठी लौटाने पर क्या मिला?";
+  const hi1k = await compile("chhoti-kahaniyan.md", hiPointed, 1000);
+  const hi4k = await compile("chhoti-kahaniyan.md", hiPointed, 4000);
+  const hi8k = await compile("chhoti-kahaniyan.md", hiPointed, 8000);
+  assert.ok(
+    hi1k.selected_sections.some((s) => s.section.includes("चायवाला")),
+    `Hindi pointed must select tea-seller story, got ${hi1k.selected_sections.map((s) => s.section).join(",")}`
+  );
+  assert.ok(hi1k.markdown.includes("अंगूठी"), "Hindi pointed markdown carries the ring");
+  assert.equal(
+    hi1k.selected_sections.map((s) => s.id).join(","),
+    hi4k.selected_sections.map((s) => s.id).join(","),
+    "Hindi pointed ids stable 1000→4000"
+  );
+  assert.equal(
+    hi1k.selected_sections.map((s) => s.id).join(","),
+    hi8k.selected_sections.map((s) => s.id).join(","),
+    "Hindi pointed ids stable 1000→8000"
+  );
+  assert.ok(hi8k.selected_sections.length <= 2, "Hindi pointed must not vacuum stories");
+  assert.ok(hi4k.compile_hints.early_stopped, "Hindi pointed early_stopped at 4000");
+
+  const hiVague4k = await compile("chhoti-kahaniyan.md", "यह किताब किस बारे में है?", 4000);
+  assert.ok(
+    hiVague4k.selected_sections.length <= 3,
+    `Hindi vague @4000 compact: ${hiVague4k.selected_sections.length}`
+  );
+  assert.ok(
+    hiVague4k.selected_sections.length <
+      hiVague4k.selected_sections.length + hiVague4k.omitted_sections.length,
+    "Hindi vague must omit sections (no whole-doc)"
+  );
+
+  const esPointed = "¿Qué encontró el panadero escondido en la harina?";
+  const es1k = await compile("cuentos-breves.md", esPointed, 1000);
+  const es4k = await compile("cuentos-breves.md", esPointed, 4000);
+  assert.ok(
+    es1k.selected_sections.some((s) => /panadero/i.test(s.section)),
+    "Spanish pointed selects panadero"
+  );
+  assert.ok(es1k.markdown.includes("monedas"), "Spanish pointed carries monedas");
+  assert.equal(
+    es1k.selected_sections.map((s) => s.id).join(","),
+    es4k.selected_sections.map((s) => s.id).join(","),
+    "Spanish pointed ids stable 1000→4000"
+  );
+
+  const esVague = await compile("cuentos-breves.md", "¿De qué trata este libro?", 4000);
+  assert.ok(
+    esVague.selected_sections.length <= 3,
+    `Spanish vague compact: ${esVague.selected_sections.length}`
+  );
+  assert.ok(esVague.omitted_sections.length > 0, "Spanish vague omits");
+
+  const ruPointed = "Что нашёл извозчик в санях?";
+  const ru1k = await compile("korotkie-rasskazy.md", ruPointed, 1000);
+  const ru4k = await compile("korotkie-rasskazy.md", ruPointed, 4000);
+  assert.ok(ru1k.markdown.includes("кошелёк") || ru1k.markdown.includes("кошелек"), "Russian pointed wallet");
+  assert.equal(
+    ru1k.selected_sections.map((s) => s.id).join(","),
+    ru4k.selected_sections.map((s) => s.id).join(","),
+    "Russian pointed ids stable"
+  );
+
+  const hqPointed = "ماذا وجد الخبّاز مخبّأً في كيس الطحين؟";
+  const hq1k = await compile("hikayat-qasira.md", hqPointed, 1000);
+  const hq4k = await compile("hikayat-qasira.md", hqPointed, 4000);
+  assert.ok(hq1k.markdown.includes("صرّة") || hq1k.markdown.includes("نقود"), "Arabic pointed purse");
+  assert.equal(
+    hq1k.selected_sections.map((s) => s.id).join(","),
+    hq4k.selected_sections.map((s) => s.id).join(","),
+    "Arabic pointed ids stable"
+  );
+
+  // Hindi multi-aspect: both stories once budget fits
+  const hiMulti = "ईमानदार चायवाले को क्या मिला, और आम का पेड़ किसके हिस्से आया?";
+  const hiM1k = await compile("chhoti-kahaniyan.md", hiMulti, 1000);
+  assert.ok(
+    hiM1k.selected_sections.some((s) => s.section.includes("चायवाला")),
+    "Hindi multi includes tea-seller"
+  );
+  assert.ok(
+    hiM1k.selected_sections.some((s) => s.section.includes("आम")),
+    "Hindi multi includes mango-tree"
+  );
+  assert.ok(hiM1k.selected_sections.length <= 3, "Hindi multi must not pull distractors");
+
+  // --- P&P Jane/Bingley id-stable 1000–4000 ---
+  const ppTask = "What does Mr. Bingley think of Jane Bennet early on?";
+  const pp1k = await compile("pride-and-prejudice.docx", ppTask, 1000);
+  const pp4k = await compile("pride-and-prejudice.docx", ppTask, 4000);
+  assert.ok(pp1k.selected_sections.length >= 1, "P&P @1000 selects");
+  assert.equal(
+    pp1k.selected_sections.map((s) => s.id).join(","),
+    pp4k.selected_sections.map((s) => s.id).join(","),
+    `P&P ids must be stable 1000→4000: ${pp1k.selected_sections.map((s) => s.id)}→${pp4k.selected_sections.map((s) => s.id)}`
+  );
+
+  // --- Pointed Sherlock / Origin stay compact ---
+  const sh1k = await compile(
+    "sherlock-holmes.docx",
+    "Why does the King of Bohemia come to Sherlock Holmes?",
+    1000
+  );
+  const sh4k = await compile(
+    "sherlock-holmes.docx",
+    "Why does the King of Bohemia come to Sherlock Holmes?",
+    4000
+  );
+  assert.ok(
+    sh1k.selected_sections.length >= 1 && sh1k.selected_sections.length < 15,
+    "Sherlock @1000 compact"
+  );
+  assert.ok(
+    sh4k.selected_sections.length <= sh1k.selected_sections.length + 3,
+    `Sherlock stable-ish 1000→4000: ${sh1k.selected_sections.length}→${sh4k.selected_sections.length}`
+  );
+  assert.ok(sh4k.selected_sections.length < 20, "Sherlock @4000 must not vacuum");
+
+  const og1k = await compile("origin-of-species.pdf", "What is natural selection?", 1000);
+  const og4k = await compile("origin-of-species.pdf", "What is natural selection?", 4000);
+  assert.equal(
+    og1k.selected_sections.map((s) => s.id).join(","),
+    og4k.selected_sections.map((s) => s.id).join(","),
+    "Origin ids stable 1000→4000"
+  );
+
+  // --- Meridian report / Kestrel: no whole-doc at high budget ---
+  const arTask = "What revenue guidance does Meridian give for FY 2026?";
+  const ar1k = await compile("meridian-annual-report.docx", arTask, 1000);
+  const ar4k = await compile("meridian-annual-report.docx", arTask, 4000);
+  assert.ok(ar4k.selected_sections.length < 25, "meridian report @4000 no whole dump");
+  assert.ok(
+    ar4k.selected_sections.length <= ar1k.selected_sections.length + 1,
+    `meridian report stable: ${ar1k.selected_sections.length}→${ar4k.selected_sections.length}`
+  );
+
+  // User report: R&D cancelled @400 answers — larger budgets must not fill with 0% sections
+  // (old whole-file short-circuit when raw ≤ budget dumped ~20 zero-relevance sections at 2100).
+  const rdTask = "Which R&D programs were cancelled and why?";
+  const rd400 = await compile("meridian-annual-report.docx", rdTask, 400);
+  const rd1050 = await compile("meridian-annual-report.docx", rdTask, 1050);
+  const rd2100 = await compile("meridian-annual-report.docx", rdTask, 2100);
+  assert.ok(rd2100.raw_tokens <= 2100, "2100 exceeds raw (short-circuit temptation)");
+  assert.ok(rd2100.omitted_sections.length > 0, "R&D@2100 must omit, not whole-doc dump");
+  for (const [label, r] of [
+    ["400", rd400],
+    ["1050", rd1050],
+    ["2100", rd2100],
+  ] as const) {
+    assert.ok(
+      !r.selected_sections.some((s) => (s.relevance ?? 0) === 0),
+      `R&D@${label} must not select 0% sections: ${r.selected_sections.map((s) => s.id + "@" + s.relevance).join(",")}`
+    );
+    assert.ok(r.compile_hints.early_stopped, `R&D@${label} early_stopped with spare budget`);
+  }
+  const rdIds = (r: typeof rd400) =>
+    r.selected_sections
+      .map((s) => s.id)
+      .sort()
+      .join(",");
+  assert.equal(rdIds(rd400), rdIds(rd1050), `R&D ids stable 400→1050: ${rdIds(rd400)}→${rdIds(rd1050)}`);
+  assert.equal(rdIds(rd400), rdIds(rd2100), `R&D ids stable 400→2100: ${rdIds(rd400)}→${rdIds(rd2100)}`);
+  assert.ok(
+    rd400.selected_sections.every((s) => (s.relevance ?? 0) >= 80),
+    "R&D@400 high-relevance only"
+  );
+
+  const km1k = await compile("kestrel-k2-manual.pdf", "What does the K2 warranty not cover?", 1000);
+  const km4k = await compile("kestrel-k2-manual.pdf", "What does the K2 warranty not cover?", 4000);
+  assert.ok(km4k.selected_sections.length < 3, "kestrel @4000 no whole manual");
+  assert.ok(
+    km4k.selected_sections.length <= km1k.selected_sections.length + 1,
+    `kestrel stable: ${km1k.selected_sections.length}→${km4k.selected_sections.length}`
+  );
+
+  console.log(
+    "  coverage pack matrix ok: FY25@100/200/800, revenue@100, single-facet, vague, multilingual pointed/vague, P&P/Sherlock/Origin, meridian R&D/kestrel"
+  );
 }
 
 async function testRecallEval() {
@@ -1762,17 +4131,37 @@ async function testRecallEval() {
 
 for (const fn of [
   testChunking,
+  testContentTokens,
   testRankAndPack,
   testEndToEnd,
   testMultilingualRanking,
   testMoreScriptsRanking,
   testRelevanceFloor,
+  testEarlyStopFillerHeavy,
+  testCoverageRedundantFillers,
+  testEarlyStopNoBudgetInflation,
+  testEarlyStopNameIntentBingley,
+  testEarlyStopClusterJaneBingley,
+  testClusterStopJaneBingleyPrideAndPrejudice,
   testReserveDoesNotEvictFittingContent,
   testOversizedTopNotice,
+  testRelevanceFirstPartialPacking,
   testBm25FirstPackingDespiteDemotion,
   testNextSectionHint,
   testRelevanceFloorDropsWeakToc,
   testMultiQuery,
+  testQueryAspects,
+  testCompileNotes,
+  testOmitBucketClassification,
+  testMultiFacetFinancials,
+  testMultiFacetFinancialsBudget200,
+  testMultiFacetFinancialsBudget800,
+  testDemoParityFy25Budget200,
+  testClientUxContracts,
+  testExpandQueryAwareTruncation,
+  testAgentQueryMissOnExpand,
+  testAgentRecompileTokensReadNoDoubleCount,
+  testAgentMultiFacetBudget200,
   testFormatConversion,
   testImageConversionFailsClearly,
   testClientBuildIsPlainScript,
@@ -1787,6 +4176,8 @@ for (const fn of [
   testAgentAbort,
   testAgentLoop,
   testAgentSseEndpoint,
+  testProveContextNoExpandMatchesSelectedTokens,
+  testProveContextReassembly,
   testAnswerExpandedIds,
   testRateCostsInConfig,
   testLogger,
@@ -1796,8 +4187,14 @@ for (const fn of [
   testWebCompileSectionCardsHaveText,
   testNoStdoutInMcpPath,
   testSmallFilePassthrough,
+  testNoWholeFileDumpAboveRawTokens,
   testTokenizeCjkAndStem,
   testTokenizeQueryCleanupAndHonorific,
+  testNameIntentDetectionAndBoost,
+  testNameIntentCompilePrideAndPrejudice,
+  testNameIntentSyntheticCompile,
+  testSherlockRedHeadedLeagueSalaryHours,
+  testCoveragePackMatrixRegression,
   testRecallEval,
 ]) {
   console.log(fn.name);

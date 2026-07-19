@@ -31,18 +31,18 @@
     </div>
   </div>
 
-  <aside class="plane" role="img" aria-label="Example: Pride and Prejudice compiled from 19,612 tokens to 1,454 tokens. 92.6% reduction.">
+  <aside class="plane" role="img" aria-label="Example: Pride and Prejudice compiled from 19,612 tokens to 775 tokens. 96% reduction.">
     <div class="plane-inner">
-      <p class="cap">Pride &amp; Prejudice · “How does Mr. Collins propose?”</p>
+      <p class="cap">Pride &amp; Prejudice · “What does Mr. Bingley think of Jane Bennet early on?”</p>
       <div class="bar-block">
         <div class="bar-label"><span>Whole file</span><span class="tokens">19,612 tokens</span></div>
         <div class="htrack"><div class="hbar raw" style="width:100%"></div></div>
       </div>
       <div class="bar-block">
-        <div class="bar-label"><span>Compiled</span><span class="tokens">1,454 tokens</span></div>
-        <div class="htrack"><div class="hbar small" style="width:7.4%"></div></div>
+        <div class="bar-label"><span>Compiled</span><span class="tokens">775 tokens</span></div>
+        <div class="htrack"><div class="hbar small" style="width:4%"></div></div>
       </div>
-      <p class="verdict"><strong>92.6% fewer tokens</strong> Same facts. Every read.</p>
+      <p class="verdict"><strong>96% fewer tokens</strong> Same facts. Every read.</p>
     </div>
   </aside>
 </section>
@@ -53,7 +53,7 @@
     <div class="pipe">
       <div class="c"><div class="n">1 · Convert</div><div class="h">Any file → markdown</div><div class="d">PDF, docx, xlsx, pptx, images. The result is cached by the file's content hash, so a file is only ever converted once. Ask it new questions for free.</div></div>
       <div class="c"><div class="n">2 · Select</div><div class="h">Rank against your task</div><div class="d">BM25 lexical ranking: free, local, and deterministic.</div></div>
-      <div class="c"><div class="n">3 · Pack</div><div class="h">Fit the token budget</div><div class="d">Best sections in, a manifest of what was left out.</div></div>
+      <div class="c"><div class="n">3 · Pack</div><div class="h">Pack under a token ceiling</div><div class="d">Coverage-first: best sections in, stop when the question is covered — budget is not a fill quota. Manifest lists what was left out.</div></div>
     </div>
     <div class="keynote">The compiled result is <strong>exactly what your AI agent receives instead of the whole file</strong>.
       None of this needs an API key. A key unlocks <strong>Prove answer parity</strong> (full file vs your Compile result)
@@ -113,7 +113,8 @@
       <button type="button" class="btn quiet" id="prove" title="Skip the results view. Prove from file + budget directly">Prove…</button>
       <span class="saved hidden" id="sessionSaved" style="margin-left:auto" role="status"></span>
     </div>
-    <p class="qhint" id="agentHint"><strong>Compile</strong> packs strictly under your budget. <strong>UI expands</strong> peek omitted sections; only those you Include in Prove add tokens on top. <strong>Agent</strong> uses the same budget as its starting compile and soft reading ceiling. It stops starting new expands once past it; an in-flight expand may finish slightly over. Prove lives under Compile results.</p>
+    <div class="err hidden prove-err" id="proveFormErr" role="alert"></div>
+    <p class="qhint" id="agentHint"><strong>Compile</strong>, <strong>Agent</strong>, and <strong>Prove</strong> meter packed section content under your budget ceiling (not omit-manifest ballast). Small HTML wrapper markers may ride along on the wire; they are stripped from this meter. <strong>Include in Prove</strong> adds a full section or the unread remainder (Prove re-assembles without double-counting partials). Peeks load text only; they do not add tokens until you check Include.</p>
     <details class="expectbox" id="expectBox">
       <summary>Limits &amp; free-tier notes</summary>
       <div class="expectbody" id="expectBody">
@@ -146,20 +147,22 @@
   </div>
   <div class="panel" id="results">
     <h2 class="sec" id="resultsHeading" tabindex="-1">Your compiled context</h2>
+    <div id="questionStaleNote" class="floornote hidden" role="status"></div>
     <div id="budgetStaleNote" class="floornote hidden" role="status"></div>
+    <div class="err hidden" id="resultsErr" role="alert"></div>
     <div class="stats">
-      <div class="stat"><div class="v" id="sRaw" style="color:var(--muted)">–</div><div class="l">raw tokens</div></div>
-      <div class="stat"><div class="v" id="sUsed" style="color:var(--green)">–</div><div class="l">compiled tokens</div></div>
+      <div class="stat"><div class="v" id="sRaw" style="color:var(--muted)">–</div><div class="l">raw content tokens</div></div>
+      <div class="stat"><div class="v" id="sUsed" style="color:var(--green)">–</div><div class="l">packed content</div></div>
       <div class="stat"><div class="v" id="sPct" style="color:var(--green)">–</div><div class="l">reduction</div></div>
       <div class="stat"><div class="v" id="sCost">–</div><div class="l">cost / read <span id="price" style="color:var(--faint)"></span></div></div>
     </div>
     <details class="formhint" style="margin-top:6px">
-      <summary>Why compiled tokens can exceed the section sum</summary>
-      <p>It’s the exact text sent to the AI: selected sections <i>plus</i> wrapper comments and the omitted-sections manifest.</p>
+      <summary>What “packed content” counts</summary>
+      <p>Budget and these bars meter selected section bodies (substance). Prove and Agent answer from that same substance. MCP <code>compile_context</code> markdown may still include an omit-manifest for agents navigating expands; the web demo’s answer paths do not send that ballast.</p>
     </details>
     <div class="bars">
       <div class="brow"><div class="blab">raw file</div><div class="btrack"><div class="bar raw" id="barRaw" style="width:100%"></div></div><span class="bval" id="barRawVal">–</span></div>
-      <div class="brow"><div class="blab">compiled</div><div class="btrack"><div class="bar cmp" id="barC" style="width:100%"></div></div><span class="bval" id="barCVal">–</span></div>
+      <div class="brow"><div class="blab">packed content</div><div class="btrack"><div class="bar cmp" id="barC" style="width:100%"></div></div><span class="bval" id="barCVal">–</span></div>
     </div>
     <div class="badges">
       <span class="badge" id="cacheBadge"></span>
@@ -169,20 +172,35 @@
     </div>
     <div class="floornote hidden" id="multiNote"></div>
     <div class="floornote hidden" id="floorNote"></div>
-    <div id="sections"></div>
+    <div id="compiledRegion" class="omit-bucket included-bucket compiled-omit">
+      <h3 class="omit-bucket-head" id="compiledHead">Included in context</h3>
+      <div id="sections"></div>
+    </div>
     <pre id="out" class="hidden"></pre>
 
-    <div id="omittedRow" class="hidden" style="margin-top:16px">
-      <strong style="font-size:13px">Omitted sections</strong>
-      <span class="badge">click to peek</span>
-      <div id="omitChips" style="margin-top:8px"></div>
-      <p class="qhint hidden" id="expandBudgetNote" style="margin-top:10px"></p>
-      <div id="expanded"></div>
+    <div id="budgetOmitRow" class="hidden omit-bucket budget-omit">
+      <h3 class="omit-bucket-head">Relevant but over budget</h3>
+      <p class="omit-bucket-desc qhint" id="budgetOmitDesc"></p>
+      <div id="budgetOmitCards"></div>
+      <div id="budgetExpanded"></div>
     </div>
 
-    <div id="proveActions" class="hidden" style="margin-top:16px">
-      <button type="button" class="btn ghost" id="proveResults">Prove answer parity</button>
-      <span class="qhint" style="margin-left:8px">Full file vs this compile (+ any included expands). Optional, not an Agent run.</span>
+    <div id="relevanceOmitRow" class="hidden omit-bucket relevance-omit">
+      <details id="relevanceOmitDisclosure">
+        <summary id="relevanceOmitSummary"></summary>
+        <p class="omit-bucket-desc qhint">Lower relevance for this question. Peek if you want to double-check.</p>
+        <div id="relevanceOmitChips"></div>
+        <div id="relevanceExpanded"></div>
+      </details>
+    </div>
+
+    <div id="proveActions" class="prove-strip hidden">
+      <div class="prove-strip-row">
+        <button type="button" class="btn ghost" id="proveResults">Prove answer parity</button>
+        <p class="qhint prove-context-note hidden" id="expandBudgetNote"></p>
+      </div>
+      <div class="err hidden prove-err" id="proveErr" role="alert"></div>
+      <p class="qhint prove-strip-sub">Full file vs this compile (+ any included expands). Optional, not an Agent run.</p>
     </div>
   </div>
 
@@ -206,7 +224,12 @@
 <section id="agentSec" class="hidden"><div class="wrap"><div class="panel">
   <h2 class="sec" id="agentHeading" tabindex="-1">Agent run</h2>
   <p class="sub">Uses your token budget as a soft reading ceiling, compiling under it, then expanding omitted
-    sections until that ceiling is reached (an in-flight expand may finish slightly over), or answering from the whole file when it already fits.</p>
+    sections into remaining headroom (truncated when needed) until the ceiling is reached, or answering from the whole file when it already fits.</p>
+  <div id="agentIdleCta" class="agent-idle-cta hidden">
+    <button type="button" class="btn agent" id="goAgentBelow">Run agent ▸</button>
+  </div>
+  <div class="err hidden" id="aErr" role="alert"></div>
+  <div id="agentRunBody" class="hidden">
   <div id="agentLoadingNote" class="loading-banner hidden" role="status" aria-live="polite" aria-busy="false">
     <span class="spinner" aria-hidden="true"></span>
     <div class="loading-copy">
@@ -216,7 +239,7 @@
   </div>
   <div class="ameter">
     <div class="ametertop">
-      <span><strong id="aTokens">0</strong> tokens the agent read</span>
+      <span><strong id="aTokens">0</strong> content tokens the agent read</span>
       <span class="awhole" id="aWhole"></span>
     </div>
     <div class="atrack"><div class="abar" id="aBar" style="width:0%"></div></div>
@@ -240,7 +263,7 @@
     </div>
     <div class="err hidden" id="aParityErr" role="alert" style="margin-top:10px"></div>
   </div>
-  <div class="err hidden" id="aErr" role="alert"></div>
+  </div>
 </div></div></section>
 
 <!-- ====================== MCP INTEGRATION ============================

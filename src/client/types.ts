@@ -37,8 +37,17 @@ interface SectionInfo {
   section: string;
   tokens: number;
   relevance: number | null;
+  truncated?: boolean;
+  full_tokens?: number;
+  /** Content tokens still unread when truncated — for Prove “Include rest”. */
+  remainder_tokens?: number;
   matched_queries?: number[];
   text?: string;
+}
+
+interface BudgetOmitSection extends SectionInfo {
+  gap_queries?: number[];
+  suggested_budget?: number;
 }
 
 /** Response body of POST /api/compile (CompileResult + web.ts's added fields). */
@@ -46,6 +55,8 @@ interface CompileApiResult {
   markdown: string;
   raw_tokens: number;
   tokens_used: number;
+  /** Content tokens of selected sections only (no omit manifest). */
+  selected_content_tokens: number;
   tokens_saved: number;
   reduction_pct: number;
   cache_hit: boolean;
@@ -53,6 +64,10 @@ interface CompileApiResult {
   queries: string[];
   selected_sections: SectionInfo[];
   omitted_sections: SectionInfo[];
+  /** Task-relevant omits left out primarily for token budget. */
+  budget_omitted_sections: BudgetOmitSection[];
+  /** Lower-relevance omits for this task. */
+  relevance_omitted_sections: SectionInfo[];
   /** Set when budget-bound and a strong omitted section still didn't fit. */
   next_section_hint: {
     id: string;
@@ -61,6 +76,13 @@ interface CompileApiResult {
     relevance: number;
     suggested_budget: number;
   } | null;
+  /** UX hints for multi-part nudge and omitted-section framing. */
+  compile_hints?: {
+    multi_part_nudge: boolean;
+    omit_action: boolean;
+    named_omit: SectionInfo | null;
+    early_stopped?: boolean;
+  };
   cost_raw_usd: number;
   cost_compiled_usd: number;
   price_per_mtok: number;
@@ -97,6 +119,10 @@ interface AnswerApiResult {
   compiled: {
     answer: string;
     context_tokens: number;
+    /** Content tokens of compile selection (no omit manifest). */
+    selected_content_tokens?: number;
+    /** Content tokens added by included expands. */
+    expand_content_tokens?: number;
     reduction_pct: number;
     /** Section ids from the demo UI that were merged into the compiled side. */
     expanded_ids?: string[];
@@ -112,6 +138,7 @@ interface AgentStep {
   detail: string;
   reasoning?: string;
   section_id?: string;
+  truncated?: boolean;
   tokens_added: number;
 }
 
@@ -123,6 +150,8 @@ interface AgentRunResult {
   raw_tokens: number;
   final_context_tokens: number;
   stopped_reason: "confident" | "max_steps" | "token_ceiling" | "whole_file";
+  /** True when omitted sections or a truncated expand left content unread. */
+  unread_remaining?: boolean;
   /** Opaque handle for optional POST /api/agent-parity (server holds the context). */
   parity_handle?: string;
 }

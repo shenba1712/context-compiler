@@ -11,10 +11,10 @@
  */
 import express from "express";
 import multer from "multer";
-import { createHash, randomBytes } from "node:crypto";
-import { mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { mkdirSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, extname, join, resolve, sep } from "node:path";
+import { basename, dirname, extname, join, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { runAgent } from "./agent.js";
@@ -32,9 +32,9 @@ import {
 } from "./llm.js";
 import { log } from "./log.js";
 import { inc, snapshot } from "./metrics.js";
-import { compileContext, expandSection, fullMarkdown } from "./pipeline.js";
+import { assembleProveContext, compileContext, expandSection, fullMarkdown } from "./pipeline.js";
 import { SAMPLES_MANIFEST } from "./samples-manifest.js";
-import { countTokens } from "./tokens.js";
+import { countContentTokens, countTokens } from "./tokens.js";
 import { UploadRejected, validateUpload } from "./upload-guard.js";
 import { sanitizeSourceName } from "./util.js";
 
@@ -200,6 +200,34 @@ const agentParity = new Map<
 const AGENT_PARITY_TTL_MS = intEnv("CC_AGENT_PARITY_TTL_MS", 15 * 60_000, 60_000);
 const MAX_AGENT_PARITY = intEnv("CC_AGENT_PARITY_MAX", 200, 10);
 
+/** Resolve a sample library file under public/samples. Rejects absolute paths,
+ *  traversal, and anything that is not a plain basename — path.join would
+ *  otherwise treat "/etc/passwd" as absolute and escape STATIC_DIR. */
+function resolveSampleFile(file: string): string {
+  const base = basename(file);
+  if (!base || base !== file || base.includes("\0") || !/^[\w.\-]+$/.test(base)) {
+    throw new Error("Invalid sample file name");
+  }
+  const samplesRoot = realpathSync(join(STATIC_DIR, "samples"));
+  const full = realpathSync(join(samplesRoot, base));
+  if (full !== samplesRoot && !full.startsWith(samplesRoot + sep)) {
+    throw new Error("Sample path escaped samples directory");
+  }
+  return full;
+}
+
+/** Defense in depth for opaque upload handles: realpath must stay under the
+ *  upload dir (blocks symlink escape if a handle entry is ever poisoned). */
+function pathUnderUploadDir(filePath: string): boolean {
+  try {
+    const realUpload = realpathSync(UPLOAD_DIR);
+    const real = realpathSync(filePath);
+    return real === realUpload || real.startsWith(realUpload + sep);
+  } catch {
+    return false;
+  }
+}
+
 function saveUpload(file: Express.Multer.File): { path: string; handle: string } {
   mkdirSync(UPLOAD_DIR, { recursive: true });
   // Prefer the on-disk multer path; fall back to buffering (tests / memory storage).
@@ -210,7 +238,15 @@ function saveUpload(file: Express.Multer.File): { path: string; handle: string }
     const hash = createHash("sha256").update(buf).digest("hex");
     dest = join(UPLOAD_DIR, hash + extname(file.originalname).toLowerCase());
     if (dest !== file.path) {
-      if (!statSync(dest, { throwIfNoEntry: false })) writeFileSync(dest, buf);
+      if (!statSync(dest, { throwIfNoEntry: false })) {
+        // Exclusive create: concurrent measure→compile on the same bytes must
+        // not clobber; identical content is fine if both win the race later.
+        try {
+          writeFileSync(dest, buf, { flag: "wx" });
+        } catch (e) {
+          if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+        }
+      }
       try {
         unlinkSync(file.path);
       } catch {
@@ -220,7 +256,13 @@ function saveUpload(file: Express.Multer.File): { path: string; handle: string }
   } else {
     const hash = createHash("sha256").update(file.buffer).digest("hex");
     dest = join(UPLOAD_DIR, hash + extname(file.originalname).toLowerCase());
-    if (!statSync(dest, { throwIfNoEntry: false })) writeFileSync(dest, file.buffer);
+    if (!statSync(dest, { throwIfNoEntry: false })) {
+      try {
+        writeFileSync(dest, file.buffer, { flag: "wx" });
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+      }
+    }
   }
   const handle = randomBytes(16).toString("hex");
   handles.set(handle, { path: dest, ts: Date.now() });
@@ -371,7 +413,12 @@ app.get("/metrics", async (req, res) => {
   const token = process.env.CC_METRICS_TOKEN;
   if (!token) return res.status(404).json({ error: "Not found" });
   const auth = req.get("authorization") ?? "";
-  if (auth !== `Bearer ${token}`) return res.status(401).json({ error: "Unauthorized" });
+  const expected = Buffer.from(`Bearer ${token}`);
+  const got = Buffer.from(auth);
+  // Constant-time compare when lengths match; length mismatch is not secret.
+  if (expected.length !== got.length || !timingSafeEqual(expected, got)) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
   return res.json({
     uptime_s: Math.round(process.uptime()),
     llm_configured: hasLlm(),
@@ -386,7 +433,7 @@ app.get("/api/samples", async (_req, res) => {
       samplesCache = await Promise.all(
         SAMPLES_MANIFEST.map(async (s) => {
           try {
-            const markdown = await fullMarkdown(join(STATIC_DIR, "samples", s.file));
+            const markdown = await fullMarkdown(resolveSampleFile(s.file));
             return { ...s, tok: countTokens(markdown) };
           } catch (e) {
             // One bad sample file shouldn't take down the whole library —
@@ -459,13 +506,12 @@ app.post("/api/expand", express.json({ limit: "16kb" }), async (req, res) => {
     if (!entry) {
       return res.status(404).json({ error: "Unknown or expired handle — recompile the file." });
     }
-    // Defense in depth: even a valid handle must resolve inside our upload dir.
-    const p = resolve(entry.path);
-    if (p !== resolve(UPLOAD_DIR) && !p.startsWith(resolve(UPLOAD_DIR) + sep)) {
+    // Defense in depth: even a valid handle must realpath inside our upload dir.
+    if (!pathUnderUploadDir(entry.path)) {
       return res.status(403).json({ error: "Access denied." });
     }
     inc("expands");
-    return res.json(await expandSection(p, section_id, 2000));
+    return res.json(await expandSection(entry.path, section_id, 2000));
   } catch (e) {
     return errorResponse(res, e, "expand");
   }
@@ -504,23 +550,17 @@ app.post("/api/answer", upload.single("file"), guardUpload, async (req, res) => 
         sanitizeSourceName(req.file.originalname)
       );
 
-      // Demo UI expands: fetch those sections and append to the compiled
-      // context so Prove reflects "compile + what you expanded". Agent mode
-      // does not use this path — it expands on its own.
-      const selectedIds = new Set(compiled.selected_sections.map((s) => s.id));
-      const expandExtras: string[] = [];
-      const expandedApplied: string[] = [];
-      for (const id of parseExpandedIds(req.body.expanded_ids)) {
-        if (selectedIds.has(id)) continue;
-        const got = await expandSection(path, id, 2000);
-        if ("error" in got) continue;
-        expandExtras.push(got.markdown);
-        expandedApplied.push(id);
-      }
-      const compiledContext =
-        expandExtras.length > 0 ? compiled.markdown + "\n\n" + expandExtras.join("\n\n") : compiled.markdown;
-      const compiledContextTokens = countTokens(compiledContext);
-      const fullTok = countTokens(full);
+      const expandedIds = parseExpandedIds(req.body.expanded_ids);
+      const sourceName = sanitizeSourceName(req.file.originalname);
+      const {
+        markdown: compiledContext,
+        expandedApplied,
+        expandContentTokens,
+      } = await assembleProveContext(path, compiled, expandedIds, sourceName);
+      // Meter document substance (strip assemble wrappers) so Prove savings
+      // compare content-to-content, not packaging overhead.
+      const compiledContextTokens = countContentTokens(compiledContext);
+      const fullTok = countContentTokens(full);
       const reductionPct =
         fullTok > 0
           ? Math.round((1000 * Math.max(0, fullTok - compiledContextTokens)) / fullTok) / 10
@@ -548,10 +588,12 @@ app.post("/api/answer", upload.single("file"), guardUpload, async (req, res) => 
       inc("parity_runs");
       return res.json({
         model: answerModel(),
-        full: { answer: answerFull, context_tokens: countTokens(full) },
+        full: { answer: answerFull, context_tokens: fullTok },
         compiled: {
           answer: answerCompiled,
           context_tokens: compiledContextTokens,
+          selected_content_tokens: compiled.selected_content_tokens,
+          expand_content_tokens: expandContentTokens,
           reduction_pct: reductionPct,
           expanded_ids: expandedApplied,
         },
@@ -695,11 +737,11 @@ app.post("/api/agent-parity", express.json({ limit: "4kb" }), async (req, res) =
         error: "That comparison expired — run the agent again, then compare.",
       });
     }
-    // Defense in depth: even a valid handle must resolve inside our upload dir.
-    const filePath = resolve(entry.path);
-    if (filePath !== resolve(UPLOAD_DIR) && !filePath.startsWith(resolve(UPLOAD_DIR) + sep)) {
+    // Defense in depth: even a valid handle must realpath inside our upload dir.
+    if (!pathUnderUploadDir(entry.path)) {
       return res.status(403).json({ error: "Access denied." });
     }
+    const filePath = entry.path;
     if (!tryAcquireLlmJob()) {
       throw new LlmBusyError();
     }
@@ -733,12 +775,15 @@ app.post("/api/agent-parity", express.json({ limit: "4kb" }), async (req, res) =
       // stolen/replayed handle cannot burn another 2× complete().
       agentParity.delete(handle);
       inc("parity_runs");
+      // Re-meter from the stored answer context (substance-only) so the UI cannot
+      // drift from a stale precomputed count if packaging ever changes.
+      const agentContentTokens = countContentTokens(entry.agentContext);
       return res.json({
         model: answerModel(),
-        full: { answer: answerFull, context_tokens: countTokens(full) },
+        full: { answer: answerFull, context_tokens: countContentTokens(full) },
         agent: {
           answer: answerAgent,
-          context_tokens: entry.agentContextTokens,
+          context_tokens: agentContentTokens || entry.agentContextTokens,
         },
       });
     } finally {

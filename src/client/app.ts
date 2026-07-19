@@ -8,6 +8,108 @@
 
 /// <reference path="./types.ts" />
 
+// Scroll/peek UX contracts — keep in sync with src/client-ux.ts (unit-tested).
+const LAYOUT_FRAMES_BEFORE_SCROLL = 2;
+
+/** Unchecking Include in Prove must not remove peek blocks — see client-ux.ts. */
+function shouldRemovePeekOnUncheck(): boolean {
+  return false;
+}
+
+/** Truncated selected-card meta — keep in sync with truncatedSectionMeta in client-ux.ts. */
+function truncatedSectionMetaCopy(
+  packedTokens: number,
+  fullTokens: number,
+  remainderTokens: number,
+  relevance?: number | null
+): string {
+  const rel = relevance != null ? "relevance " + relevance + "% · " : "";
+  const rest =
+    remainderTokens > 0
+      ? " · +" + remainderTokens.toLocaleString() + " tokens still unread in this section"
+      : "";
+  return (
+    rel +
+    packedTokens.toLocaleString() +
+    " content tokens (truncated from " +
+    fullTokens.toLocaleString() +
+    rest +
+    ")"
+  );
+}
+
+/** New compile must hide stale agent output — keep in sync with client-ux.ts. */
+function shouldClearAgentOnCompile(): boolean {
+  return true;
+}
+
+/** Doc change must hide compile results — keep in sync with client-ux.ts. */
+function shouldClearResultsOnDocChange(): boolean {
+  return true;
+}
+
+/** Live task ≠ last compile task — keep in sync with taskInvalidatesCompile in client-ux.ts. */
+function taskInvalidatesCompile(lastCompiledTask: string | null, currentTask: string): boolean {
+  if (lastCompiledTask === null) return false;
+  return lastCompiledTask.trim() !== currentTask.trim();
+}
+
+/** Question-stale banner — keep in sync with questionStaleBannerHtml in client-ux.ts. */
+function questionStaleBannerCopy(): string {
+  return (
+    "<strong>Question changed.</strong> Results below are from your previous question " +
+    "(expands cleared). Click <strong>Compile once</strong> to refresh for the new question."
+  );
+}
+
+/** Question soft-stale — keep in sync with shouldDisableProveAgentWhenQuestionStale in client-ux.ts. */
+function isQuestionStale(): boolean {
+  if (!hasCompiledOnce || lastCompiledTask === null) return false;
+  return taskInvalidatesCompile(lastCompiledTask, $<HTMLTextAreaElement>("task").value);
+}
+
+function isBudgetStale(): boolean {
+  if (!hasCompiledOnce || lastCompiledBudget === null) return false;
+  return +$<HTMLInputElement>("budget").value !== lastCompiledBudget;
+}
+
+/** Prove lockout when on-screen compile disagrees with live inputs — keep in sync with client-ux.ts. */
+function isProveStale(): boolean {
+  return isQuestionStale() || isBudgetStale();
+}
+
+/** Idle agent CTA after compile — keep in sync with shouldShowAgentSecIdle in client-ux.ts. */
+function shouldShowAgentSecIdle(): boolean {
+  const resultsVisible =
+    !$("resultsSec").classList.contains("hidden") && !$("results").classList.contains("hidden");
+  return shouldShowAgentSecIdleContract({
+    hasCompiledOnce,
+    resultsVisible,
+    questionStale: isQuestionStale(),
+    budgetStale: isBudgetStale(),
+  });
+}
+
+function shouldShowAgentSecIdleContract(opts: {
+  hasCompiledOnce: boolean;
+  resultsVisible: boolean;
+  questionStale: boolean;
+  budgetStale: boolean;
+}): boolean {
+  if (!opts.hasCompiledOnce || !opts.resultsVisible) return false;
+  if (opts.questionStale || opts.budgetStale) return false;
+  return true;
+}
+
+/** Include-hint copy — keep in sync with includeRestHint in client-ux.ts. */
+function includeRestHintCopy(remainderTokens: number, sectionLeaf?: string): string {
+  if (remainderTokens <= 0) return "";
+  if (sectionLeaf) {
+    return "Include the rest of " + sectionLeaf + " (~" + remainderTokens.toLocaleString() + " tokens)";
+  }
+  return "+" + remainderTokens.toLocaleString() + " content tokens in Prove";
+}
+
 function $<T extends HTMLElement = HTMLElement>(id: string): T {
   const el = document.getElementById(id);
   if (!el) throw new Error(`Missing #${id} in the page. Markup and script are out of sync.`);
@@ -41,27 +143,54 @@ async function loadSamples(): Promise<void> {
 let maxFileBytes = 20 * 1024 * 1024;
 let llmAvailable = true;
 
+const PROVE_IDLE = "Prove answer parity";
+const PROVE_TOP_IDLE = "Prove…";
+const PROVE_BUSY = "Asking the model twice…";
+
 const NO_LLM_TITLE = "The server has no LLM API key configured. Everything else works without one.";
 
-/** Keep Prove + Run agent in sync with whether the server can call a model. */
+/** Keep Prove + Run agent in sync with LLM availability and soft-stale inputs. */
 function setLlmDependentButtons(available: boolean): void {
   llmAvailable = available;
+  const qStale = isQuestionStale();
+  const proveStale = isProveStale();
+  const budgetStale = isBudgetStale();
   const proveTop = $<HTMLButtonElement>("prove");
   const proveResults = $<HTMLButtonElement>("proveResults");
   const agentBtn = $<HTMLButtonElement>("goAgent");
-  proveTop.disabled = !available;
-  proveResults.disabled = !available;
-  agentBtn.disabled = !available;
+  const agentBtnBelow = $<HTMLButtonElement>("goAgentBelow");
+  const proveBusy = proveTop.textContent === PROVE_BUSY;
+  const agentBusy = agentBtn.textContent === "Agent working…";
+  // Prove must match on-screen compile (question + budget). Agent only locks on question:
+  // it recompiles from form inputs and never claims to use the cards below.
+  proveTop.disabled = !available || proveStale || proveBusy;
+  proveResults.disabled = !available || proveStale || proveBusy;
+  agentBtn.disabled = !available || qStale || agentBusy;
+  agentBtnBelow.disabled = !available || qStale || agentBusy;
   const proveTitle = available
-    ? "Compare answers from the full file vs your Compile result (not Agent)"
+    ? qStale
+      ? "Question changed — compile again before proving"
+      : budgetStale
+        ? "Budget changed — compile again before proving"
+        : "Compare answers from the full file vs your Compile result (not Agent)"
     : NO_LLM_TITLE;
   proveTop.title = available
-    ? "Power path: prove from file + budget without waiting on the results view"
+    ? qStale
+      ? "Question changed — compile again before proving"
+      : budgetStale
+        ? "Budget changed — compile again before proving"
+        : "Power path: prove from file + budget without waiting on the results view"
     : NO_LLM_TITLE;
   proveResults.title = proveTitle;
   agentBtn.title = available
-    ? "Retrieve under your token budget, then answer (same slider as Compile)"
+    ? qStale
+      ? "Question changed — compile again before running the agent"
+      : "Retrieve under your token budget, then answer (same slider as Compile)"
     : NO_LLM_TITLE;
+  agentBtnBelow.title = agentBtn.title;
+  const parityBtn = $<HTMLButtonElement>("aParityBtn");
+  if (parityBtn) parityBtn.disabled = !available || qStale || !agentParityHandle;
+  setProveIncludeControlsEnabled(!proveStale);
   // Results-area Prove appears after a compile (when an LLM is available).
   if (available && hasCompiledOnce) $("proveActions").classList.remove("hidden");
   else if (!available) $("proveActions").classList.add("hidden");
@@ -175,11 +304,33 @@ function isNearVisible(el: HTMLElement, margin = 64): boolean {
  */
 function scrollIntoViewIfNeeded(
   el: HTMLElement,
-  opts: ScrollIntoViewOptions = { behavior: "smooth", block: "start" },
+  opts: ScrollIntoViewOptions = { behavior: "smooth", block: "start" }
 ): boolean {
   if (isNearVisible(el)) return false;
   el.scrollIntoView(opts);
   return true;
+}
+
+/**
+ * scrollIntoView in the same turn as removing `display:none` is often a no-op
+ * (layout height is still zero). Wait two frames so first-compile scroll lands.
+ */
+function scrollIntoViewAfterLayout(
+  el: HTMLElement,
+  opts: ScrollIntoViewOptions = { behavior: "smooth", block: "start" },
+  after?: () => void
+): void {
+  let framesLeft = LAYOUT_FRAMES_BEFORE_SCROLL;
+  const tick = (): void => {
+    if (framesLeft > 0) {
+      framesLeft -= 1;
+      requestAnimationFrame(tick);
+      return;
+    }
+    scrollIntoViewIfNeeded(el, opts);
+    after?.();
+  };
+  requestAnimationFrame(tick);
 }
 
 const esc = (s: unknown): string =>
@@ -241,6 +392,7 @@ function renderSamples(): void {
 }
 
 async function selectSample(s: Sample, card: HTMLButtonElement): Promise<void> {
+  if (shouldClearResultsOnDocChange()) clearCompiledResults();
   document.querySelectorAll<HTMLButtonElement>(".scard").forEach((x) => {
     x.classList.remove("active");
     x.setAttribute("aria-pressed", "false");
@@ -291,6 +443,7 @@ function renderQChips(questions: string[]): void {
       $<HTMLTextAreaElement>("task").value = q;
       syncQChips();
       autoGrowTask();
+      onTaskUserChange();
       $<HTMLTextAreaElement>("task").focus();
     };
     box.appendChild(b);
@@ -306,6 +459,27 @@ function syncQChips(): void {
     .forEach((c) => c.classList.toggle("active", c.dataset.q === v));
 }
 $<HTMLTextAreaElement>("task").addEventListener("input", syncQChips);
+
+/** Question edited after compile: soft-stale banner; keep compile cards visible. */
+function onTaskUserChange(): void {
+  if (!hasCompiledOnce || lastCompiledTask === null) return;
+  const task = $<HTMLTextAreaElement>("task").value;
+  if (!taskInvalidatesCompile(lastCompiledTask, task)) {
+    clearQuestionStale();
+    setLlmDependentButtons(llmAvailable);
+    if (shouldShowAgentSecIdle()) showAgentSecIdle();
+    return;
+  }
+  proveAbort?.abort();
+  clearProveExpands();
+  $("parity").classList.add("hidden");
+  clearAgentPanel();
+  const el = $("questionStaleNote");
+  el.innerHTML = questionStaleBannerCopy();
+  el.classList.remove("hidden");
+  setLlmDependentButtons(llmAvailable);
+}
+$<HTMLTextAreaElement>("task").addEventListener("input", onTaskUserChange);
 
 // #task replaced a single-line <input> so multi-question tasks
 // (see “Tips for questions”) are comfortable to type and read.
@@ -342,11 +516,30 @@ function syncBudget(): void {
 
 /** Budget the last successful compile used — for stale detection when the slider moves. */
 let lastCompiledBudget: number | null = null;
+/** Question text from the last successful compile — for invalidation when the task edits. */
+let lastCompiledTask: string | null = null;
 
 function clearResultsStale(): void {
   const el = $("budgetStaleNote");
   el.classList.add("hidden");
   el.innerHTML = "";
+}
+
+function clearQuestionStale(): void {
+  const el = $("questionStaleNote");
+  el.classList.add("hidden");
+  el.innerHTML = "";
+}
+
+/** Disable Include-in-Prove checkboxes while question-stale (peeks stay usable). */
+function setProveIncludeControlsEnabled(enabled: boolean): void {
+  document
+    .querySelectorAll<HTMLInputElement>(
+      ".seccard-include input[type=checkbox], .expblk-include input[type=checkbox]"
+    )
+    .forEach((cb) => {
+      cb.disabled = !enabled;
+    });
 }
 
 /** Slider/preset changed after a compile: drop expands + parity, ask them to recompile. */
@@ -356,10 +549,13 @@ function onBudgetUserChange(): void {
   if (v === lastCompiledBudget) {
     // Back to the budget that produced the results on screen — still valid.
     clearResultsStale();
+    setLlmDependentButtons(llmAvailable);
+    if (shouldShowAgentSecIdle()) showAgentSecIdle();
     return;
   }
   clearProveExpands();
   $("parity").classList.add("hidden");
+  clearAgentPanel();
   const el = $("budgetStaleNote");
   el.innerHTML =
     "<strong>Budget changed.</strong> Results below are from the previous " +
@@ -368,6 +564,7 @@ function onBudgetUserChange(): void {
     v.toLocaleString() +
     " tokens.";
   el.classList.remove("hidden");
+  setLlmDependentButtons(llmAvailable);
 }
 
 $<HTMLInputElement>("budget").oninput = () => {
@@ -456,10 +653,55 @@ function fail(m: string): void {
   announce(m, true);
 }
 
+function proveError(m: string): void {
+  for (const el of Array.from(document.querySelectorAll<HTMLElement>(".prove-err"))) {
+    el.textContent = m;
+    el.classList.remove("hidden");
+  }
+  announce("Prove error: " + m, true);
+}
+
+function clearProveErr(): void {
+  for (const el of Array.from(document.querySelectorAll<HTMLElement>(".prove-err"))) {
+    el.classList.add("hidden");
+  }
+}
+
+/** Expand/peek failures in the results panel — not the top-of-form `#err`. */
+function resultsError(m: string): void {
+  const el = $("resultsErr");
+  el.textContent = m;
+  el.classList.remove("hidden");
+  announce(m, true);
+}
+
+function clearResultsErr(): void {
+  $("resultsErr").classList.add("hidden");
+  $("resultsErr").textContent = "";
+}
+
+/** Which control to name in a 429 retry hint — keep in sync with client-ux.ts. */
+type RateLimitRetryContext = "agent" | "prove" | "agentParity";
+
+function rateLimitRetryHint(context: RateLimitRetryContext): string {
+  switch (context) {
+    case "agent":
+      return " Use Run agent above or below when ready.";
+    case "prove":
+      return " Use Prove above or in results when ready.";
+    case "agentParity":
+      return " Use Compare to full file when ready, or run the agent again.";
+  }
+}
+
 /** Turn HTTP status + JSON error body into a human message (429/503 aware). */
-async function apiFailureMessage(resp: Response, body: { error?: string } | null): Promise<string> {
+function apiFailureMessage(
+  resp: Response,
+  body: { error?: string } | null,
+  retryContext?: RateLimitRetryContext
+): string {
   const base = body?.error || `Request failed (${resp.status})`;
-  if (resp.status === 429) return base;
+  if (resp.status === 429) return base + (retryContext ? rateLimitRetryHint(retryContext) : "");
   if (resp.status === 503) {
     const ra = resp.headers.get("Retry-After");
     return base + (ra ? ` Retry in about ${ra}s.` : " Retry in a few seconds.");
@@ -469,6 +711,8 @@ async function apiFailureMessage(resp: Response, body: { error?: string } | null
 function clearErr(): void {
   $("err").classList.add("hidden");
   $("fileErr").classList.add("hidden");
+  clearProveErr();
+  clearResultsErr();
 }
 
 // Real, pre-compile size signal for a manually chosen upload (as opposed to a
@@ -542,6 +786,7 @@ $<HTMLInputElement>("file").addEventListener("change", () => {
     return;
   }
   if (f) {
+    if (shouldClearResultsOnDocChange()) clearCompiledResults();
     // A manually picked file replaces any selected sample, so clear the sample
     // cards' "selected" state. (This only fires for real user picks, not
     // selectSample()'s own programmatic assignment.)
@@ -603,8 +848,10 @@ let hasCompiledOnce = false;
 const proveExpandedIds = new Set<string>();
 /** Tokens for each included expand (for the “effective Prove context” note). */
 const proveExpandedTokens = new Map<string, number>();
-/** Compiled tokens from the last successful compile (slider budget result). */
-let lastCompiledTokens = 0;
+/** Compiled content tokens from the last successful compile (selected sections only). */
+let lastCompiledContentTokens = 0;
+/** Whole-file content token count from the last compile. */
+let lastRawTokens = 0;
 
 function setProveInclude(id: string, tokens: number, included: boolean): void {
   if (included) {
@@ -621,30 +868,41 @@ function refreshExpandBudgetNote(): void {
   const el = $("expandBudgetNote");
   let expandSum = 0;
   for (const t of proveExpandedTokens.values()) expandSum += t;
-  if (!el || expandSum <= 0 || lastCompiledTokens <= 0) {
+  if (!el || expandSum <= 0 || lastCompiledContentTokens <= 0) {
     if (el) {
       el.classList.add("hidden");
       el.innerHTML = "";
     }
     return;
   }
-  const total = lastCompiledTokens + expandSum;
-  el.innerHTML =
+  const total = lastCompiledContentTokens + expandSum;
+  let copy =
     "Prove context ≈ <strong>" +
-    lastCompiledTokens.toLocaleString() +
+    lastCompiledContentTokens.toLocaleString() +
     "</strong> compiled + <strong>" +
     expandSum.toLocaleString() +
     "</strong> from included expands → <strong>" +
     total.toLocaleString() +
-    "</strong> tokens effective (slider budget was the compile ceiling only. Only sections with Include in Prove add tokens; peeks do not).";
+    "</strong> content tokens effective (slider budget was the compile ceiling only. Only sections with Include in Prove add tokens; peeks do not).";
+  if (lastRawTokens > 0 && total >= lastRawTokens * 0.95) {
+    copy +=
+      " This is about the full document (~" +
+      total.toLocaleString() +
+      " of ~" +
+      lastRawTokens.toLocaleString() +
+      " content tokens). Consider raising the compile budget to pack both facets, or use Prove against the full file.";
+  }
+  el.innerHTML = copy;
   el.classList.remove("hidden");
 }
 
 function clearProveExpands(): void {
   proveExpandedIds.clear();
   proveExpandedTokens.clear();
-  const exp = $("expanded");
-  if (exp) exp.innerHTML = "";
+  for (const id of ["budgetExpanded", "relevanceExpanded"] as const) {
+    const exp = $(id);
+    if (exp) exp.innerHTML = "";
+  }
   refreshExpandBudgetNote();
 }
 
@@ -685,10 +943,11 @@ function showLoading(kind: LoadingKind = "compile"): void {
 
   // Compile: hide stale results; banner at the top of resultsSec.
   $("results").classList.add("hidden");
+  hideAgentSec();
   const wrap = $("resultsSec").querySelector(".wrap");
   if (wrap) wrap.prepend(el);
   $<HTMLButtonElement>("cancelGo").classList.remove("hidden");
-  scrollIntoViewIfNeeded($("resultsSec"));
+  scrollIntoViewAfterLayout($("resultsSec"));
 }
 function hideLoading(): void {
   const el = $("loadingNote");
@@ -719,7 +978,10 @@ $<HTMLFormElement>("compileForm").addEventListener("submit", async (e) => {
   goBtn.disabled = true;
   goBtn.textContent = "Compiling…";
   announce("Compiling, please wait…");
+  // Hide results before clearing agent state — otherwise clearAgentPanel sees
+  // stale results on screen and wrongly re-shows the idle agent section.
   showLoading();
+  if (shouldClearAgentOnCompile()) clearAgentPanel();
   try {
     const resp = await fetch("/api/compile", { method: "POST", body: fd, signal: compileAbort.signal });
     const d: CompileApiResult = await resp
@@ -727,10 +989,14 @@ $<HTMLFormElement>("compileForm").addEventListener("submit", async (e) => {
       .catch(() => ({ error: "Compile failed." }) as CompileApiResult);
     if (!resp.ok || d.error) throw new Error(await apiFailureMessage(resp, d));
     hideLoading();
+    if (shouldClearAgentOnCompile()) clearAgentPanel();
     clearProveExpands();
-    lastCompiledTokens = d.tokens_used;
+    lastCompiledContentTokens = d.selected_content_tokens ?? d.tokens_used;
+    lastRawTokens = d.raw_tokens;
     lastCompiledBudget = d.token_budget;
+    lastCompiledTask = $<HTMLTextAreaElement>("task").value.trim();
     clearResultsStale();
+    clearQuestionStale();
     // Now that the real size is known (for an upload, this is the FIRST time
     // it's known at all), refresh the presets to match — without moving the
     // slider off the value just used for this result.
@@ -742,24 +1008,37 @@ $<HTMLFormElement>("compileForm").addEventListener("submit", async (e) => {
     countUp($("sRaw"), d.raw_tokens);
     countUp($("sUsed"), d.tokens_used);
     countUp($("sPct"), Math.round(d.reduction_pct), "%");
-    // 0% is a correct passthrough result (file already fit the budget), not
-    // a failure — don't paint it the same "success green" as a real cut.
+    // 0% means packed content tokens ≈ raw (typical only for tiny single-section
+    // docs). Coverage-first no longer dumps the whole file when budget ≥ raw —
+    // don't paint 0% as the same "success green" as a real cut.
     $("sPct").style.color = d.reduction_pct > 0 ? "var(--green)" : "var(--muted)";
     $("sUsed").style.color = d.reduction_pct > 0 ? "var(--green)" : "var(--text)";
     $("sCost").innerHTML = "$" + d.cost_raw_usd.toFixed(4) + " → $" + d.cost_compiled_usd.toFixed(4);
     $("price").textContent = "@$" + d.price_per_mtok + "/Mtok";
     requestAnimationFrame(() => {
       $("barRaw").style.width = "100%";
-      $("barRawVal").textContent = d.raw_tokens.toLocaleString() + " tokens";
+      $("barRawVal").textContent = d.raw_tokens.toLocaleString() + " content tokens";
       $("barC").style.width = Math.max(3, (100 * d.tokens_used) / d.raw_tokens) + "%";
-      $("barCVal").textContent = d.tokens_used.toLocaleString() + " tokens";
+      const earlySpare =
+        d.compile_hints?.early_stopped && d.token_budget > d.tokens_used
+          ? " · " +
+            (d.token_budget - d.tokens_used).toLocaleString() +
+            " spare under " +
+            d.token_budget.toLocaleString() +
+            " ceiling"
+          : "";
+      $("barCVal").textContent = d.tokens_used.toLocaleString() + " content tokens" + earlySpare;
     });
+    clearResultsErr();
     $("cacheBadge").textContent = d.cache_hit ? "⚡ conversion cached" : "converted fresh";
     $("cacheBadge").title = d.cache_hit
       ? "This file was already converted. Reused cached markdown. Ranking still ran fresh."
       : "First time we saw this file. Converted and cached by content hash.";
     $("rankBadge").textContent = "bm25 ranking";
-    $("omitBadge").textContent = d.omitted_sections.length + " sections omitted";
+    $("omitBadge").textContent =
+      d.omitted_sections.length +
+      " omitted" +
+      (d.budget_omitted_sections?.length ? " · " + d.budget_omitted_sections.length + " budget-blocked" : "");
     $("out").textContent = d.markdown;
     applyLang($("out"), d.markdown);
     renderSections(d);
@@ -769,10 +1048,13 @@ $<HTMLFormElement>("compileForm").addEventListener("submit", async (e) => {
     bumpSavings(d);
     hasCompiledOnce = true;
     setLlmDependentButtons(d.llm_available !== false);
+    if (shouldShowAgentSecIdle()) showAgentSecIdle();
     // Move focus (not just scroll) to the results heading so screen-reader
-    // and keyboard users land where the sighted eye would.
-    $("resultsSec").scrollIntoView({ behavior: "smooth", block: "start" });
-    $("resultsHeading").focus();
+    // and keyboard users land where the sighted eye would. Defer scroll until
+    // #results is unhidden and rendered — same-frame scroll is a no-op on first compile.
+    scrollIntoViewAfterLayout($("resultsSec"), { behavior: "smooth", block: "start" }, () => {
+      $("resultsHeading").focus({ preventScroll: true });
+    });
     announce(`Compiled: ${d.reduction_pct}% fewer tokens, ${d.omitted_sections.length} sections omitted.`);
   } catch (e) {
     hideLoading();
@@ -817,28 +1099,161 @@ const STOP_TEXT: Record<AgentRunResult["stopped_reason"], string> = {
   whole_file: "The whole file fit, so the agent read all of it",
 };
 
-function startAgentPanel(): void {
-  agentTokens = 0;
-  agentParityHandle = null;
-  agentParityAbort?.abort();
-  $("agentSec").classList.remove("hidden");
+const TOKEN_CEILING_RAISE = "Hit the token budget. Raise the budget slider and run Agent again to read more.";
+
+function stopReasonText(r: AgentRunResult): string {
+  if (r.stopped_reason === "token_ceiling" && r.unread_remaining) return TOKEN_CEILING_RAISE;
+  return STOP_TEXT[r.stopped_reason];
+}
+
+function resetAgentPanelDom(): void {
   $("aSteps").innerHTML = "";
   $("aAnswerWrap").classList.add("hidden");
   $("aParityActions").classList.add("hidden");
   $("aParity").classList.add("hidden");
   $("aParityErr").classList.add("hidden");
   $("aErr").classList.add("hidden");
+  $("aAnswer").textContent = "";
+  $("aStopped").textContent = "";
+  $("aAnsFull").textContent = "";
+  $("aAnsAgent").textContent = "";
+  $("aParityModel").textContent = "";
   $("aTokens").textContent = "0";
   $("aWhole").textContent = "";
   $("aBar").style.width = "0%";
   const parityBtn = $<HTMLButtonElement>("aParityBtn");
   parityBtn.disabled = !llmAvailable;
   parityBtn.textContent = "Compare to full file";
+}
+
+function hideAgentSec(): void {
+  $("agentSec").classList.add("hidden");
+  $("agentIdleCta").classList.add("hidden");
+  $("agentRunBody").classList.add("hidden");
+}
+
+function showAgentSecIdle(): void {
+  $("agentSec").classList.remove("hidden");
+  $("agentIdleCta").classList.remove("hidden");
+  $("agentRunBody").classList.add("hidden");
+  hideAgentLoading();
+}
+
+function showAgentSecRunning(): void {
+  $("agentSec").classList.remove("hidden");
+  $("agentIdleCta").classList.add("hidden");
+  $("agentRunBody").classList.remove("hidden");
+}
+
+function syncAgentButtonsIdle(): void {
+  const top = $<HTMLButtonElement>("goAgent");
+  const below = $<HTMLButtonElement>("goAgentBelow");
+  if (top.textContent === "Agent working…") {
+    top.disabled = !llmAvailable || isQuestionStale();
+    top.textContent = "Run agent ▸";
+  }
+  if (below.textContent === "Agent working…") {
+    below.disabled = !llmAvailable || isQuestionStale();
+    below.textContent = "Run agent ▸";
+  }
+}
+
+/** Hide agent UI and drop in-flight / cached agent state (mirrors budget-stale for Prove). */
+function clearAgentPanel(): void {
+  agentAbort?.abort();
+  agentParityAbort?.abort();
+  agentTokens = 0;
+  agentParityHandle = null;
+  hideAgentLoading();
+  resetAgentPanelDom();
+  syncAgentButtonsIdle();
+  if (shouldShowAgentSecIdle()) showAgentSecIdle();
+  else hideAgentSec();
+}
+
+/**
+ * Document changed (sample / file): abort in-flight work and hide compiled results + agent.
+ * Question-only edits use onTaskUserChange (soft-stale). Budget edits use onBudgetUserChange.
+ */
+function clearCompiledResults(): void {
+  compileAbort?.abort();
+  proveAbort?.abort();
+  clearProveExpands();
+  clearResultsStale();
+  clearQuestionStale();
+  hideLoading();
+  hasCompiledOnce = false;
+  lastCompiledBudget = null;
+  lastCompiledTask = null;
+  lastCompiledContentTokens = 0;
+  lastRawTokens = 0;
+
+  $("resultsSec").classList.add("hidden");
+  $("results").classList.add("hidden");
+  clearAgentPanel();
+  $("parity").classList.add("hidden");
+  $("proveActions").classList.add("hidden");
+  clearResultsErr();
+
+  $("sections").innerHTML = "";
+  $("out").textContent = "";
+  $("out").classList.add("hidden");
+  $("sections").classList.remove("hidden");
+  const viewBtn = $<HTMLButtonElement>("viewToggle");
+  viewBtn.textContent = "See exact text sent to AI";
+  viewBtn.setAttribute("aria-pressed", "false");
+
+  for (const id of ["multiNote", "floorNote"] as const) {
+    const el = $(id);
+    el.classList.add("hidden");
+    el.innerHTML = "";
+  }
+  $("budgetOmitRow").classList.add("hidden");
+  $("relevanceOmitRow").classList.add("hidden");
+  $("budgetOmitCards").innerHTML = "";
+  $("budgetExpanded").innerHTML = "";
+  $("relevanceOmitChips").innerHTML = "";
+  $("relevanceExpanded").innerHTML = "";
+  $("budgetOmitDesc").textContent = "";
+  $("relevanceOmitSummary").textContent = "";
+
+  $("sRaw").textContent = "–";
+  $("sUsed").textContent = "–";
+  $("sPct").textContent = "–";
+  $("sCost").textContent = "–";
+  $("price").textContent = "";
+  $("barRawVal").textContent = "–";
+  $("barCVal").textContent = "–";
+  $("barRaw").style.width = "100%";
+  $("barC").style.width = "100%";
+  $("cacheBadge").textContent = "";
+  $("rankBadge").textContent = "";
+  $("omitBadge").textContent = "";
+  $("ansFull").textContent = "";
+  $("ansCompiled").textContent = "";
+  $("parityModel").textContent = "";
+
+  const goBtn = $<HTMLButtonElement>("go");
+  if (goBtn.textContent === "Compiling…") {
+    goBtn.disabled = false;
+    goBtn.textContent = "Compile once";
+  }
+  setProveButtonsBusy(false);
+}
+
+function startAgentPanel(): void {
+  agentTokens = 0;
+  agentParityHandle = null;
+  agentParityAbort?.abort();
+  resetAgentPanelDom();
+  showAgentSecRunning();
   const wait = $("agentLoadingNote");
   wait.classList.remove("hidden");
   wait.setAttribute("aria-busy", "true");
   $<HTMLButtonElement>("cancelGo").classList.remove("hidden");
-  $("agentSec").scrollIntoView({ behavior: "smooth", block: "start" });
+  scrollIntoViewAfterLayout($("agentSec"), { behavior: "smooth", block: "start" }, () => {
+    $("agentHeading").focus({ preventScroll: true });
+  });
   announce("Agent started.");
 }
 
@@ -854,7 +1269,7 @@ function onAgentStep(step: AgentStep): void {
   $("aTokens").textContent = agentTokens.toLocaleString();
   const meta = AGENT_ACTIONS[step.action];
   const suffix = step.section_id
-    ? ' <span class="amono">' + esc(step.section_id) + "</span>"
+    ? ' <span class="amono">' + esc(step.section_id) + (step.truncated ? " (truncated)" : "") + "</span>"
     : step.action === "compile" || step.action === "recompile"
       ? ' <span class="afaint">' + esc(step.detail) + "</span>"
       : "";
@@ -890,14 +1305,18 @@ function onAgentDone(r: AgentRunResult): void {
   $("aAnswer").textContent = r.answer;
   applyLang($("aAnswer"), r.answer);
   const over =
-    ceiling > 0 && r.tokens_read > ceiling
-      ? " Soft ceiling was " + ceiling.toLocaleString() + ". Last expand finished slightly over (expected)."
-      : "";
+    r.stopped_reason === "token_ceiling"
+      ? ""
+      : ceiling > 0 && r.tokens_read > ceiling
+        ? r.tokens_read <= ceiling + Math.max(50, Math.round(ceiling * 0.15))
+          ? " Soft ceiling was " + ceiling.toLocaleString() + " (finished a little over)."
+          : " Soft ceiling was " + ceiling.toLocaleString() + "."
+        : "";
   $("aStopped").textContent =
-    STOP_TEXT[r.stopped_reason] +
+    stopReasonText(r) +
     " · reading " +
     r.tokens_read.toLocaleString() +
-    " tokens (" +
+    " content tokens (" +
     pct +
     "% of the file)." +
     over;
@@ -924,6 +1343,11 @@ function agentError(msg: string): void {
   el.textContent = msg;
   el.classList.remove("hidden");
   announce("Agent error: " + msg);
+}
+
+/** After a failed agent run, bring back Run agent when compile results are still valid. */
+function restoreAgentRetryAfterError(): void {
+  if (shouldShowAgentSecIdle()) showAgentSecIdle();
 }
 
 // Parse a fetch SSE body into {event, data} records and hand each to `on` as it
@@ -953,6 +1377,12 @@ async function consumeSse(
 
 async function runAgentFlow(): Promise<void> {
   clearErr();
+  $("aErr").classList.add("hidden");
+  if (isQuestionStale()) {
+    $("agentSec").classList.remove("hidden");
+    agentError("Question changed since last compile. Click Compile once to refresh.");
+    return;
+  }
   const f = $<HTMLInputElement>("file").files?.[0];
   const task = $<HTMLTextAreaElement>("task").value.trim();
   if (!f || !task) {
@@ -967,34 +1397,53 @@ async function runAgentFlow(): Promise<void> {
 
   agentAbort?.abort();
   agentAbort = new AbortController();
-  const btn = $<HTMLButtonElement>("goAgent");
-  btn.disabled = true;
-  btn.textContent = "Agent working…";
+  const topBtn = $<HTMLButtonElement>("goAgent");
+  const belowBtn = $<HTMLButtonElement>("goAgentBelow");
+  topBtn.disabled = true;
+  belowBtn.disabled = true;
+  topBtn.textContent = "Agent working…";
+  belowBtn.textContent = "Agent working…";
   startAgentPanel();
+  let gotDone = false;
   try {
     const resp = await fetch("/api/agent", { method: "POST", body: fd, signal: agentAbort.signal });
     const ctype = resp.headers.get("content-type") ?? "";
     if (!ctype.includes("text/event-stream") || !resp.body) {
       // A guard rejected the request before the stream opened → JSON error body.
       const d = (await resp.json().catch(() => ({ error: "Agent request failed." }))) as { error?: string };
-      throw new Error(await apiFailureMessage(resp, d));
+      throw new Error(apiFailureMessage(resp, d, "agent"));
     }
     await consumeSse(resp.body, (event, data) => {
       if (event === "step") onAgentStep(data as AgentStep);
-      else if (event === "done") onAgentDone(data as AgentRunResult);
-      else if (event === "error") throw new Error((data as { error: string }).error);
+      else if (event === "done") {
+        gotDone = true;
+        onAgentDone(data as AgentRunResult);
+      } else if (event === "error") throw new Error((data as { error: string }).error);
     });
+    if (!gotDone) {
+      throw new Error("Agent connection ended before a result. Try Run agent again.");
+    }
   } catch (e) {
     hideAgentLoading();
-    if (e instanceof DOMException && e.name === "AbortError") return;
+    if (e instanceof DOMException && e.name === "AbortError") {
+      // Keep partial steps visible — wiping the panel makes cancel look broken.
+      agentError("Cancelled. Partial steps above are incomplete — Run agent again to start fresh.");
+      announce("Agent cancelled.");
+      return;
+    }
     agentError(e instanceof Error ? e.message : String(e));
+    restoreAgentRetryAfterError();
   } finally {
-    btn.disabled = !llmAvailable;
-    btn.textContent = "Run agent ▸";
+    const qStale = isQuestionStale();
+    topBtn.disabled = !llmAvailable || qStale;
+    belowBtn.disabled = !llmAvailable || qStale;
+    topBtn.textContent = "Run agent ▸";
+    belowBtn.textContent = "Run agent ▸";
     $<HTMLButtonElement>("cancelGo").classList.add("hidden");
   }
 }
 $<HTMLButtonElement>("goAgent").onclick = () => void runAgentFlow();
+$<HTMLButtonElement>("goAgentBelow").onclick = () => void runAgentFlow();
 
 $<HTMLButtonElement>("aParityBtn").onclick = async () => {
   clearErr();
@@ -1021,15 +1470,15 @@ $<HTMLButtonElement>("aParityBtn").onclick = async () => {
     const d: AgentParityResult = await resp
       .json()
       .catch(() => ({ error: "Comparison failed." }) as AgentParityResult);
-    if (!resp.ok || d.error) throw new Error(await apiFailureMessage(resp, d));
+    if (!resp.ok || d.error) throw new Error(apiFailureMessage(resp, d, "agentParity"));
     $("aParity").classList.remove("hidden");
     $("aParityModel").textContent = d.model;
     $("aAnsFull").textContent = d.full.answer;
     applyLang($("aAnsFull"), d.full.answer);
-    $("aAnsFullCost").textContent = d.full.context_tokens.toLocaleString() + " context tokens";
+    $("aAnsFullCost").textContent = d.full.context_tokens.toLocaleString() + " content tokens";
     $("aAnsAgent").textContent = d.agent.answer;
     applyLang($("aAnsAgent"), d.agent.answer);
-    $("aAnsAgentCost").textContent = d.agent.context_tokens.toLocaleString() + " context tokens";
+    $("aAnsAgentCost").textContent = d.agent.context_tokens.toLocaleString() + " content tokens";
     $("aParity").scrollIntoView({ behavior: "smooth", block: "nearest" });
     announce("Agent vs full-file comparison ready.");
   } catch (e) {
@@ -1048,6 +1497,14 @@ function renderSections(d: CompileApiResult): void {
   const wrap = $("sections");
   wrap.innerHTML = "";
   const cards = [...d.selected_sections].sort((a, b) => (b.relevance ?? 0) - (a.relevance ?? 0));
+  if (!cards.length) {
+    const empty = document.createElement("p");
+    empty.className = "qhint compiled-empty";
+    empty.textContent =
+      "No sections fit this budget. See the note above to raise it, or peek an omitted section below.";
+    wrap.appendChild(empty);
+    return;
+  }
   cards.forEach((s, i) => {
     const el = document.createElement("div");
     el.className = "seccard";
@@ -1068,16 +1525,30 @@ function renderSections(d: CompileApiResult): void {
         const qt = document.createElement("span");
         qt.className = "qtag" + (k > 0 ? " alt" : "");
         qt.textContent = "Q" + (qi + 1);
-        qt.title = (k === 0 ? "Best answers: " : "Also relevant to: ") + d.queries[qi];
+        qt.title = (k === 0 ? "Best answers: " : "Also a top match for: ") + d.queries[qi];
         nmSpan.appendChild(document.createTextNode(" "));
         nmSpan.appendChild(qt);
       });
     }
     const meta = document.createElement("span");
     meta.className = "meta";
+    const remainder =
+      s.truncated && s.full_tokens && s.full_tokens > s.tokens
+        ? (s.remainder_tokens ?? s.full_tokens - s.tokens)
+        : 0;
     meta.textContent =
-      (s.relevance != null ? "relevance " + s.relevance + "% · " : "") + s.tokens + " tokens";
+      s.truncated && s.full_tokens
+        ? truncatedSectionMetaCopy(s.tokens, s.full_tokens, remainder, s.relevance)
+        : (s.relevance != null ? "relevance " + s.relevance + "% · " : "") +
+          s.tokens.toLocaleString() +
+          " content tokens";
     h.append(nmSpan, meta);
+    if (s.truncated) {
+      const badge = document.createElement("span");
+      badge.className = "seccard-trunc-badge";
+      badge.textContent = "truncated";
+      h.appendChild(badge);
+    }
     el.appendChild(h);
     if (s.relevance != null) {
       const bar = document.createElement("div");
@@ -1093,6 +1564,89 @@ function renderSections(d: CompileApiResult): void {
       p.textContent = s.text;
       el.appendChild(p);
     }
+    if (s.truncated && remainder > 0) {
+      const actions = document.createElement("div");
+      actions.className = "seccard-trunc-actions";
+
+      const includeLab = document.createElement("label");
+      includeLab.className = "seccard-include";
+      includeLab.addEventListener("click", (ev) => ev.stopPropagation());
+      const includeCb = document.createElement("input");
+      includeCb.type = "checkbox";
+      includeCb.checked = proveExpandedIds.has(s.id);
+      includeLab.appendChild(includeCb);
+      includeLab.appendChild(document.createTextNode(" Include rest in Prove"));
+      const includeHint = document.createElement("span");
+      includeHint.className = "seccard-include-hint";
+      if (includeCb.checked) {
+        includeHint.textContent = includeRestHintCopy(remainder, lastCrumb(s.section));
+      }
+      includeLab.appendChild(includeHint);
+
+      includeCb.addEventListener("change", () => {
+        setProveInclude(s.id, remainder, includeCb.checked);
+        includeHint.textContent = includeCb.checked
+          ? includeRestHintCopy(remainder, lastCrumb(s.section))
+          : "";
+        if (includeCb.checked) {
+          announce(
+            "Included rest of " +
+              lastCrumb(s.section) +
+              " in Prove (~" +
+              remainder.toLocaleString() +
+              " content tokens)."
+          );
+        } else {
+          // Contract: uncheck clears Prove Include only — peek-rest stays open.
+          if (shouldRemovePeekOnUncheck()) {
+            el.querySelector('.seccard-rest-peek[data-section-id="' + s.id + '"]')?.remove();
+          }
+          announce("Removed rest of " + lastCrumb(s.section) + " from Prove.");
+        }
+      });
+
+      const peekBtn = document.createElement("button");
+      peekBtn.type = "button";
+      peekBtn.className = "peek-rest";
+      peekBtn.textContent = "Peek rest";
+
+      actions.append(includeLab, peekBtn);
+      el.appendChild(actions);
+
+      peekBtn.addEventListener("click", async () => {
+        if (el.querySelector('.seccard-rest-peek[data-section-id="' + s.id + '"]')) return;
+        peekBtn.disabled = true;
+        try {
+          const resp = await fetch("/api/expand", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ handle: d.handle, section_id: s.id }),
+          });
+          const e: ExpandApiResult = await resp.json();
+          if (e.error) throw new Error(e.error);
+          const fullText = e.markdown.replace(/^<!--[\s\S]*?-->\n?/, "").trim();
+          const partialLen = s.text?.length ?? 0;
+          const restText =
+            fullText.length > partialLen && fullText.startsWith(s.text ?? "")
+              ? fullText.slice(partialLen).trim()
+              : fullText;
+          const det = document.createElement("details");
+          det.className = "seccard-rest-peek";
+          det.dataset.sectionId = s.id;
+          det.open = true;
+          const sum = document.createElement("summary");
+          sum.textContent = "Unread remainder (~" + remainder.toLocaleString() + " content tokens)";
+          const pre = document.createElement("pre");
+          pre.textContent = restText || "(no additional text beyond the partial above)";
+          det.append(sum, pre);
+          actions.appendChild(det);
+          peekBtn.classList.add("hidden");
+        } catch (err) {
+          resultsError(err instanceof Error ? err.message : String(err));
+          peekBtn.disabled = false;
+        }
+      });
+    }
     wrap.appendChild(el);
   });
 }
@@ -1107,7 +1661,7 @@ function renderMultiNote(d: CompileApiResult): void {
   const items = d.queries
     .map((q, i) => '<li><span class="qtag">Q' + (i + 1) + "</span> " + esc(q) + "</li>")
     .join("");
-  el.innerHTML =
+  let html =
     "<strong>Detected " +
     d.queries.length +
     " questions.</strong> Each was ranked on its own and the " +
@@ -1116,13 +1670,18 @@ function renderMultiNote(d: CompileApiResult): void {
     '<ol style="margin:6px 0 0;padding-left:20px;list-style:none">' +
     items +
     "</ol>";
+  if (d.compile_hints?.multi_part_nudge && !d.budget_omitted_sections?.length) {
+    html +=
+      '<p style="margin:10px 0 0"><strong>Multi-part question.</strong> This may need more than one section. ' +
+      "Check omitted sections below or raise the budget if the answer looks incomplete.</p>";
+  }
+  el.innerHTML = html;
   el.classList.remove("hidden");
 }
 
-// Explain WHY a bigger budget sometimes changes nothing: on a focused
-// question only a few sections clear the 40% relevance floor, so the packer
-// stops well short of the budget. Without this note, "quick fact" and "deep
-// dive" look identical for no visible reason.
+// Explain WHY a bigger budget sometimes changes nothing: coverage-first packing
+// stops once facets/terms are covered (budget is a ceiling). Without this note,
+// "quick fact" and "deep dive" can look identical for no visible reason.
 function renderFloorNote(d: CompileApiResult): void {
   const el = $("floorNote");
   el.classList.add("hidden");
@@ -1130,16 +1689,16 @@ function renderFloorNote(d: CompileApiResult): void {
   // Use the budget the server actually applied, not the live slider — they can
   // differ (server clamps), and the note must never contradict the result.
   const budget = d.token_budget;
-  if (d.reduction_pct === 0) {
-    // Whole file fit under the budget — this is the "deep dive looks the same"
-    // case. Say so, so it doesn't read as a no-op.
+  // Only claim "returned in full" when nothing was omitted. reduction_pct===0
+  // alone is not the old whole-file short-circuit (that path is gone).
+  if (d.reduction_pct === 0 && d.omitted_sections.length === 0) {
     el.innerHTML =
       "<strong>Whole file fit your budget.</strong> The document is " +
       d.raw_tokens.toLocaleString() +
       " tokens, under your " +
       budget.toLocaleString() +
-      "-token budget, so it was returned in full. " +
-      "nothing to leave out. Lower the budget (try “quick fact”) to see compilation kick in.";
+      "-token budget, and every section was kept. " +
+      "Nothing to leave out. Lower the budget (try “quick fact”) to see compilation drop sections.";
     el.classList.remove("hidden");
     return;
   }
@@ -1151,10 +1710,15 @@ function renderFloorNote(d: CompileApiResult): void {
     (a, s) => ((s.relevance || 0) > (a?.relevance || 0) ? s : a),
     null
   );
+  const hasBudgetOmits = (d.budget_omitted_sections?.length ?? 0) > 0;
   if (topOmit && d.selected_sections.length === 0) {
     // Suggested budget: the section's size plus ~80 tokens of wrapper overhead,
     // rounded up to a tidy hundred.
     const need = Math.ceil((topOmit.tokens + 80) / 100) * 100;
+    const inOmitUi = Boolean(
+      d.budget_omitted_sections?.some((s) => s.id === topOmit.id) ||
+      d.relevance_omitted_sections?.some((s) => s.id === topOmit.id)
+    );
     el.innerHTML =
       "<strong>Nothing fit your budget.</strong> Even the best match, “" +
       esc(lastCrumb(topOmit.section)) +
@@ -1167,10 +1731,10 @@ function renderFloorNote(d: CompileApiResult): void {
       "-token budget, so no section is shown below. " +
       "Raise the budget to about " +
       need.toLocaleString() +
-      " tokens, or fetch it directly with " +
-      "<code>expand_section</code> (<code>" +
-      topOmit.id +
-      "</code>).";
+      " tokens" +
+      (inOmitUi
+        ? ", or peek it in the omitted sections below."
+        : ", or fetch it with <code>expand_section</code> (<code>" + topOmit.id + "</code>).");
     el.classList.remove("hidden");
     return;
   }
@@ -1178,9 +1742,16 @@ function renderFloorNote(d: CompileApiResult): void {
   // means the top hit alone exceeds the budget; if it would fit, say so
   // instead of claiming it's "larger than" the budget (that was a real bug
   // when packing order starved a fitting 100% section).
-  if (topOmit && (topOmit.relevance || 0) > selRel) {
+  if (!hasBudgetOmits && topOmit && (topOmit.relevance || 0) > selRel) {
     const need = Math.ceil((topOmit.tokens + 80) / 100) * 100;
     const tooBigAlone = topOmit.tokens + 80 > budget;
+    const inOmitUi = Boolean(
+      d.budget_omitted_sections?.some((s) => s.id === topOmit.id) ||
+      d.relevance_omitted_sections?.some((s) => s.id === topOmit.id)
+    );
+    const fetchHint = inOmitUi
+      ? " Peek it in the omitted sections below."
+      : " Fetch it with <code>expand_section</code> (<code>" + topOmit.id + "</code>).";
     el.innerHTML = tooBigAlone
       ? "<strong>The most relevant section didn’t fit.</strong> “" +
         esc(lastCrumb(topOmit.section)) +
@@ -1193,10 +1764,8 @@ function renderFloorNote(d: CompileApiResult): void {
         "-token budget, so lower-relevance sections are shown instead. " +
         "Raise the budget to about " +
         need.toLocaleString() +
-        " tokens, or fetch it directly below with " +
-        "<code>expand_section</code> (<code>" +
-        topOmit.id +
-        "</code>)."
+        " tokens." +
+        fetchHint
       : "<strong>The most relevant section was left out.</strong> “" +
         esc(lastCrumb(topOmit.section)) +
         "” (" +
@@ -1205,63 +1774,253 @@ function renderFloorNote(d: CompileApiResult): void {
         topOmit.tokens.toLocaleString() +
         " tokens) fits your " +
         budget.toLocaleString() +
-        "-token budget but wasn’t selected. Fetch it below with " +
-        "<code>expand_section</code> (<code>" +
-        topOmit.id +
-        "</code>).";
+        "-token budget but wasn’t selected." +
+        fetchHint;
+    el.classList.remove("hidden");
+    return;
+  }
+  const hint = d.next_section_hint;
+  const hintInBudgetOmits = Boolean(hint && d.budget_omitted_sections?.some((s) => s.id === hint.id));
+  const louderOmitShown = Boolean(
+    (hasBudgetOmits && hintInBudgetOmits) ||
+    (!hasBudgetOmits && topOmit && (topOmit.relevance || 0) > selRel) ||
+    (hint && !hintInBudgetOmits)
+  );
+  if (!hasBudgetOmits && !louderOmitShown && d.compile_hints?.omit_action) {
+    const named = d.compile_hints.named_omit;
+    const multi = (d.queries?.length ?? 0) >= 2;
+    let html =
+      "<strong>Sections were omitted.</strong> " +
+      (multi ? "This question spans multiple facets; what fit may not cover all of them. " : "") +
+      "If the answer looks incomplete, peek omitted sections below or raise the budget.";
+    if (named) {
+      html +=
+        " Left out: “" +
+        esc(lastCrumb(named.section)) +
+        "” (" +
+        (named.relevance != null ? named.relevance + "% relevant, " : "") +
+        named.tokens.toLocaleString() +
+        " tokens).";
+    }
+    el.innerHTML = html;
     el.classList.remove("hidden");
     return;
   }
   const spare = budget - d.tokens_used;
   const budgetBound = spare < budget * 0.12; // used almost the whole budget
-  const hint = d.next_section_hint;
   if (hint) {
-    // Server already decided we're budget-bound with a strong omitted section
-    // that wouldn't fit beside the selection — name it and give a concrete
-    // next budget (keep current compile + add that section).
-    el.innerHTML =
-      "<strong>Budget-bound.</strong> Selection stopped at your " +
-      budget.toLocaleString() +
-      "-token ceiling. Also left out: “" +
-      esc(lastCrumb(hint.section)) +
-      "” (" +
-      hint.relevance +
-      "% relevant, " +
-      hint.tokens.toLocaleString() +
-      " tokens). Raise the budget to about " +
-      hint.suggested_budget.toLocaleString() +
-      " tokens to keep what’s selected and add it, or fetch it below with " +
-      "<code>expand_section</code> (<code>" +
-      esc(hint.id) +
-      "</code>).";
-    el.classList.remove("hidden");
-    return;
+    const truncatedHint = d.selected_sections.some((s) => s.truncated && s.id === hint.id);
+    const hintInOmitUi = Boolean(
+      d.budget_omitted_sections?.some((s) => s.id === hint.id) ||
+      d.relevance_omitted_sections?.some((s) => s.id === hint.id)
+    );
+    if (truncatedHint || !hintInBudgetOmits) {
+      // Truncated selected: point at Peek rest / Include rest on the Included card.
+      // Fully omitted: mention expand_section only when that id has an omit chip/card.
+      let body: string;
+      if (truncatedHint) {
+        body =
+          "“" +
+          esc(lastCrumb(hint.section)) +
+          "” (" +
+          hint.relevance +
+          "% relevant) is included only in part under your " +
+          budget.toLocaleString() +
+          "-token ceiling. Raise the budget to about " +
+          hint.suggested_budget.toLocaleString() +
+          " tokens for the full section, or use " +
+          "<strong>Peek rest</strong> or <strong>Include rest in Prove</strong> on that included card below.";
+      } else {
+        body =
+          "Selection stopped at your " +
+          budget.toLocaleString() +
+          "-token ceiling. Also left out: “" +
+          esc(lastCrumb(hint.section)) +
+          "” (" +
+          hint.relevance +
+          "% relevant, " +
+          hint.tokens.toLocaleString() +
+          " tokens). Raise the budget to about " +
+          hint.suggested_budget.toLocaleString() +
+          " tokens to keep what’s selected and add it";
+        if (hintInOmitUi) {
+          body += ", or peek it in the omitted sections below.";
+        } else {
+          body += ".";
+        }
+      }
+      el.innerHTML = "<strong>Budget-bound.</strong> " + body;
+      el.classList.remove("hidden");
+      return;
+    }
   }
   if (budgetBound) {
     el.innerHTML =
       "<strong>Budget-bound.</strong> Selection stopped because it hit your " +
       budget.toLocaleString() +
       "-token ceiling, not the relevance floor. A larger budget would pull in more sections.";
+  } else if (d.compile_hints?.early_stopped) {
+    el.innerHTML =
+      "<strong>Coverage complete.</strong> Packed enough for this question under your " +
+      budget.toLocaleString() +
+      "-token ceiling. Spare budget was left unused. Raise the budget only if the answer looks incomplete.";
   } else {
     el.innerHTML =
       "<strong>Relevance-bound, not budget-bound.</strong> Only <strong>" +
       d.selected_sections.length +
       "</strong> section" +
       (d.selected_sections.length === 1 ? "" : "s") +
-      " cleared the 40% relevance floor. " +
+      " cleared the relevance / early-stop thresholds. " +
       "the rest scored too low to matter for this question. Used <strong>" +
       d.tokens_used.toLocaleString() +
       "</strong> of your " +
       budget.toLocaleString() +
       "-token budget, so a bigger budget (e.g. “deep dive”) adds nothing here. " +
-      "That’s the point: the tool sends what’s relevant, not whatever fills the budget.";
+      "That's the point: the tool sends what's relevant, not whatever fills the budget.";
   }
   el.classList.remove("hidden");
 }
 
 const CHIP_PAGE = 12; // avoid an unbounded wall of chips on long documents
 
-function makeChip(o: SectionInfo, d: CompileApiResult, exp: HTMLElement): HTMLButtonElement {
+function budgetOmitWhyCopy(s: BudgetOmitSection, d: CompileApiResult): string {
+  const gaps = s.gap_queries ?? [];
+  if (gaps.length && d.queries?.length) {
+    const labels = gaps.map((qi) => "Q" + (qi + 1)).join(", ");
+    return (
+      "Best match for " +
+      labels +
+      " left out because it didn't fit your " +
+      d.token_budget.toLocaleString() +
+      "-token budget."
+    );
+  }
+  const rel = s.relevance != null ? s.relevance + "% relevant, " : "";
+  return (
+    "“" +
+    lastCrumb(s.section) +
+    "” (" +
+    rel +
+    s.tokens.toLocaleString() +
+    " tokens) left out because it didn't fit your " +
+    d.token_budget.toLocaleString() +
+    "-token budget."
+  );
+}
+
+function appendExpblk(o: SectionInfo, exp: HTMLElement, e: ExpandApiResult, open: boolean): void {
+  const tok = e.tokens_used || o.tokens || 0;
+  const blk = document.createElement("details");
+  blk.className = "expblk";
+  blk.dataset.sectionId = o.id;
+  blk.open = open;
+
+  const sum = document.createElement("summary");
+  const title = document.createElement("span");
+  title.className = "expblk-title";
+  title.textContent = o.id + " · " + lastCrumb(o.section) + " → " + (e.tokens_used || "?") + " tokens";
+
+  const includeLab = document.createElement("label");
+  includeLab.className = "expblk-include";
+  includeLab.addEventListener("click", (ev) => ev.stopPropagation());
+  const includeCb = document.createElement("input");
+  includeCb.type = "checkbox";
+  includeCb.checked = false;
+  includeLab.appendChild(includeCb);
+  includeLab.appendChild(document.createTextNode(" Include in Prove"));
+  const includeHint = document.createElement("span");
+  includeHint.className = "expblk-include-hint hidden";
+  includeHint.setAttribute("aria-live", "polite");
+  includeLab.appendChild(includeHint);
+
+  function syncIncludeHint(): void {
+    if (includeCb.checked) {
+      includeHint.textContent = includeRestHintCopy(tok, lastCrumb(o.section));
+      includeHint.classList.remove("hidden");
+    } else {
+      includeHint.textContent = "";
+      includeHint.classList.add("hidden");
+    }
+  }
+
+  if (proveExpandedIds.has(o.id)) {
+    includeCb.checked = true;
+    syncIncludeHint();
+  }
+
+  includeCb.addEventListener("change", () => {
+    setProveInclude(o.id, tok, includeCb.checked);
+    syncIncludeHint();
+    if (includeCb.checked) {
+      const est = lastCompiledContentTokens + [...proveExpandedTokens.values()].reduce((a, b) => a + b, 0);
+      announce(
+        "Included " +
+          lastCrumb(o.section) +
+          " in Prove. Effective context ≈ " +
+          est.toLocaleString() +
+          " content tokens."
+      );
+    } else {
+      // Contract: uncheck clears Prove Include only — peek (this expblk) stays.
+      if (shouldRemovePeekOnUncheck()) blk.remove();
+      announce("Removed " + lastCrumb(o.section) + " from Prove (peek kept).");
+    }
+  });
+
+  sum.appendChild(title);
+  sum.appendChild(includeLab);
+  const pre = document.createElement("pre");
+  pre.textContent = e.markdown;
+  blk.appendChild(sum);
+  blk.appendChild(pre);
+  exp.appendChild(blk);
+}
+
+async function peekSection(
+  o: SectionInfo,
+  d: CompileApiResult,
+  exp: HTMLElement,
+  open: boolean,
+  chip?: HTMLButtonElement
+): Promise<void> {
+  if (exp.querySelector('.expblk[data-section-id="' + o.id + '"]')) return;
+  if (chip) {
+    chip.disabled = true;
+    chip.classList.add("done");
+  }
+  try {
+    const resp = await fetch("/api/expand", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ handle: d.handle, section_id: o.id }),
+    });
+    const e: ExpandApiResult = await resp.json();
+    if (e.error) throw new Error(e.error);
+    appendExpblk(o, exp, e, open);
+    announce(
+      open
+        ? "Loaded omitted section: " + lastCrumb(o.section) + ". Check Include in Prove to add its tokens."
+        : "Peeked section: " +
+            lastCrumb(o.section) +
+            ". Not in Prove yet. Check Include in Prove to add its tokens."
+    );
+  } catch (err) {
+    if (chip) {
+      chip.classList.remove("done");
+      chip.disabled = false;
+    }
+    resultsError(err instanceof Error ? err.message : String(err));
+  } finally {
+    if (chip) chip.disabled = false;
+  }
+}
+
+function makeChip(
+  o: SectionInfo,
+  d: CompileApiResult,
+  exp: HTMLElement,
+  openOnPeek = false
+): HTMLButtonElement {
   const b = document.createElement("button");
   b.type = "button";
   b.className = "ochip";
@@ -1274,105 +2033,45 @@ function makeChip(o: SectionInfo, d: CompileApiResult, exp: HTMLElement): HTMLBu
     o.tokens +
     " tok)";
   b.setAttribute("aria-label", "Peek omitted section: " + lastCrumb(o.section));
-  b.onclick = async () => {
+  b.onclick = () => {
     if (b.classList.contains("done")) return;
-    b.disabled = true;
-    try {
-      const resp = await fetch("/api/expand", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ handle: d.handle, section_id: o.id }),
-      });
-      const e: ExpandApiResult = await resp.json();
-      if (e.error) throw new Error(e.error);
-      const tok = e.tokens_used || o.tokens || 0;
-      const blk = document.createElement("details");
-      blk.className = "expblk";
-      blk.dataset.sectionId = o.id;
-      // First peek stays open so the user sees what they fetched; later ones
-      // stay collapsed so the page doesn’t flood with prose.
-      if (exp.querySelectorAll(".expblk").length === 0) blk.open = true;
-
-      const sum = document.createElement("summary");
-      const title = document.createElement("span");
-      title.className = "expblk-title";
-      title.textContent = o.id + " · " + lastCrumb(o.section) + " → " + (e.tokens_used || "?") + " tokens";
-
-      const includeLab = document.createElement("label");
-      includeLab.className = "expblk-include";
-      includeLab.addEventListener("click", (ev) => ev.stopPropagation());
-      const includeCb = document.createElement("input");
-      includeCb.type = "checkbox";
-      includeCb.checked = false;
-      includeLab.appendChild(includeCb);
-      includeLab.appendChild(document.createTextNode(" Include in Prove"));
-      includeCb.addEventListener("change", () => {
-        setProveInclude(o.id, tok, includeCb.checked);
-        if (includeCb.checked) {
-          announce(
-            "Included " +
-              lastCrumb(o.section) +
-              " in Prove. Effective context ≈ " +
-              (
-                lastCompiledTokens + [...proveExpandedTokens.values()].reduce((a, b) => a + b, 0)
-              ).toLocaleString() +
-              " tokens."
-          );
-        } else {
-          announce("Removed " + lastCrumb(o.section) + " from Prove (peek kept).");
-        }
-      });
-
-      const dismiss = document.createElement("button");
-      dismiss.type = "button";
-      dismiss.className = "expblk-dismiss";
-      dismiss.setAttribute("aria-label", "Dismiss peeked section " + lastCrumb(o.section));
-      dismiss.textContent = "×";
-      dismiss.addEventListener("click", (ev) => {
-        ev.preventDefault();
-        ev.stopPropagation();
-        setProveInclude(o.id, tok, false);
-        blk.remove();
-        b.classList.remove("done");
-        announce("Dismissed peek of " + lastCrumb(o.section) + ".");
-      });
-
-      sum.appendChild(title);
-      sum.appendChild(includeLab);
-      sum.appendChild(dismiss);
-      const pre = document.createElement("pre");
-      pre.textContent = e.markdown;
-      blk.appendChild(sum);
-      blk.appendChild(pre);
-      exp.appendChild(blk);
-      b.classList.add("done");
-      announce(
-        "Peeked section: " +
-          lastCrumb(o.section) +
-          ". Not in Prove yet. Check Include in Prove to add its tokens."
-      );
-    } catch (err) {
-      fail(err instanceof Error ? err.message : String(err));
-    } finally {
-      b.disabled = false;
-    }
+    void peekSection(o, d, exp, openOnPeek || exp.querySelectorAll(".expblk").length === 0, b);
   };
   return b;
 }
 
-function renderOmitted(d: CompileApiResult): void {
-  const row = $("omittedRow");
-  const chips = $("omitChips");
-  const exp = $("expanded");
-  chips.innerHTML = "";
-  exp.innerHTML = "";
-  if (!d.omitted_sections.length) {
-    row.classList.add("hidden");
-    return;
+function renderBudgetOmitCard(s: BudgetOmitSection, d: CompileApiResult, cards: HTMLElement): void {
+  const card = document.createElement("div");
+  card.className = "budget-omit-card";
+  const h = document.createElement("div");
+  h.className = "h";
+  const nm = document.createElement("span");
+  nm.className = "nm";
+  nm.textContent = s.id + " · " + lastCrumb(s.section);
+  const meta = document.createElement("span");
+  meta.className = "meta";
+  meta.textContent =
+    (s.relevance != null ? s.relevance + "% relevant · " : "") + s.tokens.toLocaleString() + " tokens";
+  h.append(nm, meta);
+  const why = document.createElement("p");
+  why.className = "why";
+  why.textContent = budgetOmitWhyCopy(s, d);
+  if (s.suggested_budget) {
+    why.textContent +=
+      " Raise the budget to about " + s.suggested_budget.toLocaleString() + " tokens to include it.";
   }
-  row.classList.remove("hidden");
-  const first = d.omitted_sections.slice(0, CHIP_PAGE);
-  const rest = d.omitted_sections.slice(CHIP_PAGE);
+  card.append(h, why);
+  cards.appendChild(card);
+}
+
+function renderOmitChips(
+  sections: SectionInfo[],
+  d: CompileApiResult,
+  chips: HTMLElement,
+  exp: HTMLElement
+): void {
+  const first = sections.slice(0, CHIP_PAGE);
+  const rest = sections.slice(CHIP_PAGE);
   first.forEach((o) => chips.appendChild(makeChip(o, d, exp)));
   if (rest.length) {
     const more = document.createElement("button");
@@ -1388,23 +2087,81 @@ function renderOmitted(d: CompileApiResult): void {
   }
 }
 
-const PROVE_IDLE = "Prove answer parity";
-const PROVE_TOP_IDLE = "Prove…";
-const PROVE_BUSY = "Asking the model twice…";
+function renderOmitted(d: CompileApiResult): void {
+  const budgetRow = $("budgetOmitRow");
+  const relevanceRow = $("relevanceOmitRow");
+  const budgetCards = $("budgetOmitCards");
+  const budgetExp = $("budgetExpanded");
+  const relChips = $("relevanceOmitChips");
+  const relExp = $("relevanceExpanded");
+  const relSummary = $("relevanceOmitSummary");
+
+  budgetCards.innerHTML = "";
+  budgetExp.innerHTML = "";
+  relChips.innerHTML = "";
+  relExp.innerHTML = "";
+
+  const budgetOmits = d.budget_omitted_sections ?? [];
+  const relevanceOmits =
+    d.relevance_omitted_sections ?? d.omitted_sections.filter((s) => !budgetOmits.some((b) => b.id === s.id));
+
+  if (!d.omitted_sections.length) {
+    budgetRow.classList.add("hidden");
+    relevanceRow.classList.add("hidden");
+    return;
+  }
+
+  if (budgetOmits.length) {
+    budgetRow.classList.remove("hidden");
+    $("budgetOmitDesc").textContent =
+      "These sections match your question but didn't fit the token budget. Peeks load below; check Include in Prove to add one.";
+    budgetOmits.forEach((s) => renderBudgetOmitCard(s, d, budgetCards));
+    void (async () => {
+      for (const s of budgetOmits) {
+        await peekSection(s, d, budgetExp, true);
+      }
+    })();
+  } else {
+    budgetRow.classList.add("hidden");
+  }
+
+  if (relevanceOmits.length) {
+    relevanceRow.classList.remove("hidden");
+    relSummary.textContent =
+      relevanceOmits.length + " lower-relevance section" + (relevanceOmits.length === 1 ? "" : "s");
+    const disclosure = $<HTMLDetailsElement>("relevanceOmitDisclosure");
+    disclosure.open = false;
+    renderOmitChips(relevanceOmits, d, relChips, relExp);
+  } else {
+    relevanceRow.classList.add("hidden");
+  }
+}
 
 function setProveButtonsBusy(busy: boolean): void {
+  const proveStale = isProveStale();
   const top = $<HTMLButtonElement>("prove");
   const results = $<HTMLButtonElement>("proveResults");
-  top.disabled = busy || !llmAvailable;
-  results.disabled = busy || !llmAvailable;
+  top.disabled = busy || !llmAvailable || proveStale;
+  results.disabled = busy || !llmAvailable || proveStale;
   top.textContent = busy ? PROVE_BUSY : PROVE_TOP_IDLE;
   results.textContent = busy ? PROVE_BUSY : PROVE_IDLE;
 }
 
 async function runProveFlow(): Promise<void> {
-  clearErr();
+  clearProveErr();
+  if (isProveStale()) {
+    proveError(
+      isQuestionStale()
+        ? "Question changed since last compile. Click Compile once to refresh."
+        : "Budget changed since last compile. Click Compile once to refresh."
+    );
+    return;
+  }
   const fd = formData();
-  if (!fd) return fail("Pick a file and enter a question first.");
+  if (!fd) {
+    proveError("Pick a file and enter a question first.");
+    return;
+  }
   if (proveExpandedIds.size) {
     fd.append("expanded_ids", JSON.stringify([...proveExpandedIds]));
   }
@@ -1418,7 +2175,7 @@ async function runProveFlow(): Promise<void> {
     const d: AnswerApiResult = await resp
       .json()
       .catch(() => ({ error: "Parity request failed." }) as AnswerApiResult);
-    if (!resp.ok || d.error) throw new Error(await apiFailureMessage(resp, d));
+    if (!resp.ok || d.error) throw new Error(apiFailureMessage(resp, d, "prove"));
     hideLoading();
     // Parity lives inside resultsSec. If they haven't compiled yet (power-path
     // Prove…), show only the parity panel — don't unveil the empty compile shell.
@@ -1432,7 +2189,7 @@ async function runProveFlow(): Promise<void> {
     $("parityModel").textContent = d.model;
     $("ansFull").textContent = d.full.answer;
     applyLang($("ansFull"), d.full.answer);
-    $("ansFullCost").textContent = d.full.context_tokens.toLocaleString() + " context tokens";
+    $("ansFullCost").textContent = d.full.context_tokens.toLocaleString() + " content tokens";
     $("ansCompiled").textContent = d.compiled.answer;
     applyLang($("ansCompiled"), d.compiled.answer);
     const expandedN = d.compiled.expanded_ids?.length ?? 0;
@@ -1442,21 +2199,28 @@ async function runProveFlow(): Promise<void> {
         : "From the COMPILED context";
     $("ansCompiledCost").textContent =
       d.compiled.context_tokens.toLocaleString() +
-      " context tokens (" +
+      " content tokens (" +
       d.compiled.reduction_pct +
       "% less)" +
       (expandedN > 0 ? " · includes " + d.compiled.expanded_ids!.join(", ") : "");
-    const budget = Number($<HTMLInputElement>("budget").value);
+    const compileCeiling = lastCompiledBudget || Number($<HTMLInputElement>("budget").value);
+    const packedTok = d.compiled.selected_content_tokens ?? d.compiled.context_tokens;
     $("parityBudgetNote").innerHTML =
       expandedN > 0
-        ? "The compiled answer only sees what fit your <strong>" +
-          budget.toLocaleString() +
-          "-token</strong> budget, plus expands <code>" +
+        ? "The compiled answer sees <strong>" +
+          packedTok.toLocaleString() +
+          "</strong> content tokens packed under your <strong>" +
+          compileCeiling.toLocaleString() +
+          "-token</strong> compile ceiling, plus includes <code>" +
           esc(d.compiled.expanded_ids!.join(", ")) +
-          "</code>. If it looks thinner than the full-file answer, raise the budget and prove again, or expand other omitted sections, then prove again."
-        : "The compiled answer only sees what fit your <strong>" +
-          budget.toLocaleString() +
-          "-token</strong> budget. If it looks thinner than the full-file answer, raise the budget and prove again, or expand omitted sections below, then prove again.";
+          "</code> (<strong>" +
+          d.compiled.context_tokens.toLocaleString() +
+          "</strong> content tokens total). If it looks thinner than the full-file answer, raise the budget and prove again, or expand other omitted sections, then prove again."
+        : "The compiled answer sees <strong>" +
+          d.compiled.context_tokens.toLocaleString() +
+          "</strong> content tokens packed under your <strong>" +
+          compileCeiling.toLocaleString() +
+          "-token</strong> compile ceiling. If it looks thinner than the full-file answer, raise the budget and prove again, or expand omitted sections below, then prove again.";
     // Parity opens under the Prove controls where the spinner just was.
     // No scroll: the page already stayed put during the wait.
     announce("Answer parity ready: both answers shown below.");
@@ -1471,7 +2235,7 @@ async function runProveFlow(): Promise<void> {
       $("resultsSec").classList.add("hidden");
     }
     if (e instanceof DOMException && e.name === "AbortError") return;
-    fail(e instanceof Error ? e.message : String(e));
+    proveError(e instanceof Error ? e.message : String(e));
   } finally {
     setProveButtonsBusy(false);
   }
@@ -1479,6 +2243,9 @@ async function runProveFlow(): Promise<void> {
 
 $<HTMLButtonElement>("prove").onclick = () => void runProveFlow();
 $<HTMLButtonElement>("proveResults").onclick = () => void runProveFlow();
+
+// Cold start: keep agent panel hidden until a successful compile unveils it.
+hideAgentSec();
 
 loadConfig().then(() => {
   loadSamples();

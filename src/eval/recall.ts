@@ -11,14 +11,17 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { chunkMarkdown } from "../chunk.js";
+import { applyNameIntentBoost, prepareRankedForPack } from "../name-intent.js";
 import { pack } from "../pack.js";
 import {
   bm25Scores,
   multiScoresFromRows,
   perQueryScores,
-  rank,
+  queryAttributionFromRows,
+  queryBestIdsFromRows,
   rankMultiFromRows,
   splitQueries,
+  tokenizeQuery,
 } from "../rank.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -76,21 +79,43 @@ export async function runRecallCase(c: RecallCase): Promise<RecallCaseResult> {
   const chunks = chunkMarkdown(markdown);
   const queries = splitQueries(c.task);
   const multi = queries.length > 1;
+  const rows = multi ? perQueryScores(queries, chunks) : null;
 
   let ranked;
   let scores: Map<string, number>;
-  if (multi) {
-    const rows = perQueryScores(queries, chunks);
-    ranked = rankMultiFromRows(rows, chunks);
-    const merged = multiScoresFromRows(rows, chunks);
+  if (rows) {
+    let merged = multiScoresFromRows(rows, chunks);
+    merged = applyNameIntentBoost(c.task, chunks, merged);
     scores = new Map(chunks.map((ch, i) => [ch.id, merged[i]!]));
+    ranked = rankMultiFromRows(rows, chunks, queries);
   } else {
-    ranked = rank(c.task, chunks);
-    const raw = bm25Scores(c.task, chunks);
+    let raw = bm25Scores(c.task, chunks);
+    raw = applyNameIntentBoost(c.task, chunks, raw);
     scores = new Map(chunks.map((ch, i) => [ch.id, raw[i]!]));
+    ranked = chunks
+      .map((ch, i) => ({ c: ch, s: raw[i]! }))
+      .sort((a, b) => b.s - a.s)
+      .map((x) => x.c);
   }
+  ranked = prepareRankedForPack(ranked, chunks, c.task, scores);
 
-  const { text, selected, omitted } = pack(ranked, c.budget, c.doc, scores);
+  const queryTerms = tokenizeQuery(c.task);
+  const attribution = rows ? queryAttributionFromRows(rows, chunks) : null;
+  const matchMap = attribution && new Map(chunks.map((ch, i) => [ch.id, attribution[i]!]));
+  const queryBestIds = rows ? queryBestIdsFromRows(rows, chunks, queries) : undefined;
+  const { text, selected, omitted } = pack(
+    ranked,
+    c.budget,
+    c.doc,
+    scores,
+    queryTerms,
+    undefined,
+    true,
+    "content",
+    matchMap ?? undefined,
+    queryBestIds,
+    c.task
+  );
   const mustInclude = c.must_include ?? [];
   const mustOmit = c.must_omit ?? [];
   const missing = mustInclude.filter((s) => !text.includes(s));

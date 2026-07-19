@@ -24,10 +24,13 @@ server.registerTool(
   "compile_context",
   {
     description:
-      "Convert a file (pdf/docx/xlsx/pptx/html/csv/...) to markdown containing only " +
-      "the sections relevant to `task`, fitted under `token_budget` tokens. Prefer this " +
-      "over reading a large file directly. Returns JSON with compiled markdown, token " +
-      "stats, and a manifest of omitted sections (fetchable via expand_section).",
+      "Convert a file (pdf/docx/xlsx/pptx/html/csv/...) to markdown with only the " +
+      "sections relevant to `task`. `token_budget` is a hard ceiling on selected " +
+      "content tokens (`tokens_used` / `selected_content_tokens`) — not a fill quota, " +
+      "and not the size of the returned markdown (omit-manifest lines are UX metadata " +
+      "and may push wire size above the ceiling). Prefer this over reading a large " +
+      "file directly. Returns JSON with compiled markdown, token stats, and omitted " +
+      "section ids (fetchable via expand_section).",
     inputSchema: {
       file_path: z.string(),
       task: z.string(),

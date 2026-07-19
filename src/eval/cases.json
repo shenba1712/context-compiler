@@ -16,7 +16,7 @@
   {
     "id": "en-refund-hard-paraphrase",
     "doc": "policy.md",
-    "task": "Customer asked about the turnaround for getting cash back on a returned purchase.",
+    "task": "Customer asked about turnaround for getting money back after returning an item.",
     "budget": 900,
     "must_include": ["14 business days"]
   },
@@ -87,7 +87,7 @@
     "id": "en-tiny-budget-miss-and-recover",
     "doc": "policy.md",
     "task": "How many business days for a refund?",
-    "budget": 100,
+    "budget": 40,
     "must_omit": ["14 business days"],
     "expand_recover": "14 business days"
   },
@@ -137,8 +137,22 @@
   {
     "id": "en-filler-early-on",
     "doc": "honorific.md",
-    "task": "What does Bingley think of Miss Bennet early on?",
+    "task": "What does Mr. Bingley think of Jane Bennet early on?",
     "budget": 400,
     "must_include": ["angel more beautiful"]
+  },
+  {
+    "id": "en-name-intent-harrington",
+    "doc": "name-intent.md",
+    "task": "What is Miss Harrington's first name?",
+    "budget": 450,
+    "must_include": ["EMILY HARRINGTON"]
+  },
+  {
+    "id": "en-name-intent-thornton-sibling",
+    "doc": "name-intent-synthetic.md",
+    "task": "What is Miss Thornton's given name?",
+    "budget": 500,
+    "must_include": ["SARAH THORNTON"]
   }
 ]

@@ -35,3 +35,16 @@ export function countTokens(text: string): number {
   }
   return Math.max(1, Math.floor(text.length / 4));
 }
+
+/**
+ * Token count for demo metering / parity compares: strip HTML comments
+ * (assemble wrappers, section breadcrumbs, untrusted markers) so we measure
+ * document substance, not packaging. The model still receives the full text.
+ */
+export function countContentTokens(text: string): number {
+  const stripped = text
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return countTokens(stripped.length ? stripped : text);
+}
