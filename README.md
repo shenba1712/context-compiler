@@ -18,9 +18,7 @@ The demo ships a sample library so you can feel that claim: novels and a science
 - **Multilingual ranking.** BM25 tokenization and query splitting cover the demo languages (Latin, Devanagari, Cyrillic, Arabic, CJK bigrams). Suggested sample questions are checked against converted sample text.
 - **Honest recovery.** Misses stay in the omitted-sections manifest (budget vs lower-relevance buckets in the UI); `expand_section` / Agent recover them.
 
-For engineering depth, see [ARCHITECTURE.md](./ARCHITECTURE.md) and [docs/EXPERT-WALKTHROUGH.md](./docs/EXPERT-WALKTHROUGH.md).
-
-**Audits** (2026-07-19): [current / pack](./docs/AUDIT-CURRENT.md) · [UI / UX](./docs/AUDIT-UI.md) · [security / chaos](./docs/AUDIT-SECURITY.md).
+For engineering depth, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
 ## How it works
 
@@ -183,7 +181,6 @@ Suggested questions come from the sample chips (they are grounded in the convert
 
 Budget tips: **2,000** for a single-fact money shot; **4,000** default (often early-stops on pointed asks); drop to **~800** to force a controlled miss → peek / Include / expand.
 
-Timed walkthrough: [DEMO_SCRIPT.md](./DEMO_SCRIPT.md).
 
 ## Known limits
 
