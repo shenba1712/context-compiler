@@ -145,9 +145,30 @@ async function loadSamples(): Promise<void> {
     // Open the library so the demo doesn't look empty behind a closed <details>.
     const box = document.querySelector<HTMLDetailsElement>("details.samplesbox");
     if (box) box.open = true;
+    // Server returns tok=null until background convert finishes; refresh once
+    // so budget presets can scale to real sizes without blocking first paint.
+    window.setTimeout(() => {
+      void refreshSampleTokens();
+    }, 12_000);
   } catch (e) {
     console.warn("Could not load the sample library:", e);
     wrap.textContent = "Couldn't load the sample library right now. Uploading your own file still works.";
+  }
+}
+
+async function refreshSampleTokens(): Promise<void> {
+  try {
+    const resp = await fetch("/api/samples");
+    if (!resp.ok) return;
+    const data: Sample[] = await resp.json();
+    if (!Array.isArray(data) || data.length === 0) return;
+    const before = SAMPLES.map((s) => `${s.key}:${s.tok ?? ""}`).join("|");
+    const after = data.map((s) => `${s.key}:${s.tok ?? ""}`).join("|");
+    if (before === after) return;
+    SAMPLES = data;
+    renderSamples();
+  } catch {
+    /* non-critical */
   }
 }
 

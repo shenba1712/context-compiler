@@ -374,11 +374,12 @@ function errorResponse(res: express.Response, e: unknown, context: string) {
   return res.status(500).json({ error: "Internal server error." });
 }
 
-// Sample-library token counts, measured from the real files via the same
-// convert pipeline a compile uses — so they can't drift from reality the way a
-// hardcoded number would. Memoized in-process since the sample files never
-// change while the server runs.
-let samplesCache: Array<{
+// Sample-library token counts. Measured via the real convert pipeline, but
+// NEVER on the request critical path — cold-start /api/samples used to await
+// markitdown on every sample (Origin PDF alone) and stall the demo for minutes
+// on Render free tier. Catalog returns immediately (tok null until warm);
+// background warm fills tok and warms the convert cache for later compiles.
+type SampleRow = {
   key: string;
   file: string;
   fmt: string;
@@ -386,7 +387,37 @@ let samplesCache: Array<{
   mt: string;
   q: string[];
   tok: number | null;
-}> | null = null;
+};
+const sampleTokByKey = new Map<string, number | null>();
+let sampleWarmPromise: Promise<void> | null = null;
+
+function samplesPayload(): SampleRow[] {
+  return SAMPLES_MANIFEST.map((s) => ({
+    ...s,
+    tok: sampleTokByKey.has(s.key) ? (sampleTokByKey.get(s.key) ?? null) : null,
+  }));
+}
+
+/** Fire-and-forget convert+count. Sequential so we don't saturate the converter
+ *  queue ahead of a user's first Compile. Safe to call many times. */
+function warmSampleTokenCache(): Promise<void> {
+  if (sampleWarmPromise) return sampleWarmPromise;
+  sampleWarmPromise = (async () => {
+    for (const s of SAMPLES_MANIFEST) {
+      try {
+        const markdown = await fullMarkdown(resolveSampleFile(s.file));
+        sampleTokByKey.set(s.key, countTokens(markdown));
+      } catch (e) {
+        log.warn("could not measure sample", {
+          file: s.file,
+          err: e instanceof Error ? e.message : String(e),
+        });
+        sampleTokByKey.set(s.key, null);
+      }
+    }
+  })();
+  return sampleWarmPromise;
+}
 
 // Lets the client know up front whether "Prove answer parity" will work,
 // instead of only finding out after a failed click (or, worse, showing it
@@ -435,30 +466,11 @@ app.get("/metrics", async (req, res) => {
   });
 });
 
-app.get("/api/samples", async (_req, res) => {
-  try {
-    if (!samplesCache) {
-      samplesCache = await Promise.all(
-        SAMPLES_MANIFEST.map(async (s) => {
-          try {
-            const markdown = await fullMarkdown(resolveSampleFile(s.file));
-            return { ...s, tok: countTokens(markdown) };
-          } catch (e) {
-            // One bad sample file shouldn't take down the whole library —
-            // that sample just shows without a size hint.
-            log.warn("could not measure sample", {
-              file: s.file,
-              err: e instanceof Error ? e.message : String(e),
-            });
-            return { ...s, tok: null };
-          }
-        })
-      );
-    }
-    return res.json(samplesCache);
-  } catch (e) {
-    return errorResponse(res, e, "samples");
-  }
+app.get("/api/samples", (_req, res) => {
+  // Kick warm on first catalog hit, but answer immediately so the demo UI can
+  // render sample cards without waiting on PDF conversion.
+  void warmSampleTokenCache();
+  return res.json(samplesPayload());
 });
 
 // Real, pre-compile size signal for a freshly uploaded file — runs the file
@@ -819,9 +831,12 @@ app.use((err: unknown, _req: express.Request, res: express.Response, next: expre
 // module is imported — the tests import `app` and bind their own random port.
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   // Bind all interfaces — required on Render/Railway (default can miss the proxy).
-  app.listen(PORT, "0.0.0.0", () =>
-    log.info("Context Compiler demo listening", { url: `http://0.0.0.0:${PORT}` })
-  );
+  app.listen(PORT, "0.0.0.0", () => {
+    log.info("Context Compiler demo listening", { url: `http://0.0.0.0:${PORT}` });
+    // After listen, start converting samples in the background so tok hints and
+    // the convert cache are ready before the first Compile click when possible.
+    void warmSampleTokenCache();
+  });
 }
 
 export { app };

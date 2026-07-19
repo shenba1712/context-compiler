@@ -3142,6 +3142,21 @@ async function testSampleLibraryStaticServing() {
   await new Promise<void>((r) => server.once("listening", () => r()));
   const port = (server.address() as { port: number }).port;
   try {
+    // Catalog must not await converting every sample (Origin PDF) — cold Render
+    // used to stall here for minutes. Allow a generous local bound; production
+    // goal is "instant cards".
+    const t0 = Date.now();
+    const catalog = await fetch(`http://127.0.0.1:${port}/api/samples`);
+    const catalogMs = Date.now() - t0;
+    assert.equal(catalog.status, 200, "samples catalog must be 200");
+    assert.ok(catalogMs < 5000, `/api/samples must be fast (was ${catalogMs}ms)`);
+    const rows = (await catalog.json()) as Array<{ key: string; file: string; tok: number | null }>;
+    assert.ok(Array.isArray(rows) && rows.length >= 8, "catalog lists samples");
+    assert.ok(
+      rows.every((r) => typeof r.key === "string" && typeof r.file === "string"),
+      "catalog rows have key+file"
+    );
+
     const docx = await fetch(`http://127.0.0.1:${port}/samples/pride-and-prejudice.docx`);
     assert.equal(docx.status, 200, "docx sample must be served");
     const docxBytes = Buffer.from(await docx.arrayBuffer());
@@ -3176,7 +3191,11 @@ async function testSampleLibraryStaticServing() {
     /let pickedFile/.test(clientSrc) && /activeFile\(/.test(clientSrc),
     "sample selection must hold a File in memory (not rely on input.files = DataTransfer)"
   );
-  console.log("  sample library ok: static bytes + dockerignore + pickedFile + client resp.ok");
+  assert.ok(
+    /refreshSampleTokens/.test(clientSrc),
+    "client refreshes sample tok hints after background warm"
+  );
+  console.log("  sample library ok: fast catalog + static bytes + pickedFile");
 }
 
 async function testCompileIncrementsCounter() {

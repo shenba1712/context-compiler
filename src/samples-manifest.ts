@@ -1,10 +1,9 @@
 /**
  * Canonical sample-library metadata — single source of truth, served to the
- * client via GET /api/samples (see web.ts). Token counts are NOT stored here:
- * they're computed live per request from the actual file, through the same
- * convert+cache pipeline a real compile uses (see fullMarkdown() in
- * pipeline.ts), so they can never drift from reality the way a hardcoded
- * number would if a sample file, the tokenizer, or the chunker ever changes.
+ * client via GET /api/samples (see web.ts). Token counts are measured in the
+ * background through the real convert pipeline (fullMarkdown) and attached as
+ * `tok` once ready. The catalog endpoint itself must stay fast — it must not
+ * await conversion of every sample on the request path.
  *
  * Suggested questions are checked against the *converted* sample text so
  * Prove / Agent demos don't ask for plot that an abridged file never contains.
