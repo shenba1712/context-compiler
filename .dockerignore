@@ -4,3 +4,6 @@ dist
 *.md
 !README.md
 !ARCHITECTURE.md
+# Keep the demo sample library (including .md stories) in the Docker context.
+# Without this, BuildKit's gitignore-style `*.md` drops public/samples/*.md.
+!public/samples/**

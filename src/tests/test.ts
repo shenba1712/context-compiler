@@ -3041,6 +3041,49 @@ async function testHealthzEndpoint() {
   });
 }
 
+async function testSampleLibraryStaticServing() {
+  // Demo click-path: selectSample fetches GET /samples/<file>. Catalog can be
+  // fine while static sample bytes 404/500 — lock that the library files are
+  // served, dockerignore keeps markdown samples in the image, and the client
+  // checks resp.ok before caching a blob.
+  const { app } = await import("../web.js");
+  const server = app.listen(0);
+  await new Promise<void>((r) => server.once("listening", () => r()));
+  const port = (server.address() as { port: number }).port;
+  try {
+    const docx = await fetch(`http://127.0.0.1:${port}/samples/pride-and-prejudice.docx`);
+    assert.equal(docx.status, 200, "docx sample must be served");
+    const docxBytes = Buffer.from(await docx.arrayBuffer());
+    assert.ok(docxBytes.byteLength > 1000, "docx sample must be non-trivial");
+    assert.equal(docxBytes[0], 0x50 /* P */, "docx starts with ZIP/PK magic");
+    assert.equal(docxBytes[1], 0x4b /* K */);
+
+    const md = await fetch(`http://127.0.0.1:${port}/samples/the-lantern-tales.md`);
+    assert.equal(md.status, 200, "markdown sample must be served");
+    const mdText = await md.text();
+    assert.ok(mdText.length > 100, "markdown sample body present");
+
+    const missing = await fetch(`http://127.0.0.1:${port}/samples/no-such-sample.docx`);
+    assert.equal(missing.status, 404, "missing sample is 404, not 500");
+  } finally {
+    server.close();
+  }
+
+  const dockerignore = readFileSync(join(process.cwd(), ".dockerignore"), "utf-8");
+  assert.ok(
+    /!public\/samples\/\*\*/.test(dockerignore),
+    ".dockerignore must except public/samples/** so *.md samples ship in Docker"
+  );
+
+  const clientSrc = readFileSync(join(process.cwd(), "src", "client", "app.ts"), "utf-8");
+  assert.ok(
+    /resp\.ok/.test(clientSrc) && /Could not download sample \(HTTP/.test(clientSrc),
+    "selectSample must check resp.ok and surface HTTP status"
+  );
+  assert.ok(/filePicked/.test(clientSrc), "client shows a selected-file status line");
+  console.log("  sample library ok: static bytes + dockerignore exception + client resp.ok");
+}
+
 async function testCompileIncrementsCounter() {
   // End-to-end: a successful /api/compile bumps the `compiles` counter that
   // /metrics exposes when authorized. Save/restore so we do not clobber a
@@ -4214,6 +4257,7 @@ for (const fn of [
   testLogger,
   testMetricsCounters,
   testHealthzEndpoint,
+  testSampleLibraryStaticServing,
   testCompileIncrementsCounter,
   testWebCompileSectionCardsHaveText,
   testNoStdoutInMcpPath,

@@ -130,10 +130,25 @@ async function loadSamples(): Promise<void> {
     if (!Array.isArray(data)) throw new Error("Unexpected response shape");
     SAMPLES = data;
     renderSamples();
+    // Open the library so the demo doesn't look empty behind a closed <details>.
+    const box = document.querySelector<HTMLDetailsElement>("details.samplesbox");
+    if (box) box.open = true;
   } catch (e) {
     console.warn("Could not load the sample library:", e);
     wrap.textContent = "Couldn't load the sample library right now. Uploading your own file still works.";
   }
+}
+
+function setFilePickedStatus(msg: string): void {
+  const el = $("filePicked");
+  el.textContent = msg;
+  el.classList.remove("hidden");
+}
+
+function clearFilePickedStatus(): void {
+  const el = $("filePicked");
+  el.textContent = "";
+  el.classList.add("hidden");
 }
 
 // Known up front (not just after a failed click, or worse, left fully
@@ -400,17 +415,46 @@ async function selectSample(s: Sample, card: HTMLButtonElement): Promise<void> {
   card.classList.add("active");
   card.setAttribute("aria-pressed", "true");
   clearErr();
+  setFilePickedStatus("Loading sample: " + s.nm + "…");
   try {
-    blobCache[s.key] ??= await (await fetch("/samples/" + s.file)).blob();
+    let blob = blobCache[s.key];
+    if (!blob) {
+      const resp = await fetch("/samples/" + encodeURIComponent(s.file));
+      if (!resp.ok) {
+        throw new Error(
+          `Could not download sample (HTTP ${resp.status}). The host may still be waking up — try again in a moment.`
+        );
+      }
+      blob = await resp.blob();
+      if (!blob.size) throw new Error("Sample file was empty.");
+      blobCache[s.key] = blob;
+    }
     const dt = new DataTransfer();
-    dt.items.add(
-      new File([blobCache[s.key]], s.file, { type: blobCache[s.key].type || "application/octet-stream" })
-    );
-    $<HTMLInputElement>("file").files = dt.files;
+    dt.items.add(new File([blob], s.file, { type: blob.type || "application/octet-stream" }));
+    const input = $<HTMLInputElement>("file");
+    try {
+      input.files = dt.files;
+    } catch {
+      throw new Error(
+        "This browser blocked attaching the sample to the file picker. Upload the file manually, or try another browser."
+      );
+    }
+    if (!input.files?.length) {
+      throw new Error(
+        "Could not attach the sample to the file picker in this browser. Upload the file manually instead."
+      );
+    }
   } catch (e) {
+    delete blobCache[s.key];
+    card.classList.remove("active");
+    card.setAttribute("aria-pressed", "false");
+    clearFilePickedStatus();
     fail("Could not load sample: " + (e instanceof Error ? e.message : String(e)));
     return;
   }
+  const box = document.querySelector<HTMLDetailsElement>("details.samplesbox");
+  if (box) box.open = true;
+  setFilePickedStatus("Selected sample: " + s.nm + " (" + s.file + ")");
   renderQChips(s.q);
   $<HTMLTextAreaElement>("task").value = s.q[0];
   syncQChips();
@@ -824,6 +868,7 @@ $<HTMLInputElement>("file").addEventListener("change", () => {
       `"${f.name}" is ${(f.size / 1e6).toFixed(1)} MB, over the ${mb} MB limit. Pick a smaller file.`;
     $("fileErr").classList.remove("hidden");
     $<HTMLInputElement>("file").value = "";
+    clearFilePickedStatus();
     return;
   }
   if (f && !ALLOWED_EXT_RE.test(f.name)) {
@@ -832,6 +877,7 @@ $<HTMLInputElement>("file").addEventListener("change", () => {
       `Images aren't supported without an OCR/captioning backend, which this demo doesn't have configured.`;
     $("fileErr").classList.remove("hidden");
     $<HTMLInputElement>("file").value = "";
+    clearFilePickedStatus();
     return;
   }
   if (f) {
@@ -843,7 +889,10 @@ $<HTMLInputElement>("file").addEventListener("change", () => {
       x.classList.remove("active");
       x.setAttribute("aria-pressed", "false");
     });
+    setFilePickedStatus("Selected file: " + f.name);
     estimateUploadSize(f);
+  } else {
+    clearFilePickedStatus();
   }
 });
 
