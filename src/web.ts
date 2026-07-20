@@ -147,7 +147,7 @@ app.get("/ARCHITECTURE.md", (_req, res) =>
 // (resets on redeploy, not shared across replicas — acceptable for a demo).
 // LLM-heavy routes cost more "tokens" so one agent/parity call can't burn the
 // bill while staying under a naive request count.
-const RATE_LIMIT = intEnv("CC_RATE_LIMIT", 30, 1);
+const RATE_LIMIT = intEnv("CC_RATE_LIMIT", 100, 1);
 const RATE_COST_AGENT = intEnv("CC_RATE_COST_AGENT", 12, 1, 100);
 const RATE_COST_ANSWER = intEnv("CC_RATE_COST_ANSWER", 4, 1, 100);
 const WINDOW_MS = 5 * 60_000;

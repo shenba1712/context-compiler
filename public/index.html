@@ -121,7 +121,7 @@
       <div class="expectbody" id="expectBody">
         <p>This is a <strong>public free-tier demo</strong>: no accounts, shared capacity. Limits below are enforced per IP on this server; provider free tiers add their own caps on top.</p>
         <ul>
-          <li><strong>Compile once</strong> and <strong>expand</strong> are free of model cost (local BM25). They share a pool of about <span data-k="compile_n">30</span> requests every <span data-k="window">5</span> minutes.</li>
+          <li><strong>Compile once</strong> and <strong>expand</strong> are free of model cost (local BM25). They share a pool of about <span data-k="compile_n">100</span> requests every <span data-k="window">5</span> minutes.</li>
           <li><strong>Prove answer parity</strong> checks your <em>Compile</em> result (not Agent) using free-tier LLM keys. Each prove costs <span data-k="cost_answer">4</span> of those points, roughly <span data-k="prove_n">7</span> proves per <span data-k="window">5</span> minutes. The full-file side is capped at about <span data-k="answer_cap">60,000</span> tokens.</li>
           <li><strong>Run agent</strong> also uses those free-tier keys and is heavier: <span data-k="cost_agent">12</span> points each, roughly <span data-k="agent_n">2</span> runs per <span data-k="window">5</span> minutes. After a run you can optionally <strong>Compare to full file</strong> (same cost as Prove). At most <span data-k="llm_conc">2</span> LLM jobs run at once on this host.</li>
           <li id="expectLlmLine">If Gemini/OpenRouter free quota is exhausted, Prove and Agent may return 429/503 even when our rate limit still has room. Wait a few minutes and retry.</li>

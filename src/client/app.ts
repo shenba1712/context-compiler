@@ -283,7 +283,7 @@ function fillExpectPanel(cfg: {
   max_concurrent_llm?: number;
   answer_context_cap?: number;
 }): void {
-  const pool = cfg.rate_limit ?? 30;
+  const pool = cfg.rate_limit ?? 100;
   const windowMin = cfg.rate_window_minutes ?? 5;
   const costAnswer = cfg.rate_cost_answer ?? 4;
   const costAgent = cfg.rate_cost_agent ?? 12;

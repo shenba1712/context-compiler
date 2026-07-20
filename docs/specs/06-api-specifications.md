@@ -49,7 +49,7 @@ Demo limits and LLM availability for UI gating.
 {
   "llm_available": false,
   "max_file_bytes": 20971520,
-  "rate_limit": 30,
+  "rate_limit": 100,
   "rate_window_minutes": 5,
   "rate_cost_answer": 4,
   "rate_cost_agent": 12,

@@ -38,7 +38,7 @@ services:
       - key: CC_MAX_FILE_BYTES
         value: "20971520"
       - key: CC_RATE_LIMIT
-        value: "30"
+        value: "100"
       - key: CC_RATE_COST_AGENT
         value: "12"
       - key: CC_RATE_COST_ANSWER

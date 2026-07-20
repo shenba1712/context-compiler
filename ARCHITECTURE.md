@@ -228,7 +228,7 @@ Defaults operators most often care about. Full install and key setup live in the
 | `CC_CONVERT_TIMEOUT_S` | 120 | Converter spawn timeout |
 | `CC_MAX_CONCURRENT_CONVERSIONS` | 3 | Parallel Python procs |
 | `CC_MAX_QUEUED_CONVERSIONS` | 12 | Queue depth before busy |
-| `CC_RATE_LIMIT` | 30 / 5 min | Per-IP point pool (demo) |
+| `CC_RATE_LIMIT` | 100 / 5 min | Per-IP point pool (demo) |
 | `CC_RATE_COST_AGENT` | 12 | Agent route cost |
 | `CC_RATE_COST_ANSWER` | 4 | Answer / agent-parity cost |
 | `CC_MAX_CONCURRENT_LLM` | 2 | Concurrent Prove/Agent jobs |

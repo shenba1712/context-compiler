@@ -21,7 +21,7 @@ ENV CC_CACHE_DIR=/tmp/cc-cache
 # Hackathon / public-demo posture: pin the abuse knobs so a redeploy can't
 # accidentally fall back to "wide open" if someone clears dashboard env.
 ENV CC_MAX_FILE_BYTES=20971520
-ENV CC_RATE_LIMIT=30
+ENV CC_RATE_LIMIT=100
 ENV CC_RATE_COST_AGENT=12
 ENV CC_RATE_COST_ANSWER=4
 ENV CC_MAX_CONCURRENT_LLM=2
