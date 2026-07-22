@@ -16,3 +16,5 @@ pitch/build_deck.py
 
 # Internal pitch outline (pptx remains tracked)
 pitch/DECK.md
+pitch/VIDEO_VO.md
+DEMO_SCRIPT.md
