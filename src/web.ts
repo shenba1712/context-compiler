@@ -1,8 +1,6 @@
 /**
- * Legacy single-process entry: Express demo API + static UI from public/.
- * Production dual-process deploy uses Nest (apps/api) + Next (apps/web) instead.
- *
- * Run: npm run web   ->  http://localhost:8000
+ * Test/helper entry: exports the shared demo Express app from http/demo-app.
+ * Production serves Next (`apps/web`) + Nest (`apps/api`) via `npm run web`.
  */
 import { pathToFileURL } from "node:url";
 
@@ -14,9 +12,10 @@ export { app };
 
 const PORT = intEnv("PORT", 8000, 0, 65535);
 
+/** Direct listen only for ad-hoc API debugging (no Next UI). Prefer `npm run web`. */
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   app.listen(PORT, "0.0.0.0", () => {
-    log.info("Context Compiler demo listening", { url: `http://0.0.0.0:${PORT}` });
+    log.info("Context Compiler API-only listening (no Next UI)", { url: `http://0.0.0.0:${PORT}` });
     void warmSampleTokenCache();
   });
 }

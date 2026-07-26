@@ -13,14 +13,14 @@ COPY apps/api/package.json ./apps/api/
 COPY apps/web/package.json ./apps/web/
 RUN npm ci --no-audit --no-fund
 
-COPY tsconfig.json tsconfig.client.json ./
+COPY tsconfig.json ./
 COPY src ./src
 COPY public ./public
 COPY apps ./apps
 COPY scripts ./scripts
 COPY README.md ARCHITECTURE.md ./
 
-# Nest listens here; Next rewrites are resolved at build time against this port.
+# Nest listens here; Next proxies to it at runtime via Route Handlers.
 ENV API_PORT=4000
 ENV API_HOST=127.0.0.1
 ENV NEXT_TELEMETRY_DISABLED=1

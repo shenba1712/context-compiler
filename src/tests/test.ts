@@ -3179,18 +3179,12 @@ async function testSampleLibraryStaticServing() {
     ".dockerignore must except public/samples/** so *.md samples ship in Docker"
   );
 
-  const clientSrc = readFileSync(join(process.cwd(), "src", "client", "app.ts"), "utf-8");
-  assert.ok(
-    /resp\.ok/.test(clientSrc) && /Could not download sample \(HTTP/.test(clientSrc),
-    "selectSample must check resp.ok and surface HTTP status"
-  );
-  assert.ok(/filePicked/.test(clientSrc), "client shows a selected-file status line");
-  assert.ok(
-    /let pickedFile/.test(clientSrc) && /activeFile\(/.test(clientSrc),
-    "sample selection must hold a File in memory (not rely on input.files = DataTransfer)"
-  );
-  assert.ok(/refreshSampleTokens/.test(clientSrc), "client refreshes sample tok hints after background warm");
-  console.log("  sample library ok: fast catalog + static bytes + pickedFile");
+  // Next demo holds sample bytes as a File (browsers block input.files = DataTransfer).
+  const nextDemo = readFileSync(join(process.cwd(), "apps", "web", "app", "demo", "page.tsx"), "utf-8");
+  assert.ok(/res\.ok/.test(nextDemo), "Next sample fetch must check res.ok");
+  assert.ok(/new File\(/.test(nextDemo), "Next sample selection must hold a File in memory");
+  assert.ok(/fileFromSample/.test(nextDemo), "Next has a dedicated sample→File helper");
+  console.log("  sample library ok: fast catalog + static bytes + Next File hold");
 }
 
 async function testCompileIncrementsCounter() {
@@ -3424,29 +3418,19 @@ async function testImageConversionFailsClearly() {
   console.log("  image-without-ocr ok: fails loudly with an actionable message instead of silently empty");
 }
 
-async function testClientBuildIsPlainScript() {
-  // Regression guard: a single stray `export` (or `import`) anywhere at the
-  // top level of src/client/{app,types}.ts turns that file into an ES
-  // module, which makes tsc emit CommonJS `exports`/`require(...)` even
-  // under tsconfig.client.json's module:"none" — code that throws instantly
-  // in a browser (no `exports` object exists there). This exact bug slipped
-  // through once already (an `export` accidentally left on one interface in
-  // types.ts broke every type reference in app.ts). `npm run build` must run
-  // before this test for public/app.js and public/types.js to exist.
-  for (const f of ["public/app.js", "public/types.js"]) {
-    const path = join(process.cwd(), f);
-    assert.ok(existsSync(path), `${f} must exist — run npm run build first`);
-    const src = readFileSync(path, "utf-8");
-    assert.ok(
-      !/\bexports\./.test(src),
-      `${f} must not contain CommonJS "exports." (module leaked into a plain <script>)`
-    );
-    assert.ok(
-      !/\brequire\(/.test(src),
-      `${f} must not contain "require(" (module leaked into a plain <script>)`
-    );
+async function testNextDemoRoutesExist() {
+  // Vanilla SPA removed — lock the Next App Router pages that replaced it.
+  for (const rel of [
+    "apps/web/app/page.tsx",
+    "apps/web/app/demo/page.tsx",
+    "apps/web/app/demo/results/page.tsx",
+    "apps/web/app/demo/prove/page.tsx",
+    "apps/web/app/demo/agent/page.tsx",
+    "apps/web/app/mcp/page.tsx",
+  ]) {
+    assert.ok(existsSync(join(process.cwd(), rel)), `${rel} must exist`);
   }
-  console.log("  client build ok: app.js/types.js are plain scripts, no CommonJS leakage");
+  console.log("  next demo routes ok: landing + demo + mcp pages present");
 }
 
 async function testPathGuardBlocksSymlinkEscape() {
@@ -4340,7 +4324,7 @@ for (const fn of [
   testAgentMultiFacetBudget200,
   testFormatConversion,
   testImageConversionFailsClearly,
-  testClientBuildIsPlainScript,
+  testNextDemoRoutesExist,
   testPathGuardBlocksSymlinkEscape,
   testUploadGuardRejectsBombAndMismatch,
   testConversionErrorIsSanitized,
