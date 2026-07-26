@@ -9,7 +9,16 @@ import prettier from "eslint-config-prettier";
 
 export default tseslint.config(
   {
-    ignores: ["dist/**", "public/**", "node_modules/**"],
+    ignores: [
+      "dist/**",
+      "public/**",
+      "node_modules/**",
+      "apps/**/node_modules/**",
+      "apps/**/.next/**",
+      "apps/**/dist/**",
+      "apps/**", // Nest + Next — separate toolchains; engine stays under src/
+      "scripts/**",
+    ],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
