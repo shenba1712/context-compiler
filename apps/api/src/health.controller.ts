@@ -1,14 +1,14 @@
 import { Controller, Get } from "@nestjs/common";
 
-import { DemoService } from "./demo.service.js";
+import { HostService } from "./host.service.js";
 
 @Controller()
 export class HealthController {
-  constructor(private readonly demo: DemoService) {}
+  constructor(private readonly host: HostService) {}
 
-  /** Render / platform liveness — must stay cheap (no markitdown). */
+  /** Platform liveness — must stay cheap (no markitdown). */
   @Get("healthz")
   healthz() {
-    return this.demo.healthz();
+    return this.host.healthz();
   }
 }

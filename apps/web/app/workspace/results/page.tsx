@@ -4,7 +4,7 @@ import Link from "next/link";
 import { motion } from "framer-motion";
 import { useState } from "react";
 
-import { useDemo } from "@/lib/demo-context";
+import { useWorkspace } from "@/lib/workspace-context";
 import type { ExpandApiResult, SectionInfo } from "@/lib/types";
 import { includeRestHint, sectionLeaf, truncatedSectionMeta } from "@/lib/ux";
 
@@ -25,7 +25,7 @@ export default function ResultsPage() {
     setProveInclude,
     task,
     budget,
-  } = useDemo();
+  } = useWorkspace();
   const [peek, setPeek] = useState<Record<string, string>>({});
   const [err, setErr] = useState("");
 
@@ -34,7 +34,7 @@ export default function ResultsPage() {
       <section className="panel">
         <h2 className="sec">No compile yet</h2>
         <p className="sub">
-          <Link href="/demo">Compile a document</Link> first.
+          <Link href="/workspace">Compile a document</Link> first.
         </p>
       </section>
     );
@@ -94,7 +94,7 @@ export default function ResultsPage() {
         {proveStale ? (
           <p className="hostnote" role="status">
             Inputs changed since this compile (task or budget). Expands for Prove were cleared.{" "}
-            <Link href="/demo">Recompile</Link> before Prove / Agent.
+            <Link href="/workspace">Recompile</Link> before Prove / Agent.
           </p>
         ) : null}
 
@@ -106,10 +106,10 @@ export default function ResultsPage() {
         ) : null}
 
         <div className="row" style={{ marginBottom: 16 }}>
-          <Link className="btn ghost" href={proveStale ? "/demo" : "/demo/prove"}>
+          <Link className="btn ghost" href={proveStale ? "/workspace" : "/workspace/prove"}>
             Prove answer parity
           </Link>
-          <Link className="btn quiet" href={proveStale ? "/demo" : "/demo/agent"}>
+          <Link className="btn quiet" href={proveStale ? "/workspace" : "/workspace/agent"}>
             Run agent
           </Link>
         </div>

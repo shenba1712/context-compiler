@@ -1,13 +1,13 @@
 import { Controller, Get } from "@nestjs/common";
 
-import { DemoService } from "./demo.service.js";
+import { HostService } from "./host.service.js";
 
 @Controller("api")
 export class ConfigController {
-  constructor(private readonly demo: DemoService) {}
+  constructor(private readonly host: HostService) {}
 
   @Get("config")
   config() {
-    return this.demo.config();
+    return this.host.config();
   }
 }

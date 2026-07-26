@@ -1,14 +1,14 @@
 {
   "name": "context-compiler",
   "version": "0.1.0",
-  "description": "Task-aware, token-budgeted file-to-markdown compiler for AI agents (MCP server + web demo)",
+  "description": "Task-aware, token-budgeted file-to-markdown compiler for AI agents (MCP server + hosted workspace)",
   "type": "module",
   "private": true,
   "workspaces": [
     "apps/*"
   ],
   "bin": {
-    "context-compiler": "dist/server.js"
+    "context-compiler": "dist/mcp/server.js"
   },
   "scripts": {
     "build:engine": "tsc",
@@ -17,7 +17,7 @@
     "build": "npm run build:engine && npm run build:api && npm run build:web",
     "build:test": "npm run build:engine",
     "test": "npm run build:test && NODE_ENV=test node dist/tests/test.js",
-    "mcp": "node dist/server.js",
+    "mcp": "node dist/mcp/server.js",
     "web": "node scripts/start-dual.mjs",
     "api:dev": "npm run build:engine && npm run build:api && API_PORT=4000 API_HOST=127.0.0.1 npm run start -w @cc/api",
     "web:dev": "API_PORT=4000 npm run dev -w @cc/web",

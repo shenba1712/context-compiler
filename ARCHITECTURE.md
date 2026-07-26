@@ -22,18 +22,18 @@ Two thin entry points share one pipeline:
 
 | Surface | Module | Trust model |
 | --- | --- | --- |
-| MCP (stdio JSON-RPC) | `server.ts` | Semi-trusted caller; paths confined to `CC_ROOT` via realpath |
-| Web demo (Next + Nest) | `apps/web` + `apps/api` → `http/demo-app.ts` | Untrusted uploader; upload handles only — never caller-supplied paths |
+| MCP (stdio JSON-RPC) | `src/mcp/server.ts` | Semi-trusted caller; paths confined to `CC_ROOT` via realpath |
+| Hosted workspace (Next + Nest) | `apps/web` + `apps/api` → `src/http/app.ts` | Untrusted uploader; upload handles only — never caller-supplied paths |
 
-Both call `pipeline.ts`: convert → chunk → rank → pack. Conversion is content-addressed on disk; LLM features sit beside the pipeline for demos.
+Both call `src/engine/pipeline.ts`: convert → chunk → rank → pack. Conversion is content-addressed on disk; LLM features sit beside the pipeline for the hosted workspace.
 
 ```
-  MCP client ──► server.ts (stdio, path allowlist)
+  MCP client ──► mcp/server.ts (stdio, path allowlist)
                         │
-  Browser    ──► Next ──► Nest ──► demo-app.ts ─┤
+  Browser    ──► Next ──► Nest ──► http/app.ts ──┤
                  (UI)     (API)   (shared HTTP) │
                          ▼
-                   pipeline.ts
+                 engine/pipeline.ts
               convert → chunk → rank → pack
                     │              ▲
                     ▼              │
@@ -93,7 +93,7 @@ Demo-controlled loop over the same two tools MCP exposes. The web path uses the 
 
 `server.ts` registers exactly two tools. `path-guard.ts` realpaths both root and target before the prefix check (closes symlink escape). Errors return in-band as `{error: ...}` JSON.
 
-The hosted demo is a **single Docker image, dual process**: Next (`apps/web`) on the public `PORT`, Nest (`apps/api`) on localhost `API_PORT`. Next proxies `/api/*`, `/healthz`, and `/metrics` at runtime to Nest. Nest controllers own `GET /healthz`, `/api/config`, and `/api/samples` via `DemoService` over `src/http/demo-config.ts` + `samples-catalog.ts`. Upload/SSE routes stay on `src/http/demo-app.ts` (Express app mounted by Nest; rate-limited per IP). Sample bytes live under `public/samples/` (served by the API process and symlinked into the Next `public/` tree). Routes: `/api/compile`, `/api/expand`, `/api/answer`, `/api/measure`, `/api/samples`, `/api/config`, `/api/agent` (SSE; aborts LLM work on disconnect), `/api/agent-parity` (one-shot opaque handle after an agent run). Upload validation lives in `upload-guard.ts` (extension allowlist, magic bytes, archive decompression-bomb limit). Shared clamps live in `config.ts`; `env.ts` parses numbers safely so bad env cannot become NaN and silently disable rate limiting.
+The hosted demo is a **single Docker image, dual process**: Next (`apps/web`) on the public `PORT`, Nest (`apps/api`) on localhost `API_PORT`. Next proxies `/api/*`, `/healthz`, and `/metrics` at runtime to Nest. Nest controllers own `GET /healthz`, `/api/config`, and `/api/samples` via `HostService` over `src/http/config.ts` + `samples-catalog.ts`. Upload/SSE routes stay on `src/http/app.ts` (Express app mounted by Nest; rate-limited per IP). The product UI is routed under `/workspace`. Sample bytes live under `public/samples/` (served by the API process and symlinked into the Next `public/` tree). API routes: `/api/compile`, `/api/expand`, `/api/answer`, `/api/measure`, `/api/samples`, `/api/config`, `/api/agent` (SSE; aborts LLM work on disconnect), `/api/agent-parity` (one-shot opaque handle after an agent run). Upload validation lives in `src/engine/upload-guard.ts` (extension allowlist, magic bytes, archive decompression-bomb limit). Shared clamps live in `src/engine/config.ts`; `src/engine/env.ts` parses numbers safely so bad env cannot become NaN and silently disable rate limiting.
 
 ---
 

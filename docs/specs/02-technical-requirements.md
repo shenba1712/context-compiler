@@ -1,7 +1,7 @@
 # Technical Requirements
 
 **Status:** Current  
-**Applies to:** `src/server.ts` (MCP), `src/web.ts` (demo), shared pipeline modules
+**Applies to:** `src/mcp/server.ts`, `src/http/app.ts`, `src/web.ts`, and shared `src/engine/` modules
 
 ---
 
@@ -14,7 +14,7 @@
 | Python | 3.10+ with `markitdown[docx,pdf,xlsx,pptx]` on `PATH` (or `CC_MARKITDOWN_CMD`) |
 | Process model | Single Node process; converter via `execFile` subprocess; no DB, no worker queue service |
 
-MCP and web share `pipeline.ts`. Horizontal scale = more replicas (in-memory rate limits / metrics / handles are per-instance).
+MCP and web share `src/engine/pipeline.ts`. Horizontal scale = more replicas (in-memory rate limits / metrics / handles are per-instance).
 
 ---
 
@@ -30,7 +30,7 @@ MCP and web share `pipeline.ts`. Horizontal scale = more replicas (in-memory rat
 | F6 | MCP: path confinement under `CC_ROOT` with realpath. |
 | F7 | Web: multipart upload only; opaque handles for expand; never accept caller paths. |
 | F8 | Optional LLM chain for Prove / Agent with concurrency gate and AbortSignal on disconnect. |
-| F9 | Split omitted sections into budget-relevant vs lower-relevance buckets for demo UX. |
+| F9 | Split omitted sections into budget-relevant vs lower-relevance buckets for workspace UX. |
 
 ---
 
@@ -108,7 +108,7 @@ Group env vars by role (defaults live in code / Dockerfile / `render.yaml`; not 
 | **Cache hygiene** | `CC_CACHE_MAX_AGE_MS`, `CC_CACHE_SWEEP_INTERVAL_MS` | Long-lived disk |
 | **LLM** | Provider keys, model overrides, failover TTL/cooldown, timeout | Opt-in Prove/Agent |
 | **Ops** | `PORT`, `CC_TRUST_PROXY`, `CC_METRICS_TOKEN`, `CC_LOG_*` | Hosting |
-| **Demo economics** | `CC_DEMO_PRICE_PER_MTOK` | Illustrative cost labels only |
+| **Workspace economics** | `CC_PRICE_PER_MTOK` (legacy fallback: `CC_DEMO_PRICE_PER_MTOK`) | Illustrative cost labels only |
 
 `env.ts` rejects non-numeric values (NaN-safe) so a typo cannot silently disable rate limiting.
 

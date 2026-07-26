@@ -10,9 +10,9 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { chunkMarkdown } from "../chunk.js";
-import { applyNameIntentBoost, prepareRankedForPack } from "../name-intent.js";
-import { pack } from "../pack.js";
+import { chunkMarkdown } from "../engine/chunk.js";
+import { applyNameIntentBoost, prepareRankedForPack } from "../engine/name-intent.js";
+import { pack } from "../engine/pack.js";
 import {
   bm25Scores,
   multiScoresFromRows,
@@ -22,7 +22,7 @@ import {
   rankMultiFromRows,
   splitQueries,
   tokenizeQuery,
-} from "../rank.js";
+} from "../engine/rank.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 // Fixtures stay under src/eval (tsc does not copy JSON/md). Resolve from repo

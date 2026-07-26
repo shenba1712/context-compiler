@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRef, useState } from "react";
 
-import { useDemo } from "@/lib/demo-context";
+import { useWorkspace } from "@/lib/workspace-context";
 import type { AgentParityResult } from "@/lib/types";
 
 type Step = { kind?: string; title?: string; detail?: string; action?: string; n?: number; [k: string]: unknown };
@@ -18,7 +18,7 @@ export default function AgentPage() {
     proveStale,
     agentParityHandle,
     setAgentParityHandle,
-  } = useDemo();
+  } = useWorkspace();
   const [busy, setBusy] = useState(false);
   const [parityBusy, setParityBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -137,7 +137,7 @@ export default function AgentPage() {
       <section className="panel">
         <h2 className="sec">Run agent</h2>
         <p className="sub">
-          <Link href="/demo">Compile</Link> first. The model drives compile → expand under your budget.
+          <Link href="/workspace">Compile</Link> first. The model drives compile → expand under your budget.
         </p>
       </section>
     );
@@ -151,7 +151,7 @@ export default function AgentPage() {
       </p>
       {proveStale ? (
         <p className="hostnote">
-          Stale compile. <Link href="/demo">Recompile</Link> first.
+          Stale compile. <Link href="/workspace">Recompile</Link> first.
         </p>
       ) : null}
       <div className="row">
@@ -176,7 +176,7 @@ export default function AgentPage() {
         >
           {parityBusy ? "Comparing…" : "Compare to full file"}
         </button>
-        <Link className="btn quiet" href="/demo/results">
+        <Link className="btn quiet" href="/workspace/results">
           Back to results
         </Link>
       </div>

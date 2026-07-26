@@ -1,12 +1,12 @@
 import { Injectable } from "@nestjs/common";
 
 @Injectable()
-export class DemoService {
+export class HostService {
   async config(): Promise<Record<string, unknown>> {
-    const { getDemoConfig } = (await import(
-      "../../../dist/http/demo-config.js" as string
-    )) as { getDemoConfig: () => Record<string, unknown> };
-    return getDemoConfig();
+    const { getApiConfig } = (await import(
+      "../../../dist/http/config.js" as string
+    )) as { getApiConfig: () => Record<string, unknown> };
+    return getApiConfig();
   }
 
   async samples(): Promise<unknown[]> {

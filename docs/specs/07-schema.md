@@ -3,7 +3,7 @@
 **Status:** Current  
 **Note:** There is no SQL/database schema. Shapes below are TypeScript / JSON contracts for pipeline results, HTTP bodies, and in-memory stores.
 
-Primary definitions: `src/pipeline.ts`, `src/agent.ts`, `apps/web/lib/types.ts`, `src/http/demo-app.ts`.
+Primary definitions: `src/engine/pipeline.ts`, `src/engine/agent.ts`, `apps/web/lib/types.ts`, `src/http/app.ts`.
 
 ---
 

@@ -79,16 +79,16 @@ async function withCleanEnv(
   }
 }
 
-import { nextSectionHint } from "../budget-hint.js";
+import { nextSectionHint } from "../engine/budget-hint.js";
 import {
   budgetBoundHintBodyPlain,
   budgetBoundHintMentionsExpand,
   compileNoteHints,
   EARLY_STOPPED_FLOOR_TEXT,
   MULTI_PART_NUDGE_TEXT,
-} from "../compile-notes.js";
-import { classifyOmitBuckets } from "../omit-buckets.js";
-import { chunkMarkdown } from "../chunk.js";
+} from "../engine/compile-notes.js";
+import { classifyOmitBuckets } from "../engine/omit-buckets.js";
+import { chunkMarkdown } from "../engine/chunk.js";
 import {
   agentStreamIncompleteMessage,
   applyProveIncludeChange,
@@ -116,12 +116,12 @@ import {
   shouldRetryBusy503,
   taskInvalidatesCompile,
   truncatedSectionMeta,
-} from "../client-ux.js";
-import { convertToMarkdown, ConversionError } from "../convert.js";
-import { intEnv, numEnv, trustProxyFromEnv } from "../env.js";
-import { assemble, pack, truncateSectionToBudget } from "../pack.js";
-import { checkPathWithin } from "../path-guard.js";
-import { assembleProveContext, compileContext, expandSection, fullMarkdown } from "../pipeline.js";
+} from "../http/client-ux.js";
+import { convertToMarkdown, ConversionError } from "../engine/convert.js";
+import { intEnv, numEnv, trustProxyFromEnv } from "../engine/env.js";
+import { assemble, pack, truncateSectionToBudget } from "../engine/pack.js";
+import { checkPathWithin } from "../mcp/path-guard.js";
+import { assembleProveContext, compileContext, expandSection, fullMarkdown } from "../engine/pipeline.js";
 import {
   bm25Scores,
   multiScoresFromRows,
@@ -135,18 +135,18 @@ import {
   splitQueries,
   tokenize,
   tokenizeQuery,
-} from "../rank.js";
-import { isMultiPartTask, splitTaskAspects } from "../query-aspects.js";
+} from "../engine/rank.js";
+import { isMultiPartTask, splitTaskAspects } from "../engine/query-aspects.js";
 import {
   applyNameIntentBoost,
   chunkHasGivenNameSpan,
   detectNameIntent,
   prepareRankedForPack,
-} from "../name-intent.js";
-import { countContentTokens, countTokens } from "../tokens.js";
-import { UploadRejected, validateUpload } from "../upload-guard.js";
-import { sanitizeSourceName } from "../util.js";
-import { cacheGet, cachePut } from "../cache.js";
+} from "../engine/name-intent.js";
+import { countContentTokens, countTokens } from "../engine/tokens.js";
+import { UploadRejected, validateUpload } from "../engine/upload-guard.js";
+import { sanitizeSourceName } from "../engine/util.js";
+import { cacheGet, cachePut } from "../engine/cache.js";
 
 function makeTestDoc(): string {
   const sections: string[] = ["# Master Services Agreement\n\nThis agreement is made between parties."];
@@ -1492,7 +1492,7 @@ async function testDemoParityFy25Budget200() {
       }
       return "FY25 net profit was 51.0. Q4 had the best gross margin at 35.1%.";
     };
-    const { runAgent } = await import("../agent.js");
+    const { runAgent } = await import("../engine/agent.js");
     const agent = await runAgent(path, task, {
       startBudget: BUDGET,
       tokenCeiling: BUDGET,
@@ -1747,7 +1747,7 @@ async function testAgentQueryMissOnExpand() {
 
     const compileTokens = compiled.selected_content_tokens ?? countContentTokens(compiled.markdown);
     const tokenCeiling = compileTokens + tinyHeadroom;
-    const { runAgent } = await import("../agent.js");
+    const { runAgent } = await import("../engine/agent.js");
     const r = await runAgent(path, task, {
       startBudget: 100,
       tokenCeiling,
@@ -1811,7 +1811,7 @@ async function testAgentExpandTokensCountedUnderCeiling() {
     const needle = /Beta/i.test(omittedWithUniqueNeedle.section) ? "BETANEEDLE" : "ALPHANEEDLE";
 
     let decideCalls = 0;
-    const { runAgent } = await import("../agent.js");
+    const { runAgent } = await import("../engine/agent.js");
     const r = await runAgent(path, task, {
       startBudget: budget,
       tokenCeiling: budget,
@@ -1894,7 +1894,7 @@ async function testAgentRecompileTokensReadNoDoubleCount() {
       return "FY25 net profit 51.0; Q4 best gross margin 35.1%.";
     };
 
-    const { runAgent } = await import("../agent.js");
+    const { runAgent } = await import("../engine/agent.js");
     const r = await runAgent(path, task, {
       // @100 correctly keeps Five-Year only; expand of Quarterly repacks under the
       // ceiling. Ceiling must leave headroom after that so recompile can run.
@@ -2017,7 +2017,7 @@ async function testAgentMultiFacetBudget200() {
       return "Cannot determine net profit from this excerpt.";
     };
 
-    const { runAgent } = await import("../agent.js");
+    const { runAgent } = await import("../engine/agent.js");
     const r = await runAgent(path, task, {
       startBudget: 200,
       tokenCeiling: 200,
@@ -2065,7 +2065,7 @@ async function testOpenAICompatClient() {
     await withCleanEnv([...LLM_PROVIDER_KEYS, ...LLM_MODEL_KEYS, "CC_LLM_BASE_URL"], async () => {
       process.env.CC_LLM_API_KEY = "test-key";
       process.env.CC_LLM_BASE_URL = `http://127.0.0.1:${port}/v1`;
-      const { complete, hasLlm, answerModel } = await import("../llm.js");
+      const { complete, hasLlm, answerModel } = await import("../engine/llm.js");
       assert.equal(hasLlm(), true);
       assert.equal(answerModel(), "gpt-4o-mini"); // openai-compat default
       assert.equal(await complete("ping"), "mock-answer");
@@ -2107,7 +2107,7 @@ async function testProviderFailover() {
         process.env.CC_GEMINI_BASE_URL = `http://127.0.0.1:${pPort}`;
         process.env.OPENROUTER_API_KEY = "or-key";
         process.env.CC_OPENROUTER_BASE_URL = `http://127.0.0.1:${fPort}`;
-        const { complete, answerModel, geminiModels } = await import("../llm.js");
+        const { complete, answerModel, geminiModels } = await import("../engine/llm.js");
         // Before any success on this chain, the badge shows the primary id.
         assert.equal(answerModel(), geminiModels()[0]);
         assert.equal(await complete("ping"), "fallback-answer", "should fail over to the healthy provider");
@@ -2116,7 +2116,7 @@ async function testProviderFailover() {
 
         // Now knock out the fallback too: every provider down → complete() throws.
         process.env.CC_OPENROUTER_BASE_URL = `http://127.0.0.1:${pPort}`;
-        const { LlmUnavailableError } = await import("../llm.js");
+        const { LlmUnavailableError } = await import("../engine/llm.js");
         await assert.rejects(
           () => complete("ping"),
           (e: unknown) => {
@@ -2184,7 +2184,7 @@ async function testGeminiModelFailover() {
         process.env.CC_GEMINI_BASE_URL = `http://127.0.0.1:${port}`;
         // Existing 429 path must stay fast — cooldown is covered in its own test.
         process.env.CC_LLM_FAILOVER_COOLDOWN_MS = "0";
-        const { complete, geminiModels, answerModel, clearGeminiDeadModels } = await import("../llm.js");
+        const { complete, geminiModels, answerModel, clearGeminiDeadModels } = await import("../engine/llm.js");
         clearGeminiDeadModels();
         assert.deepEqual(geminiModels(), [
           "gemini-flash-lite-latest",
@@ -2218,7 +2218,7 @@ async function testGeminiModelFailover() {
             complete: complete2,
             geminiModels: geminiModels2,
             answerModel: answerModel2,
-          } = await import("../llm.js");
+          } = await import("../engine/llm.js");
           assert.deepEqual(geminiModels2(), ["model-a", "model-b"]);
           assert.equal(await complete2("ping"), "ok:model-b");
           assert.deepEqual(seen, ["model-a", "model-b"]);
@@ -2302,7 +2302,7 @@ async function testGeminiFailoverCooldown() {
         process.env.GEMINI_API_KEY = "gem-key";
         process.env.CC_GEMINI_BASE_URL = `http://127.0.0.1:${port}`;
         process.env.CC_LLM_FAILOVER_COOLDOWN_MS = "50";
-        const { complete, clearGeminiDeadModels } = await import("../llm.js");
+        const { complete, clearGeminiDeadModels } = await import("../engine/llm.js");
         clearGeminiDeadModels();
 
         // Retry-After: 0 → failover still works, no meaningful delay.
@@ -2343,7 +2343,7 @@ async function testGeminiFailoverCooldown() {
 
 async function testAgentAbort() {
   // AbortSignal mid-loop must stop further complete() calls (client disconnect).
-  const { runAgent } = await import("../agent.js");
+  const { runAgent } = await import("../engine/agent.js");
   const path = testTmpPath(`cc-agent-abort-${Date.now()}.md`);
   writeFileSync(path, makeTestDoc());
   try {
@@ -2396,7 +2396,7 @@ async function testAgentLoop() {
   // The agent loop is driven entirely by an injected `complete`, so this runs
   // with NO model or network — the mock plays the model's part. Three scripted
   // behaviours, all against the same fixture document.
-  const { runAgent } = await import("../agent.js");
+  const { runAgent } = await import("../engine/agent.js");
   const path = testTmpPath(`cc-agent-${Date.now()}.md`);
   writeFileSync(path, makeTestDoc());
   try {
@@ -2978,7 +2978,7 @@ async function testRateCostsInConfig() {
 }
 
 async function testLogger() {
-  const { log } = await import("../log.js");
+  const { log } = await import("../engine/log.js");
   const saved = { ...process.env };
   const captured: string[] = [];
   const origWrite = process.stderr.write.bind(process.stderr);
@@ -3062,7 +3062,7 @@ async function testLogger() {
 }
 
 async function testMetricsCounters() {
-  const { inc, snapshot } = await import("../metrics.js");
+  const { inc, snapshot } = await import("../engine/metrics.js");
   const before = snapshot();
   const key = `test_counter_${Date.now()}`;
   assert.equal(before[key], undefined, "fresh counter name starts unset");
@@ -3108,7 +3108,7 @@ async function testHealthzEndpoint() {
       process.env.CC_METRICS_TOKEN = "test-metrics-token";
       const denied = await fetch(`http://127.0.0.1:${port}/metrics`);
       assert.equal(denied.status, 401);
-      const { inc } = await import("../metrics.js");
+      const { inc } = await import("../engine/metrics.js");
       const probe = `healthz_probe_${Date.now()}`;
       inc(probe, 7);
       const ok = await fetch(`http://127.0.0.1:${port}/metrics`, {
@@ -3179,11 +3179,14 @@ async function testSampleLibraryStaticServing() {
     ".dockerignore must except public/samples/** so *.md samples ship in Docker"
   );
 
-  // Next demo holds sample bytes as a File (browsers block input.files = DataTransfer).
-  const nextDemo = readFileSync(join(process.cwd(), "apps", "web", "app", "demo", "page.tsx"), "utf-8");
-  assert.ok(/res\.ok/.test(nextDemo), "Next sample fetch must check res.ok");
-  assert.ok(/new File\(/.test(nextDemo), "Next sample selection must hold a File in memory");
-  assert.ok(/fileFromSample/.test(nextDemo), "Next has a dedicated sample→File helper");
+  // Next workspace holds sample bytes as a File (browsers block input.files = DataTransfer).
+  const nextWorkspace = readFileSync(
+    join(process.cwd(), "apps", "web", "app", "workspace", "page.tsx"),
+    "utf-8"
+  );
+  assert.ok(/res\.ok/.test(nextWorkspace), "Next sample fetch must check res.ok");
+  assert.ok(/new File\(/.test(nextWorkspace), "Next sample selection must hold a File in memory");
+  assert.ok(/fileFromSample/.test(nextWorkspace), "Next has a dedicated sample→File helper");
   console.log("  sample library ok: fast catalog + static bytes + Next File hold");
 }
 
@@ -3287,7 +3290,7 @@ async function testNoStdoutInMcpPath() {
         if (name !== "client" && name !== "tests") scan(p);
         continue;
       }
-      // web.ts / http/demo-app.ts are the hosted demo surface (not MCP).
+      // web.ts / http/app.ts are the hosted demo surface (not MCP).
       if (!name.endsWith(".ts") || p.endsWith("web.ts") || /[/\\]http[/\\]/.test(p)) continue;
       const src = readSrc(p, "utf-8");
       if (/console\.log\s*\(/.test(src) || /process\.stdout/.test(src)) offenders.push(p);
@@ -3422,10 +3425,10 @@ async function testNextDemoRoutesExist() {
   // Vanilla SPA removed — lock the Next App Router pages that replaced it.
   for (const rel of [
     "apps/web/app/page.tsx",
-    "apps/web/app/demo/page.tsx",
-    "apps/web/app/demo/results/page.tsx",
-    "apps/web/app/demo/prove/page.tsx",
-    "apps/web/app/demo/agent/page.tsx",
+    "apps/web/app/workspace/page.tsx",
+    "apps/web/app/workspace/results/page.tsx",
+    "apps/web/app/workspace/prove/page.tsx",
+    "apps/web/app/workspace/agent/page.tsx",
     "apps/web/app/mcp/page.tsx",
   ]) {
     assert.ok(existsSync(join(process.cwd(), rel)), `${rel} must exist`);
@@ -3614,7 +3617,7 @@ async function testCacheCorruptionFallsThrough() {
     writeFileSync(join(dir, `${legacyKey}.md`), "# Legacy\n\nok\n");
     assert.equal(cacheGet(legacyKey), null, "pre-integrity .md without .sha → miss");
 
-    const src = readFileSync(join(process.cwd(), "src", "cache.ts"), "utf-8");
+    const src = readFileSync(join(process.cwd(), "src", "engine", "cache.ts"), "utf-8");
     assert.ok(/renameSync/.test(src) && /\.md\.tmp/.test(src), "cache puts are atomic rename");
     assert.ok(/process\.pid/.test(src), "tmp names include pid to avoid concurrent clobber");
     assert.ok(/\.sha/.test(src) && /markdownSha/.test(src), "integrity sidecar present");
@@ -3755,10 +3758,10 @@ async function testAnswerErrorsAreSanitized() {
 async function testDiskStorageNotMemory() {
   // Jul 18 P2: multer must use disk storage (not memory) so large multipart
   // does not sit in V8 heap before the converter queue.
-  const webSrc = readFileSync(join(process.cwd(), "src", "http", "demo-app.ts"), "utf-8");
-  assert.ok(/diskStorage\s*\(/.test(webSrc), "demo-app.ts uses multer.diskStorage");
-  assert.ok(!/memoryStorage\s*\(/.test(webSrc), "demo-app.ts must not use memoryStorage");
-  console.log("  upload admission ok: diskStorage in demo-app.ts (no memoryStorage)");
+  const webSrc = readFileSync(join(process.cwd(), "src", "http", "app.ts"), "utf-8");
+  assert.ok(/diskStorage\s*\(/.test(webSrc), "app.ts uses multer.diskStorage");
+  assert.ok(!/memoryStorage\s*\(/.test(webSrc), "app.ts must not use memoryStorage");
+  console.log("  upload admission ok: diskStorage in app.ts (no memoryStorage)");
 }
 
 function testPathGuardMessagesArePathFree() {

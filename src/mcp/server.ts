@@ -9,10 +9,10 @@ import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { z } from "zod";
 
-import { BUDGET_FLOORS, DEFAULT_TOKEN_BUDGET, clampBudget } from "./config.js";
-import { ConversionError } from "./convert.js";
+import { BUDGET_FLOORS, DEFAULT_TOKEN_BUDGET, clampBudget } from "../engine/config.js";
+import { ConversionError } from "../engine/convert.js";
 import { checkPathWithin } from "./path-guard.js";
-import { compileContext, expandSection } from "./pipeline.js";
+import { compileContext, expandSection } from "../engine/pipeline.js";
 
 const ROOT = resolve(process.env.CC_ROOT ?? homedir());
 

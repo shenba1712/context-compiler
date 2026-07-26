@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 
-import { useDemo } from "@/lib/demo-context";
+import { useWorkspace } from "@/lib/workspace-context";
 import type { AnswerApiResult } from "@/lib/types";
 
 export default function ProvePage() {
@@ -16,7 +16,7 @@ export default function ProvePage() {
     proveStale,
     proveExpandedIds,
     proveExpandedTokenSum,
-  } = useDemo();
+  } = useWorkspace();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [result, setResult] = useState<AnswerApiResult | null>(null);
@@ -61,7 +61,7 @@ export default function ProvePage() {
       <section className="panel">
         <h2 className="sec">Prove answer parity</h2>
         <p className="sub">
-          <Link href="/demo">Compile</Link> first, then compare full-file vs compiled answers.
+          <Link href="/workspace">Compile</Link> first, then compare full-file vs compiled answers.
         </p>
       </section>
     );
@@ -78,7 +78,7 @@ export default function ProvePage() {
       </p>
       {proveStale ? (
         <p className="hostnote">
-          Stale compile. <Link href="/demo">Recompile</Link> before proving.
+          Stale compile. <Link href="/workspace">Recompile</Link> before proving.
         </p>
       ) : null}
       <div className="row">
@@ -90,7 +90,7 @@ export default function ProvePage() {
         >
           {busy ? "Proving…" : "Prove"}
         </button>
-        <Link className="btn ghost" href="/demo/results">
+        <Link className="btn ghost" href="/workspace/results">
           Back to results
         </Link>
       </div>

@@ -1,12 +1,12 @@
 /**
- * Test/helper entry: exports the shared demo Express app from http/demo-app.
+ * Test/helper entry: exports the shared HTTP Express app from http/app.
  * Production serves Next (`apps/web`) + Nest (`apps/api`) via `npm run web`.
  */
 import { pathToFileURL } from "node:url";
 
-import { intEnv } from "./env.js";
-import { app, warmSampleTokenCache } from "./http/demo-app.js";
-import { log } from "./log.js";
+import { intEnv } from "./engine/env.js";
+import { app, warmSampleTokenCache } from "./http/app.js";
+import { log } from "./engine/log.js";
 
 export { app };
 

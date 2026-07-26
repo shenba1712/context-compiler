@@ -8,8 +8,8 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
-import { compileContext } from "../pipeline.js";
-import { SAMPLES_MANIFEST } from "../samples-manifest.js";
+import { compileContext } from "../engine/pipeline.js";
+import { SAMPLES_MANIFEST } from "../engine/samples-manifest.js";
 
 const BUDGETS = [400, 1000, 4000, 8000] as const;
 

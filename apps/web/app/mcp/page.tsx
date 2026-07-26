@@ -29,8 +29,8 @@ export default function McpPage() {
           <a className="btn primary" href="https://github.com/shenba1712/context-compiler" target="_blank" rel="noopener noreferrer">
             View on GitHub
           </a>
-          <a className="btn ghost" href="/demo">
-            Try the demo
+          <a className="btn ghost" href="/workspace">
+            Open workspace
           </a>
         </p>
       </section>

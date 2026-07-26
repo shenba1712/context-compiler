@@ -9,9 +9,9 @@
 
 | Mode | Command / entry |
 | --- | --- |
-| Build | `npm run build` (`tsc` + client `tsc`) |
-| Web demo | `node dist/web.js` / `npm run web` |
-| MCP | `node dist/server.js` / `npm run mcp` |
+| Build | `npm run build` (engine + Nest API + Next workspace) |
+| Hosted workspace | `npm run web` (dual Next + Nest processes) |
+| MCP | `node dist/mcp/server.js` / `npm run mcp` |
 | Tests | `npm test` (build + `NODE_ENV=test node dist/tests/test.js`) |
 | Lint / format | `npm run lint`, `npm run format:check` |
 
@@ -25,7 +25,7 @@ Single image: Node 22 slim + `python3` + `pip install markitdown[docx,pdf,xlsx,p
 
 - Copies `package*.json`, sources, `public/`, README, ARCHITECTURE.
 - `npm ci` → build → `npm prune --omit=dev`.
-- `EXPOSE 8000`, `CMD ["node", "dist/web.js"]`.
+- `EXPOSE 8000`, `CMD ["node", "scripts/start-dual.mjs"]`.
 - Default `CC_CACHE_DIR=/tmp/cc-cache`.
 - Abuse knobs pinned in image env so a cleared dashboard cannot silently widen limits.
 - Does **not** set `CC_TRUST_PROXY` in the image (platform sets hop count).

@@ -18,7 +18,7 @@ export default function HomePage() {
             budget you set. Plug it into any AI agent over MCP, or try it right here.
           </p>
           <div className="cta">
-            <Link className="btn primary" href="/demo">
+            <Link className="btn primary" href="/workspace">
               Try it now
             </Link>
             <a

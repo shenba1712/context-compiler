@@ -2,10 +2,10 @@ import { realpathSync } from "node:fs";
 import { basename, dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { fullMarkdown } from "../pipeline.js";
-import { SAMPLES_MANIFEST } from "../samples-manifest.js";
-import { countTokens } from "../tokens.js";
-import { log } from "../log.js";
+import { fullMarkdown } from "../engine/pipeline.js";
+import { SAMPLES_MANIFEST } from "../engine/samples-manifest.js";
+import { countTokens } from "../engine/tokens.js";
+import { log } from "../engine/log.js";
 
 // dist/http/samples-catalog.js → repo root public/
 const STATIC_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "public");

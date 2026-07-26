@@ -105,13 +105,13 @@ Most operators can ignore these. Soft “model not found” / 404 responses for 
 
 Two tools: `compile_context` (budgeted, task-relevant markdown + omitted-sections manifest) and `expand_section` (fetch one omitted section by id). Together they form a closed loop: compress, inspect, recover.
 
-Point the client at `node /path/to/context-compiler/dist/server.js` and set `CC_ROOT` to the directory agents may read. Paths are resolved with realpath before the allowlist check, so a symlink inside the root that points outside cannot escape. The hosted demo never accepts a caller-supplied path — uploads only.
+Point the client at `node /path/to/context-compiler/dist/mcp/server.js` and set `CC_ROOT` to the directory agents may read. Paths are resolved with realpath before the allowlist check, so a symlink inside the root that points outside cannot escape. The hosted demo never accepts a caller-supplied path — uploads only.
 
 ```toml
 # ~/.codex/config.toml
 [mcp_servers.context-compiler]
 command = "node"
-args = ["/path/to/context-compiler/dist/server.js"]
+args = ["/path/to/context-compiler/dist/mcp/server.js"]
 
 [mcp_servers.context-compiler.env]
 CC_ROOT = "/path/agents/may/read"
@@ -122,14 +122,14 @@ CC_ROOT = "/path/agents/may/read"
   "mcpServers": {
     "context-compiler": {
       "command": "node",
-      "args": ["/path/to/context-compiler/dist/server.js"],
+      "args": ["/path/to/context-compiler/dist/mcp/server.js"],
       "env": { "CC_ROOT": "/path/agents/may/read" }
     }
   }
 }
 ```
 
-Claude Code: `claude mcp add context-compiler -- node /path/to/context-compiler/dist/server.js`.
+Claude Code: `claude mcp add context-compiler -- node /path/to/context-compiler/dist/mcp/server.js`.
 
 ## Gotchas
 
@@ -151,7 +151,7 @@ Claude Code: `claude mcp add context-compiler -- node /path/to/context-compiler/
 | `CC_MARKITDOWN_CMD` | Non-PATH markitdown binary |
 | `CC_LOG_LEVEL` | `error` / `warn` / `info` / `debug` / `silent` (default `info`) |
 | `CC_METRICS_TOKEN` | Enables `GET /metrics` with `Authorization: Bearer …` |
-| `CC_DEMO_PRICE_PER_MTOK` | Demo cost-meter assumption (default 3.0) |
+| `CC_PRICE_PER_MTOK` | Hosted workspace cost-meter assumption (default 3.0; legacy fallback: `CC_DEMO_PRICE_PER_MTOK`) |
 
 Rate limits, concurrency, and other ops knobs are documented in [ARCHITECTURE.md](./ARCHITECTURE.md). Logs always go to stderr (stdout is reserved for MCP JSON-RPC). `GET /healthz` is a cheap liveness probe.
 

@@ -40,7 +40,7 @@ Requires `fetch` + ReadableStream for Agent SSE over POST, AbortController, CSS 
 
 ## 3. MCP clients
 
-Any client that speaks MCP over **stdio** and can spawn `node dist/server.js`.
+Any client that speaks MCP over **stdio** and can spawn `node dist/mcp/server.js`.
 
 | Client | Status | Notes |
 | --- | --- | --- |
@@ -83,7 +83,7 @@ Default Gemini model ids (overridable): `gemini-flash-lite-latest` → `gemini-3
 
 | Target | Status | Notes |
 | --- | --- | --- |
-| Docker (`Dockerfile`) | ✅ | Node + markitdown in one image; `CMD node dist/web.js` |
+| Docker (`Dockerfile`) | ✅ | Node + markitdown in one image; `CMD node scripts/start-dual.mjs` |
 | Render Blueprint (`render.yaml`) | ✅ | Free plan cold-starts ~30–60s after idle |
 | Railway / Fly-style container | ✅ | Same image assumptions; set `CC_TRUST_PROXY` carefully |
 | Serverless (Lambda/Vercel functions) | ❌ | Subprocess + in-memory handles + long convert timeouts unfit |

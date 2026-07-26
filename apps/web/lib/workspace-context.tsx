@@ -11,11 +11,11 @@ import {
   type ReactNode,
 } from "react";
 
-import { loadPersistedDemo, savePersistedDemo } from "./demo-persist";
+import { loadPersistedWorkspace, savePersistedWorkspace } from "./workspace-persist";
 import type { CompileApiResult, Sample, ServerConfig } from "./types";
 import { applyProveIncludeChange, computePresets, DEFAULT_PRESETS, type BudgetPresets } from "./ux";
 
-type DemoState = {
+type WorkspaceState = {
   config: ServerConfig | null;
   samples: Sample[];
   file: File | null;
@@ -49,9 +49,9 @@ type DemoState = {
   proveStale: boolean;
 };
 
-const Ctx = createContext<DemoState | null>(null);
+const Ctx = createContext<WorkspaceState | null>(null);
 
-export function DemoProvider({ children }: { children: ReactNode }) {
+export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const restored = useRef(false);
   const [hydrated, setHydrated] = useState(false);
   const [config, setConfig] = useState<ServerConfig | null>(null);
@@ -73,7 +73,7 @@ export function DemoProvider({ children }: { children: ReactNode }) {
   const [agentParityHandle, setAgentParityHandle] = useState<string | null>(null);
 
   useEffect(() => {
-    const saved = loadPersistedDemo();
+    const saved = loadPersistedWorkspace();
     if (saved) {
       setTask(saved.task);
       setBudget(saved.budget);
@@ -133,7 +133,7 @@ export function DemoProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!hydrated) return;
-    savePersistedDemo({
+    savePersistedWorkspace({
       task,
       budget,
       sampleKey,
@@ -263,9 +263,9 @@ export function DemoProvider({ children }: { children: ReactNode }) {
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 
-export function useDemo() {
+export function useWorkspace() {
   const v = useContext(Ctx);
-  if (!v) throw new Error("useDemo outside DemoProvider");
+  if (!v) throw new Error("useWorkspace outside WorkspaceProvider");
   return v;
 }
 

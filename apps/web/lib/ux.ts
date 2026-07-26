@@ -1,4 +1,4 @@
-/** Mirrors of src/client-ux.ts used by the Next demo (keep in sync). */
+/** Mirrors of src/http/client-ux.ts used by the Next workspace (keep in sync). */
 
 export function applyProveIncludeChange(
   state: { expandedIds: Set<string>; expandedTokens: Map<string, number> },

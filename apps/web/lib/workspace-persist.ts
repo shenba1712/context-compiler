@@ -1,8 +1,8 @@
 import type { CompileApiResult } from "./types";
 
-const KEY = "cc-demo-v1";
+const KEY = "cc-workspace-v1";
 
-export type PersistedDemo = {
+export type PersistedWorkspace = {
   task: string;
   budget: number;
   sampleKey: string | null;
@@ -13,18 +13,18 @@ export type PersistedDemo = {
   proveExpandedTokens: [string, number][];
 };
 
-export function loadPersistedDemo(): PersistedDemo | null {
+export function loadPersistedWorkspace(): PersistedWorkspace | null {
   if (typeof sessionStorage === "undefined") return null;
   try {
     const raw = sessionStorage.getItem(KEY);
     if (!raw) return null;
-    return JSON.parse(raw) as PersistedDemo;
+    return JSON.parse(raw) as PersistedWorkspace;
   } catch {
     return null;
   }
 }
 
-export function savePersistedDemo(data: PersistedDemo): void {
+export function savePersistedWorkspace(data: PersistedWorkspace): void {
   if (typeof sessionStorage === "undefined") return;
   try {
     sessionStorage.setItem(KEY, JSON.stringify(data));
@@ -33,7 +33,7 @@ export function savePersistedDemo(data: PersistedDemo): void {
   }
 }
 
-export function clearPersistedDemo(): void {
+export function clearPersistedWorkspace(): void {
   if (typeof sessionStorage === "undefined") return;
   try {
     sessionStorage.removeItem(KEY);

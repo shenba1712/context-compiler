@@ -1,13 +1,13 @@
 # API Specifications
 
 **Status:** Current  
-**Sources of truth:** `src/web.ts`, `src/server.ts`, `src/pipeline.ts`, `src/agent.ts`
+**Sources of truth:** `src/http/app.ts`, `src/mcp/server.ts`, `src/engine/pipeline.ts`, `src/engine/agent.ts`
 
 Error bodies are JSON `{ "error": string }` unless noted. MCP returns errors in-band as JSON text inside the tool result, not as protocol-level failures.
 
 ---
 
-## 1. HTTP — Demo (`web.ts`)
+## 1. HTTP — Hosted workspace (`src/http/app.ts`)
 
 Base: process listens on `PORT` (default 8000), bound `0.0.0.0` when run as main. All `/api/*` routes share per-IP rate limiting.
 
@@ -42,7 +42,7 @@ Enabled only when `CC_METRICS_TOKEN` is set.
 
 ### 1.3 `GET /api/config`
 
-Demo limits and LLM availability for UI gating.
+Hosted limits and LLM availability for UI gating.
 
 **200**
 ```json
@@ -85,13 +85,13 @@ Multipart fields: `file`, `task`, `token_budget`.
 | 422 | Conversion failed |
 | 429 | Rate limited (`Retry-After: 60`) |
 | 503 | Converter busy |
-| 200 | Compile result + demo fields |
+| 200 | Compile result + workspace fields |
 
 **200** includes pipeline `CompileResult` plus:
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `cost_raw_usd` / `cost_compiled_usd` | number | Illustrative (`CC_DEMO_PRICE_PER_MTOK`) |
+| `cost_raw_usd` / `cost_compiled_usd` | number | Illustrative (`CC_PRICE_PER_MTOK`, with legacy `CC_DEMO_PRICE_PER_MTOK` fallback) |
 | `price_per_mtok` | number | |
 | `handle` | string | Opaque upload id for expand |
 | `llm_available` | boolean | |

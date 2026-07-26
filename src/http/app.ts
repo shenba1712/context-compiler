@@ -1,5 +1,5 @@
 /**
- * Hosted demo HTTP API (Express app). Served by Nest (apps/api) in production
+ * Hosted web HTTP API (Express app). Served by Nest (apps/api) in production
  * dual-process deploy, or by src/web.ts for local/tests.
  */
 import express from "express";
@@ -17,10 +17,10 @@ import {
 import { tmpdir } from "node:os";
 import { extname, join, sep } from "node:path";
 
-import { runAgent } from "../agent.js";
-import { BUDGET_FLOORS, MAX_FILE_BYTES, clampBudget } from "../config.js";
-import { ConversionError, ConverterBusyError, converterAvailable } from "../convert.js";
-import { intEnv, numEnv, trustProxyFromEnv } from "../env.js";
+import { runAgent } from "../engine/agent.js";
+import { BUDGET_FLOORS, MAX_FILE_BYTES, clampBudget } from "../engine/config.js";
+import { ConversionError, ConverterBusyError, converterAvailable } from "../engine/convert.js";
+import { intEnv, numEnv, trustProxyFromEnv } from "../engine/env.js";
 import {
   answerModel,
   complete,
@@ -29,17 +29,17 @@ import {
   LlmUnavailableError,
   releaseLlmJob,
   tryAcquireLlmJob,
-} from "../llm.js";
-import { log } from "../log.js";
-import { inc, snapshot } from "../metrics.js";
-import { assembleProveContext, compileContext, expandSection, fullMarkdown } from "../pipeline.js";
-import { countContentTokens, countTokens } from "../tokens.js";
-import { UploadRejected, validateUpload } from "../upload-guard.js";
-import { sanitizeSourceName } from "../util.js";
-import { getDemoConfig, RATE_COST_AGENT, RATE_COST_ANSWER, RATE_LIMIT, WINDOW_MS } from "./demo-config.js";
+} from "../engine/llm.js";
+import { log } from "../engine/log.js";
+import { inc, snapshot } from "../engine/metrics.js";
+import { assembleProveContext, compileContext, expandSection, fullMarkdown } from "../engine/pipeline.js";
+import { countContentTokens, countTokens } from "../engine/tokens.js";
+import { UploadRejected, validateUpload } from "../engine/upload-guard.js";
+import { sanitizeSourceName } from "../engine/util.js";
+import { getApiConfig, RATE_COST_AGENT, RATE_COST_ANSWER, RATE_LIMIT, WINDOW_MS } from "./config.js";
 import { samplesPayload, STATIC_DIR, warmSampleTokenCache } from "./samples-catalog.js";
 
-/** Optional section ids the demo user expanded before Prove — merged into the
+/** Optional section ids the UI expanded before Prove — merged into the
  *  compiled side of answer parity. Capped and id-shaped to bound cost/abuse. */
 function parseExpandedIds(raw: unknown): string[] {
   if (typeof raw !== "string" || !raw.trim()) return [];
@@ -53,7 +53,12 @@ function parseExpandedIds(raw: unknown): string[] {
   }
 }
 
-const PRICE_PER_MTOK = numEnv("CC_DEMO_PRICE_PER_MTOK", 3.0, 0);
+// Prefer CC_PRICE_PER_MTOK; fall back to legacy CC_DEMO_PRICE_PER_MTOK.
+const PRICE_PER_MTOK = numEnv(
+  "CC_PRICE_PER_MTOK",
+  numEnv("CC_DEMO_PRICE_PER_MTOK", 3.0, 0),
+  0
+);
 const UPLOAD_DIR = join(tmpdir(), "cc-demo-uploads");
 // Uploaded files are transient. Sweep anything older than this so the upload
 // dir can't grow without bound (it was never cleaned before).
@@ -347,7 +352,7 @@ function errorResponse(res: express.Response, e: unknown, context: string) {
 
 // GET /api/config, /api/samples, /healthz are Nest controllers (apps/api).
 // Kept here too so `import { app } from web.js` tests still work without Nest.
-app.get("/api/config", (_req, res) => res.json(getDemoConfig()));
+app.get("/api/config", (_req, res) => res.json(getApiConfig()));
 
 app.get("/healthz", (_req, res) =>
   res.status(200).json({ status: "ok", uptime_s: Math.round(process.uptime()) })

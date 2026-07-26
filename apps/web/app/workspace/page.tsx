@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
 
-import { useDemo } from "@/lib/demo-context";
+import { useWorkspace } from "@/lib/workspace-context";
 import type { CompileApiResult, MeasureApiResult, Sample } from "@/lib/types";
 import { computePresets, DEFAULT_PRESETS, SLIDER_MAX, SLIDER_MIN } from "@/lib/ux";
 
@@ -14,7 +14,7 @@ async function fileFromSample(s: Sample): Promise<File> {
   return new File([buf], s.file, { type: res.headers.get("content-type") || "application/octet-stream" });
 }
 
-export default function DemoCompilePage() {
+export default function WorkspaceCompilePage() {
   const router = useRouter();
   const measureSeq = useRef(0);
   const {
@@ -35,7 +35,7 @@ export default function DemoCompilePage() {
     setRawTokensHint,
     setCompile,
     clearCompile,
-  } = useDemo();
+  } = useWorkspace();
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
   const [picked, setPicked] = useState("");
@@ -120,7 +120,7 @@ export default function DemoCompilePage() {
       if (!res.ok) throw new Error(data.error || `Compile failed (${res.status})`);
       setCompile(data, task.trim(), budget);
       setRawTokensHint(data.raw_tokens);
-      router.push("/demo/results");
+      router.push("/workspace/results");
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Compile failed");
     } finally {
