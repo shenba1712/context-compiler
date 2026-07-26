@@ -3293,7 +3293,8 @@ async function testNoStdoutInMcpPath() {
         if (name !== "client" && name !== "tests") scan(p);
         continue;
       }
-      if (!name.endsWith(".ts") || p.endsWith("web.ts")) continue;
+      // web.ts / http/demo-app.ts are the hosted demo surface (not MCP).
+      if (!name.endsWith(".ts") || p.endsWith("web.ts") || /[/\\]http[/\\]/.test(p)) continue;
       const src = readSrc(p, "utf-8");
       if (/console\.log\s*\(/.test(src) || /process\.stdout/.test(src)) offenders.push(p);
     }
@@ -3770,10 +3771,10 @@ async function testAnswerErrorsAreSanitized() {
 async function testDiskStorageNotMemory() {
   // Jul 18 P2: multer must use disk storage (not memory) so large multipart
   // does not sit in V8 heap before the converter queue.
-  const webSrc = readFileSync(join(process.cwd(), "src", "web.ts"), "utf-8");
-  assert.ok(/diskStorage\s*\(/.test(webSrc), "web.ts uses multer.diskStorage");
-  assert.ok(!/memoryStorage\s*\(/.test(webSrc), "web.ts must not use memoryStorage");
-  console.log("  upload admission ok: diskStorage in web.ts (no memoryStorage)");
+  const webSrc = readFileSync(join(process.cwd(), "src", "http", "demo-app.ts"), "utf-8");
+  assert.ok(/diskStorage\s*\(/.test(webSrc), "demo-app.ts uses multer.diskStorage");
+  assert.ok(!/memoryStorage\s*\(/.test(webSrc), "demo-app.ts must not use memoryStorage");
+  console.log("  upload admission ok: diskStorage in demo-app.ts (no memoryStorage)");
 }
 
 function testPathGuardMessagesArePathFree() {
