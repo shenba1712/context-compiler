@@ -71,10 +71,23 @@ export type ServerConfig = {
   answer_context_cap?: number;
 };
 
+export type MeasureApiResult = {
+  raw_tokens: number;
+  handle: string;
+  error?: string;
+};
+
 export type ExpandApiResult = {
   markdown: string;
   tokens_used: number;
   cache_hit: boolean;
+  error?: string;
+};
+
+export type AgentParityResult = {
+  model: string;
+  full: { answer: string; context_tokens: number };
+  agent: { answer: string; context_tokens: number };
   error?: string;
 };
 

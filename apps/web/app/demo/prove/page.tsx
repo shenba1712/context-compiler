@@ -7,12 +7,20 @@ import { useDemo } from "@/lib/demo-context";
 import type { AnswerApiResult } from "@/lib/types";
 
 export default function ProvePage() {
-  const { file, task, budget, compile, config, questionStale, budgetStale } = useDemo();
+  const {
+    file,
+    task,
+    budget,
+    compile,
+    config,
+    proveStale,
+    proveExpandedIds,
+    proveExpandedTokenSum,
+  } = useDemo();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [result, setResult] = useState<AnswerApiResult | null>(null);
 
-  const stale = questionStale || budgetStale;
   const llmOk = config?.llm_available ?? false;
 
   async function runProve() {
@@ -22,7 +30,7 @@ export default function ProvePage() {
       setErr("Compile a document first.");
       return;
     }
-    if (stale) {
+    if (proveStale) {
       setErr("Task or budget changed — recompile first.");
       return;
     }
@@ -36,6 +44,7 @@ export default function ProvePage() {
       fd.append("file", file);
       fd.append("task", task.trim());
       fd.append("token_budget", String(budget));
+      fd.append("expanded_ids", JSON.stringify(proveExpandedIds));
       const res = await fetch("/api/answer", { method: "POST", body: fd });
       const data = (await res.json()) as AnswerApiResult & { error?: string };
       if (!res.ok) throw new Error(data.error || `Prove failed (${res.status})`);
@@ -63,14 +72,22 @@ export default function ProvePage() {
       <h2 className="sec">Prove answer parity</h2>
       <p className="sub">
         Same question answered from the full file and from your compiled context — side by side.
+        {proveExpandedIds.length > 0
+          ? ` Includes ${proveExpandedIds.length} expanded section(s) (+${proveExpandedTokenSum.toLocaleString()} tokens).`
+          : " Mark Include in Prove on Results to merge omitted sections."}
       </p>
-      {stale ? (
+      {proveStale ? (
         <p className="hostnote">
           Stale compile. <Link href="/demo">Recompile</Link> before proving.
         </p>
       ) : null}
       <div className="row">
-        <button className="btn primary" type="button" disabled={busy || stale || !llmOk} onClick={() => void runProve()}>
+        <button
+          className="btn primary"
+          type="button"
+          disabled={busy || proveStale || !llmOk}
+          onClick={() => void runProve()}
+        >
           {busy ? "Proving…" : "Prove"}
         </button>
         <Link className="btn ghost" href="/demo/results">
@@ -83,14 +100,21 @@ export default function ProvePage() {
         </div>
       ) : null}
       {result ? (
-        <div className="parity-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginTop: 20 }}>
+        <div
+          className="parity-grid"
+          style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginTop: 20 }}
+        >
           <div>
             <p className="alabel">Full file · {result.full.context_tokens.toLocaleString()} tok</p>
             <div className="aanswer">{result.full.answer}</div>
           </div>
           <div>
             <p className="alabel">
-              Compiled · {result.compiled.context_tokens.toLocaleString()} tok · {result.compiled.reduction_pct}% fewer
+              Compiled · {result.compiled.context_tokens.toLocaleString()} tok ·{" "}
+              {result.compiled.reduction_pct}% fewer
+              {result.compiled.expanded_ids?.length
+                ? ` · includes ${result.compiled.expanded_ids.join(", ")}`
+                : ""}
             </p>
             <div className="aanswer">{result.compiled.answer}</div>
           </div>

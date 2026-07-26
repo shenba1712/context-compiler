@@ -6,25 +6,26 @@ import { useState } from "react";
 
 import { useDemo } from "@/lib/demo-context";
 import type { ExpandApiResult, SectionInfo } from "@/lib/types";
+import { includeRestHint, sectionLeaf, truncatedSectionMeta } from "@/lib/ux";
 
-function SectionCard({ s, kind }: { s: SectionInfo; kind: "in" | "out" }) {
-  return (
-    <article className={`scard-static ${kind}`}>
-      <div className="nm">
-        {s.section}{" "}
-        <span className="afaint">
-          · {s.tokens.toLocaleString()} tok
-          {s.relevance != null ? ` · rel ${(s.relevance * 100).toFixed(0)}%` : ""}
-          {s.truncated ? " · truncated" : ""}
-        </span>
-      </div>
-      {s.text ? <pre className="sectext">{s.text}</pre> : null}
-    </article>
-  );
+function metaFor(s: SectionInfo): string {
+  if (s.truncated && s.full_tokens != null) {
+    return truncatedSectionMeta(s.tokens, s.full_tokens, s.remainder_tokens ?? 0, s.relevance);
+  }
+  const rel = s.relevance != null ? ` · rel ${(s.relevance * 100).toFixed(0)}%` : "";
+  return `${s.tokens.toLocaleString()} tok${rel}${s.truncated ? " · truncated" : ""}`;
 }
 
 export default function ResultsPage() {
-  const { compile, questionStale, budgetStale, task, budget } = useDemo();
+  const {
+    compile,
+    proveStale,
+    proveExpandedIds,
+    proveExpandedTokenSum,
+    setProveInclude,
+    task,
+    budget,
+  } = useDemo();
   const [peek, setPeek] = useState<Record<string, string>>({});
   const [err, setErr] = useState("");
 
@@ -55,7 +56,8 @@ export default function ResultsPage() {
     }
   }
 
-  const stale = questionStale || budgetStale;
+  const pct = Math.min(100, Math.round((100 * compile.tokens_used) / Math.max(1, compile.token_budget)));
+  const early = compile.compile_hints?.early_stopped;
 
   return (
     <section>
@@ -69,20 +71,45 @@ export default function ResultsPage() {
         <p className="sub">
           {compile.raw_tokens.toLocaleString()} → {compile.tokens_used.toLocaleString()} tokens (
           {compile.reduction_pct}% fewer)
-          {compile.compile_hints?.early_stopped ? " · early-stopped with spare under ceiling" : ""}
+          {early ? " · early-stopped with spare under ceiling" : ""}
         </p>
-        {stale ? (
+
+        <div className="bar-block" style={{ marginBottom: 16 }}>
+          <div className="bar-label">
+            <span>Packed vs budget</span>
+            <span className="tokens">
+              {compile.tokens_used.toLocaleString()} / {compile.token_budget.toLocaleString()}
+            </span>
+          </div>
+          <div className="htrack" style={{ background: "var(--bg2)" }}>
+            <div className="hbar small" style={{ width: `${pct}%`, background: "var(--compiled)" }} />
+          </div>
+          {early ? (
+            <p className="sub" style={{ marginTop: 6 }}>
+              {(compile.token_budget - compile.tokens_used).toLocaleString()} spare under ceiling
+            </p>
+          ) : null}
+        </div>
+
+        {proveStale ? (
           <p className="hostnote" role="status">
-            Inputs changed since this compile (task or budget).{" "}
+            Inputs changed since this compile (task or budget). Expands for Prove were cleared.{" "}
             <Link href="/demo">Recompile</Link> before Prove / Agent.
           </p>
         ) : null}
 
+        {proveExpandedIds.length > 0 ? (
+          <p className="hostnote">
+            <strong>{proveExpandedIds.length}</strong> section(s) marked Include in Prove (+
+            {proveExpandedTokenSum.toLocaleString()} content tokens). Peeks alone do not count.
+          </p>
+        ) : null}
+
         <div className="row" style={{ marginBottom: 16 }}>
-          <Link className={`btn ghost${stale ? " disabled" : ""}`} href={stale ? "/demo" : "/demo/prove"}>
+          <Link className="btn ghost" href={proveStale ? "/demo" : "/demo/prove"}>
             Prove answer parity
           </Link>
-          <Link className={`btn quiet`} href={stale ? "/demo" : "/demo/agent"}>
+          <Link className="btn quiet" href={proveStale ? "/demo" : "/demo/agent"}>
             Run agent
           </Link>
         </div>
@@ -92,27 +119,79 @@ export default function ResultsPage() {
           {compile.selected_sections.length === 0 ? (
             <p className="sub">No sections included — try a higher budget or a sharper question.</p>
           ) : (
-            compile.selected_sections.map((s) => <SectionCard key={s.id} s={s} kind="in" />)
+            compile.selected_sections.map((s) => (
+              <article key={s.id} className="scard-static in">
+                <div className="nm">
+                  {s.section} <span className="afaint">· {metaFor(s)}</span>
+                </div>
+                {s.text ? <pre className="sectext">{s.text}</pre> : null}
+                {s.truncated && (s.remainder_tokens ?? 0) > 0 ? (
+                  <label className="include-lab">
+                    <input
+                      type="checkbox"
+                      disabled={proveStale}
+                      checked={proveExpandedIds.includes(s.id)}
+                      onChange={(ev) =>
+                        setProveInclude(s.id, s.remainder_tokens ?? 0, ev.target.checked)
+                      }
+                    />{" "}
+                    {includeRestHint(s.remainder_tokens ?? 0, sectionLeaf(s.section))}
+                  </label>
+                ) : null}
+              </article>
+            ))
           )}
         </div>
 
         <p className="alabel">Omitted (budget)</p>
         <div className="section-list">
           {(compile.budget_omitted_sections ?? []).map((s) => (
-            <div key={s.id}>
-              <SectionCard s={s} kind="out" />
-              <button type="button" className="btn quiet" onClick={() => void expand(s.id)}>
-                Peek expand
-              </button>
+            <article key={s.id} className="scard-static">
+              <div className="nm">
+                {s.section} <span className="afaint">· {metaFor(s)}</span>
+              </div>
+              <div className="row" style={{ marginTop: 8 }}>
+                <button type="button" className="btn quiet" onClick={() => void expand(s.id)}>
+                  Peek expand
+                </button>
+                <label className="include-lab">
+                  <input
+                    type="checkbox"
+                    disabled={proveStale}
+                    checked={proveExpandedIds.includes(s.id)}
+                    onChange={(ev) => setProveInclude(s.id, s.tokens, ev.target.checked)}
+                  />{" "}
+                  Include in Prove
+                </label>
+              </div>
               {peek[s.id] ? <pre className="sectext peek">{peek[s.id]}</pre> : null}
-            </div>
+            </article>
           ))}
         </div>
 
         <p className="alabel">Omitted (relevance)</p>
         <div className="section-list">
           {(compile.relevance_omitted_sections ?? []).slice(0, 12).map((s) => (
-            <SectionCard key={s.id} s={s} kind="out" />
+            <article key={s.id} className="scard-static">
+              <div className="nm">
+                {s.section} <span className="afaint">· {metaFor(s)}</span>
+              </div>
+              <div className="row" style={{ marginTop: 8 }}>
+                <button type="button" className="btn quiet" onClick={() => void expand(s.id)}>
+                  Peek expand
+                </button>
+                <label className="include-lab">
+                  <input
+                    type="checkbox"
+                    disabled={proveStale}
+                    checked={proveExpandedIds.includes(s.id)}
+                    onChange={(ev) => setProveInclude(s.id, s.tokens, ev.target.checked)}
+                  />{" "}
+                  Include in Prove
+                </label>
+              </div>
+              {peek[s.id] ? <pre className="sectext peek">{peek[s.id]}</pre> : null}
+            </article>
           ))}
         </div>
 

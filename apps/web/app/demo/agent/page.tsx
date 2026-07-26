@@ -4,29 +4,44 @@ import Link from "next/link";
 import { useRef, useState } from "react";
 
 import { useDemo } from "@/lib/demo-context";
+import type { AgentParityResult } from "@/lib/types";
 
-type Step = { kind?: string; title?: string; detail?: string; [k: string]: unknown };
+type Step = { kind?: string; title?: string; detail?: string; action?: string; n?: number; [k: string]: unknown };
 
 export default function AgentPage() {
-  const { file, task, budget, compile, config, questionStale, budgetStale } = useDemo();
+  const {
+    file,
+    task,
+    budget,
+    compile,
+    config,
+    proveStale,
+    agentParityHandle,
+    setAgentParityHandle,
+  } = useDemo();
   const [busy, setBusy] = useState(false);
+  const [parityBusy, setParityBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [parityErr, setParityErr] = useState("");
   const [steps, setSteps] = useState<Step[]>([]);
   const [answer, setAnswer] = useState("");
+  const [parity, setParity] = useState<AgentParityResult | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
-  const stale = questionStale || budgetStale;
   const llmOk = config?.llm_available ?? false;
 
   async function runAgent() {
     setErr("");
+    setParityErr("");
     setSteps([]);
     setAnswer("");
+    setParity(null);
+    setAgentParityHandle(null);
     if (!file || !compile) {
       setErr("Compile a document first.");
       return;
     }
-    if (stale) {
+    if (proveStale) {
       setErr("Task or budget changed — recompile first.");
       return;
     }
@@ -74,6 +89,8 @@ export default function AgentPage() {
           if (event === "done") {
             sawDone = true;
             setAnswer(String(data.answer ?? data.final_answer ?? ""));
+            const handle = typeof data.parity_handle === "string" ? data.parity_handle : null;
+            setAgentParityHandle(handle);
           }
         }
       }
@@ -87,6 +104,31 @@ export default function AgentPage() {
     } finally {
       setBusy(false);
       abortRef.current = null;
+    }
+  }
+
+  async function runParity() {
+    setParityErr("");
+    setParity(null);
+    if (!agentParityHandle) {
+      setParityErr("Run the agent first to unlock compare.");
+      return;
+    }
+    setParityBusy(true);
+    try {
+      const res = await fetch("/api/agent-parity", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ parity_handle: agentParityHandle }),
+      });
+      const data = (await res.json()) as AgentParityResult & { error?: string };
+      if (!res.ok) throw new Error(data.error || `Compare failed (${res.status})`);
+      setParity(data);
+      setAgentParityHandle(null); // one-shot
+    } catch (e) {
+      setParityErr(e instanceof Error ? e.message : "Compare failed");
+    } finally {
+      setParityBusy(false);
     }
   }
 
@@ -104,25 +146,36 @@ export default function AgentPage() {
   return (
     <section className="panel">
       <h2 className="sec">Run agent</h2>
-      <p className="sub">SSE step trace — the model retrieves with compile_context / expand_section under your ceiling.</p>
-      {stale ? (
+      <p className="sub">
+        SSE step trace — the model retrieves with compile_context / expand_section under your ceiling.
+      </p>
+      {proveStale ? (
         <p className="hostnote">
           Stale compile. <Link href="/demo">Recompile</Link> first.
         </p>
       ) : null}
       <div className="row">
-        <button className="btn primary" type="button" disabled={busy || stale || !llmOk} onClick={() => void runAgent()}>
+        <button
+          className="btn primary"
+          type="button"
+          disabled={busy || proveStale || !llmOk}
+          onClick={() => void runAgent()}
+        >
           {busy ? "Running…" : "Run agent"}
         </button>
         {busy ? (
-          <button
-            className="btn ghost"
-            type="button"
-            onClick={() => abortRef.current?.abort()}
-          >
+          <button className="btn ghost" type="button" onClick={() => abortRef.current?.abort()}>
             Cancel
           </button>
         ) : null}
+        <button
+          className="btn quiet"
+          type="button"
+          disabled={!agentParityHandle || parityBusy || !llmOk}
+          onClick={() => void runParity()}
+        >
+          {parityBusy ? "Comparing…" : "Compare to full file"}
+        </button>
         <Link className="btn quiet" href="/demo/results">
           Back to results
         </Link>
@@ -132,13 +185,20 @@ export default function AgentPage() {
           {err}
         </div>
       ) : null}
+      {parityErr ? (
+        <div className="err" role="alert">
+          {parityErr}
+        </div>
+      ) : null}
       <div className="asteps" style={{ marginTop: 16 }}>
         {steps.map((st, i) => (
           <div key={i} className="astep">
             <div className="abody">
-              <div className="atitle">{String(st.title ?? st.kind ?? `Step ${i + 1}`)}</div>
-              {st.detail || st.reason ? (
-                <div className="areason">{String(st.detail ?? st.reason)}</div>
+              <div className="atitle">
+                {String(st.title ?? st.action ?? st.kind ?? `Step ${st.n ?? i + 1}`)}
+              </div>
+              {st.detail || st.reasoning ? (
+                <div className="areason">{String(st.detail ?? st.reasoning)}</div>
               ) : null}
             </div>
           </div>
@@ -149,6 +209,23 @@ export default function AgentPage() {
           <p className="alabel">Answer</p>
           <div className="aanswer">{answer}</div>
         </>
+      ) : null}
+      {parity ? (
+        <div
+          style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginTop: 20 }}
+        >
+          <div>
+            <p className="alabel">Full file · {parity.full.context_tokens.toLocaleString()} tok</p>
+            <div className="aanswer">{parity.full.answer}</div>
+          </div>
+          <div>
+            <p className="alabel">Agent context · {parity.agent.context_tokens.toLocaleString()} tok</p>
+            <div className="aanswer">{parity.agent.answer}</div>
+          </div>
+          <p className="sub" style={{ gridColumn: "1 / -1" }}>
+            Model: {parity.model}
+          </p>
+        </div>
       ) : null}
     </section>
   );

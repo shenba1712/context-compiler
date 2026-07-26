@@ -1,10 +1,11 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { useDemo } from "@/lib/demo-context";
-import type { CompileApiResult, Sample } from "@/lib/types";
+import type { CompileApiResult, MeasureApiResult, Sample } from "@/lib/types";
+import { computePresets, DEFAULT_PRESETS, SLIDER_MAX, SLIDER_MIN } from "@/lib/ux";
 
 async function fileFromSample(s: Sample): Promise<File> {
   const res = await fetch(`/samples/${s.file}`);
@@ -15,6 +16,7 @@ async function fileFromSample(s: Sample): Promise<File> {
 
 export default function DemoCompilePage() {
   const router = useRouter();
+  const measureSeq = useRef(0);
   const {
     config,
     samples,
@@ -22,16 +24,52 @@ export default function DemoCompilePage() {
     sampleKey,
     task,
     budget,
+    presets,
+    docSizeNote,
     setFile,
     setSampleKey,
     setTask,
     setBudget,
+    setPresets,
+    setDocSizeNote,
+    setRawTokensHint,
     setCompile,
     clearCompile,
   } = useDemo();
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
   const [picked, setPicked] = useState("");
+
+  async function measureUpload(f: File) {
+    const seq = ++measureSeq.current;
+    setPresets(DEFAULT_PRESETS, null);
+    setDocSizeNote("Measuring document size…");
+    try {
+      const fd = new FormData();
+      fd.append("file", f);
+      const res = await fetch("/api/measure", { method: "POST", body: fd });
+      const d = (await res.json()) as MeasureApiResult;
+      if (seq !== measureSeq.current) return;
+      if (d.error) throw new Error(d.error);
+      const p = computePresets(d.raw_tokens);
+      setPresets(p, "standard");
+      setRawTokensHint(d.raw_tokens);
+      const scaled = p !== DEFAULT_PRESETS;
+      setDocSizeNote(
+        `This document is ~${d.raw_tokens.toLocaleString()} tokens once converted.${
+          scaled ? " Presets below are scaled to it." : ""
+        }`
+      );
+    } catch (e) {
+      if (seq !== measureSeq.current) return;
+      setRawTokensHint(null);
+      setDocSizeNote(
+        e instanceof Error && e.message
+          ? `Couldn't pre-measure this file: ${e.message}`
+          : "Size will be shown after you compile."
+      );
+    }
+  }
 
   async function pickSample(s: Sample) {
     setErr("");
@@ -42,6 +80,19 @@ export default function DemoCompilePage() {
       setFile(f);
       setPicked(`Sample: ${s.nm}`);
       if (s.q[0]) setTask(s.q[0]);
+      if (s.tok != null) {
+        const p = computePresets(s.tok);
+        setPresets(p, "standard");
+        setRawTokensHint(s.tok);
+        setDocSizeNote(
+          `This document is about ${s.tok.toLocaleString()} tokens total.${
+            p !== DEFAULT_PRESETS ? " The presets below are scaled to it." : ""
+          }`
+        );
+      } else {
+        setDocSizeNote("Measuring sample size in the background…");
+        void measureUpload(f);
+      }
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Sample load failed");
     }
@@ -68,6 +119,7 @@ export default function DemoCompilePage() {
       const data = (await res.json()) as CompileApiResult & { error?: string };
       if (!res.ok) throw new Error(data.error || `Compile failed (${res.status})`);
       setCompile(data, task.trim(), budget);
+      setRawTokensHint(data.raw_tokens);
       router.push("/demo/results");
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Compile failed");
@@ -100,6 +152,12 @@ export default function DemoCompilePage() {
               setSampleKey(null);
               setFile(f);
               setPicked(f ? f.name : "");
+              if (f) void measureUpload(f);
+              else {
+                setDocSizeNote("");
+                setRawTokensHint(null);
+                setPresets(DEFAULT_PRESETS, null);
+              }
             }}
           />
           {picked ? (
@@ -140,6 +198,12 @@ export default function DemoCompilePage() {
             rows={2}
             value={task}
             onChange={(ev) => setTask(ev.target.value)}
+            onKeyDown={(ev) => {
+              if (ev.key === "Enter" && !ev.shiftKey) {
+                ev.preventDefault();
+                (ev.currentTarget.form as HTMLFormElement | null)?.requestSubmit();
+              }
+            }}
             placeholder="e.g. What does the warranty not cover?"
           />
           {sampleKey ? (
@@ -153,23 +217,44 @@ export default function DemoCompilePage() {
           ) : null}
 
           <label htmlFor="budget">Token budget</label>
+          {docSizeNote ? <div className="docsizenote">{docSizeNote}</div> : null}
           <div className="budgetbar">
             <div className="budgetnum">
               <span>{budget.toLocaleString()}</span> <span className="u">tokens</span>
+            </div>
+            <div className="bpre-group">
+              {(
+                [
+                  ["quick", "Quick"],
+                  ["standard", "Standard"],
+                  ["deep", "Deep"],
+                ] as const
+              ).map(([tier, label]) => (
+                <button
+                  key={tier}
+                  type="button"
+                  className={`bpre${budget === presets[tier] ? " active" : ""}`}
+                  aria-pressed={budget === presets[tier]}
+                  onClick={() => setBudget(presets[tier])}
+                >
+                  {label}
+                  <small>~{presets[tier].toLocaleString()}</small>
+                </button>
+              ))}
             </div>
           </div>
           <input
             id="budget"
             type="range"
-            min={200}
-            max={20000}
+            min={SLIDER_MIN}
+            max={SLIDER_MAX}
             step={50}
             value={budget}
             onChange={(ev) => setBudget(Number(ev.target.value))}
           />
           <div className="sliderscale">
-            <span>200</span>
-            <span>20,000</span>
+            <span>{SLIDER_MIN.toLocaleString()}</span>
+            <span>{SLIDER_MAX.toLocaleString()}</span>
           </div>
 
           {err ? (

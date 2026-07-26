@@ -619,3 +619,12 @@
 .filepicked { font-size:14px; color:var(--forest); margin:8px 0 0; font-weight:600; }
 .err { color:var(--red); margin:14px 0 0; font-size:14.5px; }
 .samplesbox { margin-top:14px; }
+
+.include-lab { display:inline-flex; align-items:center; gap:6px; font-size:13.5px; color:var(--muted); margin-top:8px; font-weight:500; cursor:pointer; }
+.bpre { all:unset; cursor:pointer; font-family:inherit; font-size:13px; font-weight:600; padding:8px 12px; border:1px solid var(--border2); background:var(--panel2); color:var(--muted); display:inline-flex; flex-direction:column; gap:2px; }
+.bpre small { font-weight:500; font-size:11px; color:var(--faint); }
+.bpre.active, .bpre[aria-pressed="true"] { border-color:var(--forest); color:var(--forest); background:var(--accent-soft); box-shadow:inset 2px 0 0 var(--forest); }
+.bpre-group { display:flex; gap:6px; flex-wrap:wrap; }
+@media (max-width:720px) {
+  .parity-grid { grid-template-columns:1fr !important; }
+}
