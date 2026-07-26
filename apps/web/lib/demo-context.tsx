@@ -6,10 +6,12 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
 
+import { loadPersistedDemo, savePersistedDemo } from "./demo-persist";
 import type { CompileApiResult, Sample, ServerConfig } from "./types";
 import { applyProveIncludeChange, computePresets, DEFAULT_PRESETS, type BudgetPresets } from "./ux";
 
@@ -29,6 +31,7 @@ type DemoState = {
   proveExpandedIds: string[];
   proveExpandedTokenSum: number;
   agentParityHandle: string | null;
+  hydrated: boolean;
   setFile: (f: File | null) => void;
   setSampleKey: (k: string | null) => void;
   setTask: (t: string) => void;
@@ -49,6 +52,8 @@ type DemoState = {
 const Ctx = createContext<DemoState | null>(null);
 
 export function DemoProvider({ children }: { children: ReactNode }) {
+  const restored = useRef(false);
+  const [hydrated, setHydrated] = useState(false);
   const [config, setConfig] = useState<ServerConfig | null>(null);
   const [samples, setSamples] = useState<Sample[]>([]);
   const [file, setFileState] = useState<File | null>(null);
@@ -68,6 +73,28 @@ export function DemoProvider({ children }: { children: ReactNode }) {
   const [agentParityHandle, setAgentParityHandle] = useState<string | null>(null);
 
   useEffect(() => {
+    const saved = loadPersistedDemo();
+    if (saved) {
+      setTask(saved.task);
+      setBudget(saved.budget);
+      setSampleKeyState(saved.sampleKey);
+      setCompileState(saved.compile);
+      setCompiledTask(saved.compiledTask);
+      setCompiledBudget(saved.compiledBudget);
+      setProveIncludeState({
+        expandedIds: new Set(saved.proveExpandedIds),
+        expandedTokens: new Map(saved.proveExpandedTokens),
+      });
+      if (saved.compile) {
+        setRawTokensHint(saved.compile.raw_tokens);
+        setDocSizeNote(`Restored compile (~${saved.compile.raw_tokens.toLocaleString()} tokens).`);
+      }
+    }
+    restored.current = true;
+    setHydrated(true);
+  }, []);
+
+  useEffect(() => {
     void (async () => {
       try {
         const [c, s] = await Promise.all([
@@ -82,6 +109,42 @@ export function DemoProvider({ children }: { children: ReactNode }) {
     })();
   }, []);
 
+  // Re-fetch sample File after restore so Prove/Agent can upload again.
+  useEffect(() => {
+    if (!hydrated || !sampleKey || file || !samples.length) return;
+    const s = samples.find((x) => x.key === sampleKey);
+    if (!s) return;
+    void (async () => {
+      try {
+        const res = await fetch(`/samples/${s.file}`);
+        if (!res.ok) return;
+        const buf = await res.arrayBuffer();
+        setFileState(
+          new File([buf], s.file, { type: res.headers.get("content-type") || "application/octet-stream" })
+        );
+        if (s.tok != null) {
+          setPresetsState(computePresets(s.tok));
+        }
+      } catch (e) {
+        console.warn("could not restore sample file", e);
+      }
+    })();
+  }, [hydrated, sampleKey, samples, file]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    savePersistedDemo({
+      task,
+      budget,
+      sampleKey,
+      compile,
+      compiledTask,
+      compiledBudget,
+      proveExpandedIds: [...proveInclude.expandedIds],
+      proveExpandedTokens: [...proveInclude.expandedTokens.entries()],
+    });
+  }, [hydrated, task, budget, sampleKey, compile, compiledTask, compiledBudget, proveInclude]);
+
   const clearProveIncludes = useCallback(() => {
     setProveIncludeState({ expandedIds: new Set(), expandedTokens: new Map() });
   }, []);
@@ -94,21 +157,13 @@ export function DemoProvider({ children }: { children: ReactNode }) {
     setAgentParityHandle(null);
   }, [clearProveIncludes]);
 
-  const setFile = useCallback(
-    (f: File | null) => {
-      setFileState(f);
-      clearCompile();
-    },
-    [clearCompile]
-  );
+  const setFile = useCallback((f: File | null) => {
+    setFileState(f);
+  }, []);
 
-  const setSampleKey = useCallback(
-    (k: string | null) => {
-      setSampleKeyState(k);
-      clearCompile();
-    },
-    [clearCompile]
-  );
+  const setSampleKey = useCallback((k: string | null) => {
+    setSampleKeyState(k);
+  }, []);
 
   const setCompile = useCallback(
     (r: CompileApiResult | null, t: string, b: number) => {
@@ -158,6 +213,7 @@ export function DemoProvider({ children }: { children: ReactNode }) {
       proveExpandedIds,
       proveExpandedTokenSum,
       agentParityHandle,
+      hydrated,
       setFile,
       setSampleKey,
       setTask,
@@ -190,6 +246,7 @@ export function DemoProvider({ children }: { children: ReactNode }) {
       proveExpandedIds,
       proveExpandedTokenSum,
       agentParityHandle,
+      hydrated,
       setFile,
       setSampleKey,
       setCompile,

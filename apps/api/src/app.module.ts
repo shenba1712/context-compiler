@@ -1,9 +1,12 @@
 import { Module } from "@nestjs/common";
 
+import { HealthController } from "./health.controller.js";
+
 /**
- * Nest hosts the demo HTTP surface. Route implementations live in the shared
- * Express app (`src/http/demo-app.ts`) mounted via ExpressAdapter in main.ts —
- * Nest owns process bootstrap, listen bind, and future module growth.
+ * Nest owns process bootstrap and listen bind. Demo HTTP routes live in the
+ * shared Express app (`src/http/demo-app.ts`) mounted from main.ts.
  */
-@Module({})
+@Module({
+  controllers: [HealthController],
+})
 export class AppModule {}

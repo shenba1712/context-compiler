@@ -10,7 +10,7 @@
 | Component | Requirement |
 | --- | --- |
 | Node.js | `>=20` (`package.json` `engines`); CI uses 20; Docker image uses Node 22 slim |
-| TypeScript | Built with `tsc` (+ client project `tsconfig.client.json`) |
+| TypeScript | Engine/MCP via `tsc`; Next (`apps/web`) and Nest (`apps/api`) via workspaces |
 | Python | 3.10+ with `markitdown[docx,pdf,xlsx,pptx]` on `PATH` (or `CC_MARKITDOWN_CMD`) |
 | Process model | Single Node process; converter via `execFile` subprocess; no DB, no worker queue service |
 
