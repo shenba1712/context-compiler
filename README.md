@@ -67,8 +67,9 @@ python3 -m pip install "markitdown[docx,pdf,xlsx,pptx]"
 export GEMINI_API_KEY=...   # optional
 npm run web                 # Next UI + Nest API (dual process) → http://localhost:8000
 # Dev split: npm run api:dev  (Nest :4000)  and  npm run web:dev  (Next :3000)
-# Legacy single-process Express UI: npm run web:legacy
+# Deprecated: npm run web:legacy  (old Express + public/ SPA; removal soon)
 ```
+
 
 If pip fights Homebrew’s externally-managed Python, use `uv tool install "markitdown[docx,pdf,xlsx,pptx]"`. Or skip Python entirely and stay on Docker.
 
