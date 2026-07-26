@@ -1,13 +1,14 @@
 import { Controller, Get } from "@nestjs/common";
 
-/**
- * Nest-native liveness (also available via mounted demo-app `/healthz`).
- * Useful as a Nest module foothold without duplicating demo route logic.
- */
+import { DemoService } from "./demo.service.js";
+
 @Controller()
 export class HealthController {
-  @Get("nest-health")
-  nestHealth() {
-    return { status: "ok", surface: "nest" };
+  constructor(private readonly demo: DemoService) {}
+
+  /** Render / platform liveness — must stay cheap (no markitdown). */
+  @Get("healthz")
+  healthz() {
+    return this.demo.healthz();
   }
 }

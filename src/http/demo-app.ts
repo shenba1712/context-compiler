@@ -15,8 +15,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, extname, join, sep } from "node:path";
-import { fileURLToPath } from "node:url";
+import { extname, join, sep } from "node:path";
 
 import { runAgent } from "../agent.js";
 import { BUDGET_FLOORS, MAX_FILE_BYTES, clampBudget } from "../config.js";
@@ -34,10 +33,11 @@ import {
 import { log } from "../log.js";
 import { inc, snapshot } from "../metrics.js";
 import { assembleProveContext, compileContext, expandSection, fullMarkdown } from "../pipeline.js";
-import { SAMPLES_MANIFEST } from "../samples-manifest.js";
 import { countContentTokens, countTokens } from "../tokens.js";
 import { UploadRejected, validateUpload } from "../upload-guard.js";
 import { sanitizeSourceName } from "../util.js";
+import { getDemoConfig, RATE_COST_AGENT, RATE_COST_ANSWER, RATE_LIMIT, WINDOW_MS } from "./demo-config.js";
+import { samplesPayload, STATIC_DIR, warmSampleTokenCache } from "./samples-catalog.js";
 
 /** Optional section ids the demo user expanded before Prove — merged into the
  *  compiled side of answer parity. Capped and id-shaped to bound cost/abuse. */
@@ -55,8 +55,6 @@ function parseExpandedIds(raw: unknown): string[] {
 
 const PRICE_PER_MTOK = numEnv("CC_DEMO_PRICE_PER_MTOK", 3.0, 0);
 const UPLOAD_DIR = join(tmpdir(), "cc-demo-uploads");
-// dist/http/demo-app.js → repo root public/
-const STATIC_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "public");
 // Uploaded files are transient. Sweep anything older than this so the upload
 // dir can't grow without bound (it was never cleaned before).
 const UPLOAD_TTL_MS = intEnv("CC_UPLOAD_TTL_MS", 30 * 60_000, 60_000);
@@ -140,10 +138,6 @@ app.get("/ARCHITECTURE.md", (_req, res) =>
 // (resets on redeploy, not shared across replicas — acceptable for a demo).
 // LLM-heavy routes cost more "tokens" so one agent/parity call can't burn the
 // bill while staying under a naive request count.
-const RATE_LIMIT = intEnv("CC_RATE_LIMIT", 100, 1);
-const RATE_COST_AGENT = intEnv("CC_RATE_COST_AGENT", 12, 1, 100);
-const RATE_COST_ANSWER = intEnv("CC_RATE_COST_ANSWER", 4, 1, 100);
-const WINDOW_MS = 5 * 60_000;
 const MAX_RATE_KEYS = intEnv("CC_RATE_MAP_MAX", 10_000, 100);
 const hits = new Map<string, number[]>();
 
@@ -200,22 +194,6 @@ const agentParity = new Map<
 >();
 const AGENT_PARITY_TTL_MS = intEnv("CC_AGENT_PARITY_TTL_MS", 15 * 60_000, 60_000);
 const MAX_AGENT_PARITY = intEnv("CC_AGENT_PARITY_MAX", 200, 10);
-
-/** Resolve a sample library file under public/samples. Rejects absolute paths,
- *  traversal, and anything that is not a plain basename — path.join would
- *  otherwise treat "/etc/passwd" as absolute and escape STATIC_DIR. */
-function resolveSampleFile(file: string): string {
-  const base = basename(file);
-  if (!base || base !== file || base.includes("\0") || !/^[\w.-]+$/.test(base)) {
-    throw new Error("Invalid sample file name");
-  }
-  const samplesRoot = realpathSync(join(STATIC_DIR, "samples"));
-  const full = realpathSync(join(samplesRoot, base));
-  if (full !== samplesRoot && !full.startsWith(samplesRoot + sep)) {
-    throw new Error("Sample path escaped samples directory");
-  }
-  return full;
-}
 
 /** Defense in depth for opaque upload handles: realpath must stay under the
  *  upload dir (blocks symlink escape if a handle entry is ever poisoned). */
@@ -367,87 +345,20 @@ function errorResponse(res: express.Response, e: unknown, context: string) {
   return res.status(500).json({ error: "Internal server error." });
 }
 
-// Sample-library token counts. Measured via the real convert pipeline, but
-// NEVER on the request critical path — cold-start /api/samples used to await
-// markitdown on every sample (Origin PDF alone) and stall the demo for minutes
-// on Render free tier. Catalog returns immediately (tok null until warm);
-// background warm fills tok and warms the convert cache for later compiles.
-type SampleRow = {
-  key: string;
-  file: string;
-  fmt: string;
-  nm: string;
-  mt: string;
-  q: string[];
-  tok: number | null;
-};
-const sampleTokByKey = new Map<string, number | null>();
-let sampleWarmPromise: Promise<void> | null = null;
+// GET /api/config, /api/samples, /healthz are Nest controllers (apps/api).
+// Kept here too so `import { app } from web.js` tests still work without Nest.
+app.get("/api/config", (_req, res) => res.json(getDemoConfig()));
 
-function samplesPayload(): SampleRow[] {
-  return SAMPLES_MANIFEST.map((s) => ({
-    ...s,
-    tok: sampleTokByKey.has(s.key) ? (sampleTokByKey.get(s.key) ?? null) : null,
-  }));
-}
+app.get("/healthz", (_req, res) =>
+  res.status(200).json({ status: "ok", uptime_s: Math.round(process.uptime()) })
+);
 
-/** Fire-and-forget convert+count. Sequential so we don't saturate the converter
- *  queue ahead of a user's first Compile. Safe to call many times. */
-function warmSampleTokenCache(): Promise<void> {
-  if (sampleWarmPromise) return sampleWarmPromise;
-  sampleWarmPromise = (async () => {
-    for (const s of SAMPLES_MANIFEST) {
-      try {
-        const markdown = await fullMarkdown(resolveSampleFile(s.file));
-        sampleTokByKey.set(s.key, countTokens(markdown));
-      } catch (e) {
-        log.warn("could not measure sample", {
-          file: s.file,
-          err: e instanceof Error ? e.message : String(e),
-        });
-        sampleTokByKey.set(s.key, null);
-      }
-    }
-  })();
-  return sampleWarmPromise;
-}
-
-// Lets the client know up front whether "Prove answer parity" will work,
-// instead of only finding out after a failed click (or, worse, showing it
-// fully enabled on the keyless default deploy this project's headline is
-// built around). Fetched once on page load alongside /api/samples.
-app.get("/api/config", (_req, res) => {
-  return res.json({
-    llm_available: hasLlm(),
-    max_file_bytes: MAX_FILE_BYTES,
-    rate_limit: RATE_LIMIT,
-    rate_window_minutes: Math.round(WINDOW_MS / 60_000),
-    rate_cost_answer: RATE_COST_ANSWER,
-    rate_cost_agent: RATE_COST_AGENT,
-    max_concurrent_llm: intEnv("CC_MAX_CONCURRENT_LLM", 2, 1, 32),
-    answer_context_cap: intEnv("CC_ANSWER_CONTEXT_CAP", 60_000, 1000),
-  });
-});
-
-// Liveness for platform probes (Render healthCheckPath). Must stay cheap and
-// synchronous — never spawn markitdown here. A slow /healthz on free-tier cold
-// start makes the proxy hang and the instance look dead forever.
-app.get("/healthz", (_req, res) => {
-  return res.status(200).json({
-    status: "ok",
-    uptime_s: Math.round(process.uptime()),
-  });
-});
-
-// Deeper ops snapshot. Disabled unless CC_METRICS_TOKEN is set; then require
-// Authorization: Bearer <token>. Keeps counters + llm_configured off the public URL.
 app.get("/metrics", async (req, res) => {
   const token = process.env.CC_METRICS_TOKEN;
   if (!token) return res.status(404).json({ error: "Not found" });
   const auth = req.get("authorization") ?? "";
   const expected = Buffer.from(`Bearer ${token}`);
   const got = Buffer.from(auth);
-  // Constant-time compare when lengths match; length mismatch is not secret.
   if (expected.length !== got.length || !timingSafeEqual(expected, got)) {
     return res.status(401).json({ error: "Unauthorized" });
   }
@@ -460,8 +371,6 @@ app.get("/metrics", async (req, res) => {
 });
 
 app.get("/api/samples", (_req, res) => {
-  // Kick warm on first catalog hit, but answer immediately so the demo UI can
-  // render sample cards without waiting on PDF conversion.
   void warmSampleTokenCache();
   return res.json(samplesPayload());
 });

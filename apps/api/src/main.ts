@@ -5,6 +5,7 @@ import type { NestExpressApplication } from "@nestjs/platform-express";
 import type { Express } from "express";
 
 import { AppModule } from "./app.module.js";
+import { DemoService } from "./demo.service.js";
 
 /**
  * Resolve the shared demo Express app from the repo `dist/` build.
@@ -12,13 +13,11 @@ import { AppModule } from "./app.module.js";
  */
 async function loadDemoApp(): Promise<{
   app: Express;
-  warmSampleTokenCache: () => Promise<void>;
 }> {
   const mod = (await import(
     /* webpackIgnore: true */ "../../../dist/http/demo-app.js" as string
   )) as {
     app: Express;
-    warmSampleTokenCache: () => Promise<void>;
   };
   return mod;
 }
@@ -31,10 +30,10 @@ function intEnv(name: string, fallback: number): number {
 }
 
 async function bootstrap() {
-  const { app: demoApp, warmSampleTokenCache } = await loadDemoApp();
+  const { app: demoApp } = await loadDemoApp();
 
-  // Fresh Nest HTTP adapter (Express 4). Mount the demo app as middleware —
-  // ExpressAdapter(existingApp) trips Express 4's removed `app.router`.
+  // Nest controllers register first; Express demo-app handles upload/SSE routes.
+  // Duplicate GET handlers on demo-app remain for unit tests that import `app` alone.
   const nest = await NestFactory.create<NestExpressApplication>(AppModule, {
     bodyParser: false,
     logger: ["error", "warn", "log"],
@@ -45,7 +44,9 @@ async function bootstrap() {
   const host = process.env.API_HOST ?? "127.0.0.1";
   await nest.listen(port, host);
   console.log(`Nest API listening on http://${host}:${port}`);
-  void warmSampleTokenCache();
+
+  const demo = nest.get(DemoService);
+  void demo.warmSamples();
 }
 
 bootstrap().catch((err) => {
