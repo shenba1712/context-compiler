@@ -3,7 +3,8 @@
 #
 # One-click deploy: push this repo, then in Render choose "New +" → "Blueprint"
 # and point it at this repo. Render builds the Dockerfile (Node + the Python
-# markitdown converter, all in one image) and starts `node dist/web.js`.
+# markitdown converter, all in one image) and starts Nest (localhost API) +
+# Next (public UI) via `node scripts/start-dual.mjs`.
 #
 # The two API keys below are marked `sync: false`, so Render does NOT read them
 # from this file — it prompts you to enter them in the dashboard on first

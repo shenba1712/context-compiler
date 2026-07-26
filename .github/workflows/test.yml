@@ -32,8 +32,11 @@ jobs:
       - name: Format check
         run: npm run format:check
 
-      - name: Build
+      - name: Build engine + Nest + Next
         run: npm run build
+        env:
+          API_PORT: "4000"
+          NEXT_TELEMETRY_DISABLED: "1"
 
       - name: Run tests
         run: npm test
