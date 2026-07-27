@@ -7,18 +7,26 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { copyStandaloneAssets, findStandaloneServer } from "./standalone-assets.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const apiPort = process.env.API_PORT ?? "4000";
+const apiPort = validPort("API_PORT", process.env.API_PORT ?? "4000");
 const apiHost = process.env.API_HOST ?? "127.0.0.1";
-const publicPort = process.env.PORT ?? "8000";
+const publicPort = validPort("PORT", process.env.PORT ?? "8000");
 
 const apiEntry = join(root, "apps/api/dist/main.js");
 const webDir = join(root, "apps/web");
-const standaloneCandidates = [
-  join(webDir, ".next/standalone/apps/web/server.js"),
-  join(webDir, ".next/standalone/server.js"),
-];
+
+function validPort(name, value) {
+  if (!/^\d+$/.test(value)) {
+    throw new Error(`${name} must be an integer from 1 to 65535`);
+  }
+  const port = Number(value);
+  if (!Number.isSafeInteger(port) || port < 1 || port > 65_535) {
+    throw new Error(`${name} must be an integer from 1 to 65535`);
+  }
+  return String(port);
+}
 
 if (!existsSync(apiEntry)) {
   console.error("Missing apps/api/dist/main.js — run npm run build first");
@@ -26,9 +34,13 @@ if (!existsSync(apiEntry)) {
 }
 
 const children = [];
+let shuttingDown = false;
 
 function shutdown(code = 0) {
+  if (shuttingDown) return;
+  shuttingDown = true;
   for (const c of children) {
+    if (c.exitCode !== null || c.signalCode !== null) continue;
     try {
       c.kill("SIGTERM");
     } catch {
@@ -48,9 +60,17 @@ function run(cmd, args, opts = {}) {
     cwd: opts.cwd ?? root,
   });
   children.push(child);
+  child.on("error", (error) => {
+    console.error(`Failed to start ${cmd}:`, error);
+    shutdown(1);
+  });
   child.on("exit", (code, signal) => {
-    if (signal) shutdown(1);
-    else if (code && code !== 0) shutdown(code);
+    if (!shuttingDown) {
+      console.error(
+        `${cmd} exited unexpectedly${signal ? ` with ${signal}` : ` with code ${code ?? 1}`}`,
+      );
+      shutdown(code && code !== 0 ? code : 1);
+    }
   });
   return child;
 }
@@ -60,7 +80,7 @@ async function waitForApi(ms = 60_000) {
   const start = Date.now();
   while (Date.now() - start < ms) {
     try {
-      const res = await fetch(url);
+      const res = await fetch(url, { signal: AbortSignal.timeout(2_000) });
       if (res.ok) return;
     } catch {
       /* not up yet */
@@ -82,10 +102,16 @@ try {
   shutdown(1);
 }
 
-const nextServer = standaloneCandidates.find((p) => existsSync(p));
+const nextServer = findStandaloneServer(webDir);
 if (nextServer) {
+  try {
+    const assetRoot = copyStandaloneAssets(webDir, nextServer);
+    console.log(`Validated standalone assets under apps/web/${assetRoot}`);
+  } catch (e) {
+    console.error(e instanceof Error ? e.message : e);
+    shutdown(1);
+  }
   console.log(`Starting Next standalone on 0.0.0.0:${publicPort}`);
-  // Copy static assets expectation: Dockerfile places public + .next/static into standalone
   run(process.execPath, [nextServer], {
     cwd: join(webDir, ".next/standalone"),
     env: {

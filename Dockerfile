@@ -25,14 +25,10 @@ ENV API_PORT=4000
 ENV API_HOST=127.0.0.1
 ENV NEXT_TELEMETRY_DISABLED=1
 
-RUN npm run build \
-    && mkdir -p apps/web/.next/standalone/apps/web \
-    && cp -R apps/web/public apps/web/.next/standalone/apps/web/public 2>/dev/null || \
-       cp -R apps/web/public apps/web/.next/standalone/public \
-    && mkdir -p apps/web/.next/standalone/apps/web/.next \
-    && cp -R apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static 2>/dev/null || \
-       (mkdir -p apps/web/.next/standalone/.next && cp -R apps/web/.next/static apps/web/.next/standalone/.next/static) \
-    && npm prune --omit=dev
+RUN set -eux; \
+    npm run build; \
+    node scripts/standalone-assets.mjs --copy; \
+    npm prune --omit=dev
 
 ENV PORT=8000
 ENV CC_CACHE_DIR=/tmp/cc-cache
