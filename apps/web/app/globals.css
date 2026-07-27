@@ -431,6 +431,12 @@
 .section-id { color:var(--faint); font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11px; }
 .peek-actions { display:flex; align-items:center; gap:10px; margin-top:8px; }
 .neutral-result { color:var(--muted) !important; }
+.mcp-config { margin-top:18px; }
+.config-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:6px; }
+.config-heading small { margin-left:8px; color:var(--faint); font-family:"IBM Plex Mono",ui-monospace,monospace; }
+.copybtn { border:1px solid var(--border2); background:var(--surface); color:var(--accent); padding:5px 11px; cursor:pointer; font:inherit; font-size:12px; }
+.copybtn:hover { border-color:var(--accent); background:var(--accent-soft); }
+.site-footer { padding:26px 0 42px; border-top:1px solid var(--border); color:var(--faint); text-align:center; font-size:13.5px; }
 @media (max-width:720px) {
   .parity-grid { grid-template-columns:1fr !important; }
   .stats { grid-template-columns:repeat(2,minmax(0,1fr)); }

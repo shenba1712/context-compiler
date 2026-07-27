@@ -254,6 +254,15 @@ export default function WorkspaceCompilePage() {
               </span>
             </summary>
             <div className="samples" role="group" aria-label="Sample documents">
+              {samples.length === 0 ? (
+                <p className="bucket-help">
+                  {loadError
+                    ? "The sample library is unavailable right now. You can still upload your own document."
+                    : config
+                      ? "No sample documents are configured on this host. Upload your own document."
+                      : "Loading the sample library…"}
+                </p>
+              ) : null}
               {samples.map((s) => (
                 <button
                   key={s.key}

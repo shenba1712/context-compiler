@@ -28,6 +28,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <main id="main-content" className="page-main" tabIndex={-1}>
             {children}
           </main>
+          <footer className="site-footer">
+            <div className="wrap">
+              Context Compiler · team <strong>3 Percent (Shenbaga Lakshmi Srinivasan)</strong> ·{" "}
+              <a href="https://github.com/shenba1712/context-compiler">source &amp; docs on GitHub</a>
+            </div>
+          </footer>
         </WorkspaceProvider>
       </body>
     </html>

@@ -117,20 +117,31 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     void (async () => {
-      try {
-        const fetchJson = async <T,>(url: string): Promise<T> => {
-          const response = await fetch(url);
-          if (!response.ok) throw new Error(`${url} failed (${response.status})`);
-          return response.json() as Promise<T>;
-        };
-        const [c, s] = await Promise.all([
-          fetchJson<ServerConfig>("/api/config"),
-          fetchJson<Sample[]>("/api/samples"),
-        ]);
-        setConfig(c);
-        setSamples(Array.isArray(s) ? s : []);
-      } catch (e) {
-        setLoadError(e instanceof Error ? e.message : "Could not load host configuration and samples.");
+      const fetchJson = async <T,>(url: string): Promise<T> => {
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`${url} failed (${response.status})`);
+        return response.json() as Promise<T>;
+      };
+      const [configResult, samplesResult] = await Promise.allSettled([
+        fetchJson<ServerConfig>("/api/config"),
+        fetchJson<Sample[]>("/api/samples"),
+      ]);
+      if (configResult.status === "fulfilled") setConfig(configResult.value);
+      if (samplesResult.status === "fulfilled") {
+        setSamples(Array.isArray(samplesResult.value) ? samplesResult.value : []);
+      }
+      const failures = [
+        configResult.status === "rejected" ? "host limits" : "",
+        samplesResult.status === "rejected" ? "sample library" : "",
+      ].filter(Boolean);
+      if (failures.length) {
+        setLoadError(
+          `Could not load ${failures.join(" and ")}. ${
+            configResult.status === "rejected"
+              ? "Defaults are shown; server validation still applies."
+              : "Uploading your own file still works."
+          }`
+        );
       }
     })();
   }, []);
