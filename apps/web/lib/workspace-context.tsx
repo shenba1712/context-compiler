@@ -31,6 +31,8 @@ type WorkspaceState = {
   compiledBudget: number | null;
   proveExpandedIds: string[];
   proveExpandedTokenSum: number;
+  sessionSavedTokens: number;
+  sessionSavedUsd: number;
   agentParityHandle: string | null;
   hydrated: boolean;
   setFile: (f: File | null) => void;
@@ -72,6 +74,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     expandedIds: Set<string>;
     expandedTokens: Map<string, number>;
   }>(() => ({ expandedIds: new Set(), expandedTokens: new Map() }));
+  const [sessionSavedTokens, setSessionSavedTokens] = useState(0);
+  const [sessionSavedUsd, setSessionSavedUsd] = useState(0);
   const [agentParityHandle, setAgentParityHandle] = useState<string | null>(null);
 
   useEffect(() => {
@@ -86,6 +90,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       setCompileState(restorableCompile);
       setCompiledTask(restorableCompile ? saved.compiledTask : null);
       setCompiledBudget(restorableCompile ? saved.compiledBudget : null);
+      setSessionSavedTokens(saved.sessionSavedTokens ?? 0);
+      setSessionSavedUsd(saved.sessionSavedUsd ?? 0);
       setProveIncludeState(
         restorableCompile
           ? {
@@ -156,8 +162,21 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       compiledBudget,
       proveExpandedIds: [...proveInclude.expandedIds],
       proveExpandedTokens: [...proveInclude.expandedTokens.entries()],
+      sessionSavedTokens,
+      sessionSavedUsd,
     });
-  }, [hydrated, task, budget, sampleKey, compile, compiledTask, compiledBudget, proveInclude]);
+  }, [
+    hydrated,
+    task,
+    budget,
+    sampleKey,
+    compile,
+    compiledTask,
+    compiledBudget,
+    proveInclude,
+    sessionSavedTokens,
+    sessionSavedUsd,
+  ]);
 
   const clearProveIncludes = useCallback(() => {
     setProveIncludeState({ expandedIds: new Set(), expandedTokens: new Map() });
@@ -184,6 +203,10 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       setCompileState(r);
       setCompiledTask(r ? t : null);
       setCompiledBudget(r ? b : null);
+      if (r) {
+        setSessionSavedTokens((n) => n + Math.max(0, r.tokens_saved));
+        setSessionSavedUsd((n) => n + Math.max(0, r.cost_raw_usd - r.cost_compiled_usd));
+      }
       clearProveIncludes();
       setAgentParityHandle(null);
     },
@@ -227,6 +250,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       compiledBudget,
       proveExpandedIds,
       proveExpandedTokenSum,
+      sessionSavedTokens,
+      sessionSavedUsd,
       agentParityHandle,
       hydrated,
       setFile,
@@ -261,6 +286,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       compiledBudget,
       proveExpandedIds,
       proveExpandedTokenSum,
+      sessionSavedTokens,
+      sessionSavedUsd,
       agentParityHandle,
       hydrated,
       setFile,

@@ -29,6 +29,8 @@ export default function ResultsPage() {
     setProveInclude,
     task,
     budget,
+    sessionSavedTokens,
+    sessionSavedUsd,
   } = useWorkspace();
   const [peek, setPeek] = useState<Record<string, string>>({});
   const [pending, setPending] = useState<Set<string>>(() => new Set());
@@ -72,10 +74,17 @@ export default function ResultsPage() {
   }
 
   const pct = Math.min(100, Math.round((100 * compile.tokens_used) / Math.max(1, compile.token_budget)));
+  const packedPct = Math.min(
+    100,
+    Math.max(compile.tokens_used > 0 ? 3 : 0, (100 * compile.tokens_used) / Math.max(1, compile.raw_tokens))
+  );
   const early = compile.compile_hints?.early_stopped;
   const budgetOmitted = compile.budget_omitted_sections ?? [];
   const relevanceOmitted = compile.relevance_omitted_sections ?? [];
   const visibleRelevance = showAllRelevance ? relevanceOmitted : relevanceOmitted.slice(0, 12);
+  const selectedByRelevance = [...compile.selected_sections].sort(
+    (a, b) => (b.relevance ?? -1) - (a.relevance ?? -1)
+  );
 
   return (
     <section>
@@ -90,6 +99,50 @@ export default function ResultsPage() {
           {compile.raw_tokens.toLocaleString()} → {compile.tokens_used.toLocaleString()} tokens (
           {compile.reduction_pct}% fewer)
           {early ? " · early-stopped with spare under ceiling" : ""}
+        </p>
+
+        <div className="stats" aria-label="Compile savings">
+          <div className="stat">
+            <div className="v">{compile.raw_tokens.toLocaleString()}</div>
+            <div className="l">raw content tokens</div>
+          </div>
+          <div className="stat">
+            <div className="v result-win">{compile.tokens_used.toLocaleString()}</div>
+            <div className="l">packed content</div>
+          </div>
+          <div className="stat">
+            <div className="v result-win">{compile.reduction_pct}%</div>
+            <div className="l">reduction</div>
+          </div>
+          <div className="stat">
+            <div className="v cost-value">
+              ${compile.cost_raw_usd.toFixed(4)} → ${compile.cost_compiled_usd.toFixed(4)}
+            </div>
+            <div className="l">cost / read · ${compile.price_per_mtok}/Mtok</div>
+          </div>
+        </div>
+        <div className="bars" aria-label="Raw versus packed tokens">
+          <div className="brow">
+            <div className="blab">raw file</div>
+            <div className="btrack">
+              <div className="bar raw" style={{ width: "100%" }} />
+            </div>
+            <span className="bval">{compile.raw_tokens.toLocaleString()}</span>
+          </div>
+          <div className="brow">
+            <div className="blab">packed</div>
+            <div className="btrack">
+              <div className="bar cmp" style={{ width: `${packedPct}%` }} />
+            </div>
+            <span className="bval">{compile.tokens_used.toLocaleString()}</span>
+          </div>
+        </div>
+        <p className="session-saved" role="status">
+          <strong>${sessionSavedUsd.toFixed(4)} saved this session</strong>
+          <span>
+            {sessionSavedTokens.toLocaleString()} tokens · ~${(sessionSavedUsd * 1000).toFixed(0)} per 1,000
+            repeated reads
+          </span>
         </p>
 
         <div className="bar-block" style={{ marginBottom: 16 }}>
@@ -108,6 +161,41 @@ export default function ResultsPage() {
             </p>
           ) : null}
         </div>
+
+        {compile.queries.length > 1 ? (
+          <div className="floornote">
+            <strong>Detected {compile.queries.length} questions.</strong> Each was ranked separately, then top
+            sections were merged round-robin so one keyword-heavy question cannot crowd out the others.
+            <ol className="query-list">
+              {compile.queries.map((query, index) => (
+                <li key={`${index}-${query}`}>
+                  <span className="qtag">Q{index + 1}</span> {query}
+                </li>
+              ))}
+            </ol>
+            {compile.compile_hints?.multi_part_nudge ? (
+              <p>Check omitted sections or raise the budget if one part still looks incomplete.</p>
+            ) : null}
+          </div>
+        ) : null}
+
+        {early ? (
+          <div className="floornote">
+            <strong>Coverage complete.</strong> The budget is a ceiling, not a fill quota. Weaker or redundant
+            sections were left out after the question was covered.
+          </div>
+        ) : compile.next_section_hint ? (
+          <div className="floornote">
+            <strong>Budget-bound.</strong> “{sectionLeaf(compile.next_section_hint.section)}” scored{" "}
+            {compile.next_section_hint.relevance}% but did not fit. Raise the budget to about{" "}
+            {compile.next_section_hint.suggested_budget.toLocaleString()} tokens or include it in Prove below.
+          </div>
+        ) : compile.compile_hints?.omit_action && compile.compile_hints.named_omit ? (
+          <div className="floornote">
+            <strong>Transparent omissions.</strong> “{sectionLeaf(compile.compile_hints.named_omit.section)}”
+            and other sections remain available below to peek or include in Prove.
+          </div>
+        ) : null}
 
         {questionStale || budgetStale || !file ? (
           <p className="hostnote" role="status">
@@ -142,11 +230,20 @@ export default function ResultsPage() {
           {compile.selected_sections.length === 0 ? (
             <p className="sub">No sections included — try a higher budget or a sharper question.</p>
           ) : (
-            compile.selected_sections.map((s) => (
+            selectedByRelevance.map((s) => (
               <article key={s.id} className="scard-static in">
                 <div className="nm">
                   {s.section} <span className="afaint">· {metaFor(s)}</span>
                 </div>
+                {s.matched_queries?.length ? (
+                  <div className="section-queries" aria-label="Matched questions">
+                    {s.matched_queries.map((queryIndex) => (
+                      <span className="qtag alt" key={queryIndex}>
+                        Q{queryIndex + 1}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
                 {s.text ? (
                   <pre className="sectext" dir="auto">
                     {s.text}
@@ -170,7 +267,10 @@ export default function ResultsPage() {
 
         {budgetOmitted.length > 0 ? (
           <>
-            <p className="alabel">Omitted (budget) · {budgetOmitted.length}</p>
+            <p className="alabel">Relevant but over budget · {budgetOmitted.length}</p>
+            <p className="bucket-help">
+              These sections were useful candidates but could not be packed under the ceiling.
+            </p>
             <div className="section-list">
               {budgetOmitted.map((s) => (
                 <article key={s.id} className="scard-static">
@@ -210,7 +310,11 @@ export default function ResultsPage() {
         {relevanceOmitted.length > 0 ? (
           <>
             <p className="alabel">
-              Omitted (relevance) · showing {visibleRelevance.length} of {relevanceOmitted.length}
+              Other omitted sections · showing {visibleRelevance.length} of {relevanceOmitted.length}
+            </p>
+            <p className="bucket-help">
+              Left out after coverage, diversity, size, and relevance checks. Relevance is relative to the
+              best score, so tied sections can show 100% without all being needed or fitting.
             </p>
             <div className="section-list">
               {visibleRelevance.map((s) => (

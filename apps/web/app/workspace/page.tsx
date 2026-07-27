@@ -237,14 +237,30 @@ export default function WorkspaceCompilePage() {
           {sampleKey ? (
             <div className="qchips" role="group" aria-label="Suggested questions">
               {(samples.find((s) => s.key === sampleKey)?.q ?? []).map((q) => (
-                <button key={q} type="button" className="qchip" onClick={() => setTask(q)}>
+                <button
+                  key={q}
+                  type="button"
+                  className={`qchip${task.trim() === q.trim() ? " active" : ""}`}
+                  aria-pressed={task.trim() === q.trim()}
+                  onClick={() => setTask(q)}
+                >
                   {q}
                 </button>
               ))}
             </div>
           ) : null}
+          <details className="formhint">
+            <summary>Tips for questions</summary>
+            <p>
+              Asking several things at once? Separate them with <strong>?</strong> or new lines. Each question
+              is ranked on its own, then the best sections are merged. Press <kbd>Enter</kbd> to compile or{" "}
+              <kbd>Shift+Enter</kbd> for a new line.
+            </p>
+          </details>
 
-          <label htmlFor="budget">Token budget</label>
+          <label htmlFor="budget">
+            Token budget <span className="label-note">(ceiling for Compile and Agent)</span>
+          </label>
           {docSizeNote ? <div className="docsizenote">{docSizeNote}</div> : null}
           <div className="budgetbar">
             <div className="budgetnum">

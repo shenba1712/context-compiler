@@ -12,6 +12,8 @@ export type PersistedWorkspace = {
   compiledBudget: number | null;
   proveExpandedIds: string[];
   proveExpandedTokens: [string, number][];
+  sessionSavedTokens?: number;
+  sessionSavedUsd?: number;
 };
 
 export function loadPersistedWorkspace(): PersistedWorkspace | null {

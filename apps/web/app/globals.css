@@ -376,6 +376,7 @@
 .qchips { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
 .qchip { all:unset; cursor:pointer; font-size:13px; padding:6px 10px; border:1px solid var(--border2); background:var(--panel2); color:var(--muted); }
 .qchip:hover { border-color:var(--forest); color:var(--forest); }
+.qchip.active, .qchip[aria-pressed="true"] { border-color:var(--forest); color:#fff; background:var(--forest); box-shadow:inset 2px 0 0 var(--forest-deep); }
 .filepicked { font-size:14px; color:var(--forest); margin:8px 0 0; font-weight:600; }
 .err { color:var(--red); margin:14px 0 0; font-size:14.5px; }
 .samplesbox { margin-top:14px; }
@@ -385,12 +386,49 @@
 .bpre small { font-weight:500; font-size:11px; color:var(--faint); }
 .bpre.active, .bpre[aria-pressed="true"] { border-color:var(--forest); color:var(--forest); background:var(--accent-soft); box-shadow:inset 2px 0 0 var(--forest); }
 .bpre-group { display:flex; gap:6px; flex-wrap:wrap; }
+.label-note { font-weight:400; color:var(--faint); }
+.htrack { height:10px; background:var(--bg2); border:1px solid var(--border); overflow:hidden; }
+
+/* Workspace result meters and compile guidance. */
+.stats { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); border:1px solid var(--border2); background:var(--surface); overflow:hidden; }
+.stat { min-width:0; padding:14px 16px; border-right:1px solid var(--border); background:var(--panel2); }
+.stat:last-child { border-right:0; }
+.stat .v { font-family:"IBM Plex Mono",ui-monospace,monospace; font-variant-numeric:tabular-nums; font-size:21px; font-weight:600; letter-spacing:-.02em; overflow-wrap:anywhere; }
+.stat .v.cost-value { font-size:15px; padding-top:6px; }
+.stat .l { margin-top:5px; color:var(--forest); font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11px; font-weight:500; letter-spacing:.03em; }
+.result-win { color:var(--green); }
+.bars { margin-top:16px; }
+.brow { display:flex; align-items:center; gap:10px; margin-top:9px; }
+.blab { width:74px; flex-shrink:0; color:var(--muted); font-size:14px; text-align:right; }
+.btrack { flex:1; min-width:0; height:12px; overflow:hidden; border:1px solid var(--border); background:rgba(157,171,159,.18); }
+.bar { height:100%; transition:width .7s cubic-bezier(.2,.8,.2,1); }
+.bar.raw { background:var(--waste); }
+.bar.cmp { background:var(--accent); }
+.bval { min-width:72px; flex-shrink:0; color:var(--text); font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:13px; font-weight:600; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.session-saved { display:flex; justify-content:space-between; gap:12px; margin:14px 0 18px; padding:9px 12px; border:1px solid var(--green); background:var(--accent-soft); color:var(--green); font-size:13.5px; }
+.session-saved span { color:var(--muted); text-align:right; }
+.floornote { margin-top:14px; padding:8px 0 8px 14px; border-left:2px solid var(--accent); color:var(--text); font-size:14px; line-height:1.5; }
+.floornote strong { color:var(--accent-dark); }
+.floornote p { margin:8px 0 0; }
+.query-list { margin:6px 0 0; padding:0; list-style:none; }
+.qtag { display:inline-block; padding:1px 6px; border-radius:var(--radius-soft); background:var(--accent); color:#fff; font-size:10.5px; font-weight:700; vertical-align:middle; }
+.qtag.alt { border:1px solid var(--accent); background:transparent; color:var(--accent-dark); font-weight:600; }
+.section-queries { display:flex; gap:4px; margin-top:6px; }
+.bucket-help { margin:2px 0 10px; color:var(--muted); font-size:13.5px; }
 .parity-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
 @media (max-width:720px) {
   .parity-grid { grid-template-columns:1fr !important; }
+  .stats { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .stat:nth-child(2) { border-right:0; }
+  .stat:nth-child(-n+2) { border-bottom:1px solid var(--border); }
 }
 @media (max-width:560px) {
   /* Keep touch sizing after the later workspace button resets above. */
   .bpre,.qchip { padding-top:9px; padding-bottom:9px; min-height:40px; display:inline-flex; align-items:center; }
   .bpre { align-items:flex-start; }
+  .brow { flex-wrap:wrap; }
+  .blab { width:100%; text-align:left; }
+  .bval { min-width:0; }
+  .session-saved { flex-direction:column; }
+  .session-saved span { text-align:left; }
 }
