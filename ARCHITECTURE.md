@@ -73,9 +73,9 @@ Okapi BM25 (literature defaults, untuned, zero dependencies) plus a heading boos
 
 ### Cache — `cache.ts`
 
-Keys on sha256 of file bytes. Content-addressing means an edit never produces a stale hit (new bytes → new key). Writes use temp file + rename. Only conversion is cached; chunk/rank/pack are cheap and task-dependent.
+Keys on sha256 of file bytes. Each entry is a `{sha256}.md` converted-markdown file plus a `{sha256}.sha` sidecar containing the markdown payload's SHA-256 digest. Reads without a matching sidecar, or with an integrity mismatch, miss instead of serving unverified content; corrupt pairs are removed for reconversion. Content-addressing means an edit never produces a stale hit (new bytes → new key). Markdown writes use temp file + rename. Only conversion is cached; chunk/rank/pack are cheap and task-dependent.
 
-Entries also age out by mtime (default 30 days) via a sweep triggered from `cachePut` (at most once per hour). That is disk hygiene for long-lived servers, not freshness logic — see ADR-006.
+Both `.md` payloads and `.sha` sidecars age out by mtime (default 30 days) via a sweep triggered from `cachePut` (at most once per hour). That is disk hygiene for long-lived servers, not freshness logic — see ADR-006.
 
 ### Pipeline — `pipeline.ts`
 
@@ -222,7 +222,7 @@ Defaults operators most often care about. Full install and key setup live in the
 | Variable | Default | Role |
 | --- | --- | --- |
 | `CC_CACHE_DIR` | `~/.cache/context-compiler` | Conversion cache root |
-| `CC_CACHE_MAX_AGE_MS` | 30 days | Age-out for cached `.md` by mtime |
+| `CC_CACHE_MAX_AGE_MS` | 30 days | Age-out for cached `.md` + `.sha` pairs by mtime |
 | `CC_CACHE_SWEEP_INTERVAL_MS` | 1 hour | Max sweep frequency (on `cachePut`) |
 | `CC_MAX_FILE_BYTES` | 20 MB | Refuse before convert / upload |
 | `CC_CONVERT_TIMEOUT_S` | 120 | Converter spawn timeout |

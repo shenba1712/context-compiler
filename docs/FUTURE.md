@@ -53,14 +53,14 @@ Concrete gaps in the current product. Ship these before expanding scope.
 | --- | --- |
 | Better MCP tool descriptions and example prompts for Cursor / Claude / Codex | Agent in the UI is an in-app demo; production value is IDE MCP |
 | Document and test the expand-after-miss loop as the recommended agent pattern | Operators need a clear “compile → read manifest → expand” playbook |
-| Surface next-budget / packaging hints consistently on MCP if the web already thinks in those terms | `budget-hint` and unused UI packaging notes show the contract is half-exposed ([AUDIT-UI](./AUDIT-UI.md) O1) |
+| Surface next-budget / packaging hints consistently on MCP if the web already thinks in those terms | `budget-hint` and currently unused UI packaging notes show the contract is half-exposed |
 
 ### Demo UI (small, grounded)
 
 | What | Why |
 | --- | --- |
-| Cap or lazy-load bulk omit peek / “rest” expands | Huge omit lists can flood UI and the rate-limit pool (AUDIT-UI O7) |
-| Optional single client retry on 503 converter busy | Messaging exists; auto-retry does not (AUDIT-UI O8) |
+| Cap or lazy-load bulk omit peek / “rest” expands | Huge omit lists can flood UI and the rate-limit pool |
+| Optional single client retry on 503 converter busy | Messaging exists; auto-retry does not |
 | Keep Prove vs Agent copy sharp for first-time judges | Two LLM surfaces still confuse; product intent is already separate |
 
 ### Hosting / ops
@@ -76,7 +76,7 @@ Concrete gaps in the current product. Ship these before expanding scope.
 | What | Why |
 | --- | --- |
 | Keep answer-parity out of CI hard asserts; add optional offline “gold substring survives pack” growth instead | Prove is nondeterministic demo, not an invariant |
-| Record pack-matrix / hero numbers from fixtures when ranking changes | Hero is a fixed example; drift is a known UX footgun (AUDIT-UI O5) |
+| Record pack-matrix / hero numbers from fixtures when ranking changes | Hero is a fixed example; drift is a known UX footgun |
 
 ---
 

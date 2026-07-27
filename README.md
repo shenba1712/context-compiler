@@ -66,7 +66,7 @@ npm install && npm run build
 python3 -m pip install "markitdown[docx,pdf,xlsx,pptx]"
 export GEMINI_API_KEY=...   # optional
 npm run web                 # Next UI + Nest API (dual process) → http://localhost:8000
-# Dev split: npm run api:dev  (Nest :4000)  and  npm run web:dev  (Next :3000)
+# Dev split: npm run dev -w @cc/api  (Nest :4000)  and  npm run web:dev  (Next :3000)
 ```
 
 

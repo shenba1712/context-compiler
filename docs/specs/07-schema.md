@@ -270,7 +270,7 @@ Point pool over a 5-minute window; not shared across replicas.
 
 ### Conversion cache (disk)
 
-Files `{sha256}.md` under `CC_CACHE_DIR`. Content-addressed; mtime age-out. Not a relational schema.
+Each entry is a pair under `CC_CACHE_DIR`: `{sha256}.md` contains converted markdown and `{sha256}.sha` contains the SHA-256 digest of that markdown. Reads without a matching integrity sidecar, or with a digest mismatch, are cache misses; corrupt pairs are removed and reconverted. Entries are content-addressed by the source-file hash and age out by mtime. Not a relational schema.
 
 ### Gemini dead-model cache (process)
 

@@ -1,7 +1,7 @@
 # Technical Requirements
 
 **Status:** Current  
-**Applies to:** `src/mcp/server.ts`, `src/http/app.ts`, `src/web.ts`, and shared `src/engine/` modules
+**Applies to:** `scripts/start-dual.mjs`, `apps/web`, `apps/api`, `src/http/app.ts`, `src/mcp/server.ts`, and shared `src/engine/` modules
 
 ---
 
@@ -12,7 +12,7 @@
 | Node.js | `>=20` (`package.json` `engines`); CI uses 20; Docker image uses Node 22 slim |
 | TypeScript | Engine/MCP via `tsc`; Next (`apps/web`) and Nest (`apps/api`) via workspaces |
 | Python | 3.10+ with `markitdown[docx,pdf,xlsx,pptx]` on `PATH` (or `CC_MARKITDOWN_CMD`) |
-| Process model | Hosted: `start-dual.mjs` supervises Next on public `PORT` + Nest on loopback `API_PORT`; MCP: one Node process. Converter uses `execFile`; no DB or worker service. |
+| Process model | Hosted: `scripts/start-dual.mjs` supervises Next (`apps/web`) on public `PORT` + Nest (`apps/api`) on loopback `API_PORT`; Nest mounts the shared Express routes from `src/http/app.ts`. MCP: one Node process from `src/mcp/server.ts`. Converter uses `execFile`; no DB or worker service. |
 
 MCP and web share `src/engine/pipeline.ts`. Horizontal scale = more replicas (in-memory rate limits / metrics / handles are per-instance).
 
