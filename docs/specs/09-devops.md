@@ -24,8 +24,9 @@ Image and local installs both need the MarkItDown Python package for conversion.
 Single image: Node 22 slim + `python3` + `pip install markitdown[docx,pdf,xlsx,pptx]`.
 
 - Copies `package*.json`, sources, `public/`, README, ARCHITECTURE.
-- `npm ci` → build → `npm prune --omit=dev`.
+- `npm ci` → build → dereference and validate standalone static/sample assets → `npm prune --omit=dev`.
 - `EXPOSE 8000`, `CMD ["node", "scripts/start-dual.mjs"]`.
+- `start-dual.mjs` validates `PORT` / `API_PORT`, starts Nest on loopback, waits for health with a per-request timeout, then starts Next; either child exiting stops the supervisor.
 - Default `CC_CACHE_DIR=/tmp/cc-cache`.
 - Abuse knobs pinned in image env so a cleared dashboard cannot silently widen limits.
 - Does **not** set `CC_TRUST_PROXY` in the image (platform sets hop count).
@@ -45,7 +46,7 @@ Single image: Node 22 slim + `python3` + `pip install markitdown[docx,pdf,xlsx,p
 | Proxy | `CC_TRUST_PROXY=1` |
 | Pinned limits | file size, rate costs, convert/LLM concurrency, LLM timeout |
 
-`PORT` is injected by Render; do not hardcode it in the blueprint.
+`PORT` is injected by Render; do not hardcode it in the blueprint. `API_PORT` defaults to 4000 inside the container and must match the Next proxy target.
 
 ---
 
@@ -80,7 +81,7 @@ In-process counters reset on restart and are not aggregated across replicas.
 
 Demo abuse posture (also documented in technical requirements):
 
-- Per-IP point pool (default 30 / 5 minutes).
+- Per-IP point pool (default 100 / 5 minutes).
 - Weighted costs: agent 12, answer / agent-parity 4, other API 1.
 - Converter concurrency/queue and LLM job slots.
 - Upload size + ZIP bomb prechecks.

@@ -91,9 +91,9 @@ Demo-controlled loop over the same two tools MCP exposes. The web path uses the 
 
 ### Surfaces — `src/mcp/server.ts`, `src/http/app.ts`, guards
 
-`src/mcp/server.ts` registers exactly two tools. `src/mcp/path-guard.ts` realpaths both root and target before the prefix check (closes symlink escape). Errors return in-band as `{error: ...}` JSON.
+`src/mcp/server.ts` registers exactly two tools. `src/mcp/path-guard.ts` realpaths both root and target before the prefix check (closes symlink escape). Errors return in-band as `{error: ...}` JSON with MCP `isError: true`.
 
-The hosted demo is a **single Docker image, dual process**: Next (`apps/web`) on the public `PORT`, Nest (`apps/api`) on localhost `API_PORT`. Next proxies `/api/*`, `/healthz`, and `/metrics` at runtime to Nest. Nest controllers own `GET /healthz`, `/api/config`, and `/api/samples` via `HostService` over `src/http/config.ts` + `samples-catalog.ts`. Upload/SSE routes stay on `src/http/app.ts` (Express app mounted by Nest; rate-limited per IP). The product UI is routed under `/workspace`. Sample bytes live under `public/samples/` (served by the API process and symlinked into the Next `public/` tree). API routes: `/api/compile`, `/api/expand`, `/api/answer`, `/api/measure`, `/api/samples`, `/api/config`, `/api/agent` (SSE; aborts LLM work on disconnect), `/api/agent-parity` (one-shot opaque handle after an agent run). Upload validation lives in `src/engine/upload-guard.ts` (extension allowlist, magic bytes, archive decompression-bomb limit). Shared clamps live in `src/engine/config.ts`; `src/engine/env.ts` parses numbers safely so bad env cannot become NaN and silently disable rate limiting.
+The hosted demo is a **single Docker image, dual process** supervised by `scripts/start-dual.mjs`: Next (`apps/web`) on the public `PORT`, Nest (`apps/api`) on localhost `API_PORT`. Next proxies `/api/*`, `/healthz`, and `/metrics` at runtime to Nest. Nest controllers own `GET /healthz`, `/api/config`, and `/api/samples` via `HostService` over `src/http/config.ts` + `samples-catalog.ts`. Upload/SSE routes stay on `src/http/app.ts` (Express app mounted by Nest; rate-limited per IP). The product UI is routed under `/workspace`. Sample bytes originate under `public/samples/`; the build/start asset copier dereferences them into the Next standalone `public/samples/` tree. API routes: `/api/compile`, `/api/expand`, `/api/answer`, `/api/measure`, `/api/samples`, `/api/config`, `/api/agent` (SSE; aborts LLM work on disconnect), `/api/agent-parity` (one-shot opaque handle after an agent run). Upload validation lives in `src/engine/upload-guard.ts` (extension allowlist, magic bytes, archive decompression-bomb limit). Shared clamps live in `src/engine/config.ts`; `src/engine/env.ts` parses numbers safely so bad env cannot become NaN and silently disable rate limiting.
 
 ---
 
@@ -171,7 +171,7 @@ The hosted demo has no user accounts. Abuse posture is size caps, timeouts, per-
 | BM25 paraphrase miss | Manifest names omitted sections; expand / agent recover |
 | Pack overshoot | Eviction loop + tests; must not return over budget |
 | All LLM providers down | Prove / Agent fail; compile and MCP still run offline |
-| Process restart | Uploads, parity handles, in-memory rate limits/metrics, and instance-local cache are ephemeral; next compile converts on miss |
+| Hosted process/container restart | Uploads, parity handles, and in-memory rate limits/metrics are lost. The default hosted `/tmp` conversion cache is also lost; a configured durable cache survives. |
 
 **Disaster recovery.** GitHub is source of truth; Docker image + `render.yaml` rebuild the host. Secrets live in the host dashboard, not the repo. There is no database to back up. Not multi-region HA — intentional demo scope. Attach a volume if conversion cache should survive redeploys.
 

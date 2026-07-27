@@ -12,7 +12,7 @@
 | Node.js | `>=20` (`package.json` `engines`); CI uses 20; Docker image uses Node 22 slim |
 | TypeScript | Engine/MCP via `tsc`; Next (`apps/web`) and Nest (`apps/api`) via workspaces |
 | Python | 3.10+ with `markitdown[docx,pdf,xlsx,pptx]` on `PATH` (or `CC_MARKITDOWN_CMD`) |
-| Process model | Single Node process; converter via `execFile` subprocess; no DB, no worker queue service |
+| Process model | Hosted: `start-dual.mjs` supervises Next on public `PORT` + Nest on loopback `API_PORT`; MCP: one Node process. Converter uses `execFile`; no DB or worker service. |
 
 MCP and web share `src/engine/pipeline.ts`. Horizontal scale = more replicas (in-memory rate limits / metrics / handles are per-instance).
 
@@ -49,7 +49,7 @@ Budgets are contracts of intent for a public demo / local tool — not cloud SLO
 | LLM timeout | 30 s (`CC_LLM_TIMEOUT_MS`) | Merged with client abort |
 | Concurrent LLM jobs | 2 (`CC_MAX_CONCURRENT_LLM`) | Prove / Agent / agent-parity |
 | Answer context cap | 60k tokens (`CC_ANSWER_CONTEXT_CAP`) | Full-file side of parity truncated |
-| Rate limit pool | 30 points / 5 min / IP | Agent cost 12; answer/parity 4; else 1 |
+| Rate limit pool | 100 points / 5 min / IP | Agent cost 12; answer/parity 4; else 1 |
 | Upload TTL | 30 min (`CC_UPLOAD_TTL_MS`) | Disk + handle sweep |
 | Agent parity handle TTL | 15 min; max 200 entries | One-shot consume on success |
 | Conversion cache age-out | 30 days mtime; sweep ≤1/hour on put | Disk hygiene, not freshness |
@@ -67,7 +67,7 @@ Latency expectations (informal): conversion dominates first hit; chunk/BM25/pack
 | LLM soft failures | Failover along Gemini → OpenRouter → Anthropic → OpenAI-compat; Gemini dead-model TTL; short cooldown on soft 429 |
 | All LLM providers down | Prove/Agent fail; compile/MCP remain offline |
 | Client disconnect mid-Prove/Agent | AbortController cancels in-flight `complete()` |
-| Process restart | Uploads, handles, rate maps, metrics, instance cache under `/tmp` are ephemeral |
+| Hosted restart | Uploads, handles, rate maps, metrics, and the default `/tmp` cache are ephemeral; a configured durable cache survives |
 
 ---
 
@@ -107,7 +107,7 @@ Group env vars by role (defaults live in code / Dockerfile / `render.yaml`; not 
 | **Pack / rank** | `CC_RELEVANCE_FLOOR`, budget floors in `config.ts` | Selection quality |
 | **Cache hygiene** | `CC_CACHE_MAX_AGE_MS`, `CC_CACHE_SWEEP_INTERVAL_MS` | Long-lived disk |
 | **LLM** | Provider keys, model overrides, failover TTL/cooldown, timeout | Opt-in Prove/Agent |
-| **Ops** | `PORT`, `CC_TRUST_PROXY`, `CC_METRICS_TOKEN`, `CC_LOG_*` | Hosting |
+| **Ops** | `PORT`, `API_PORT`, `API_HOST`, `CC_TRUST_PROXY`, `CC_METRICS_TOKEN`, `CC_LOG_*` | Hosting |
 | **Workspace economics** | `CC_PRICE_PER_MTOK` (legacy fallback: `CC_DEMO_PRICE_PER_MTOK`) | Illustrative cost labels only |
 
 `env.ts` rejects non-numeric values (NaN-safe) so a typo cannot silently disable rate limiting.

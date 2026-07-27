@@ -9,7 +9,7 @@ Error bodies are JSON `{ "error": string }` unless noted. MCP returns errors in-
 
 ## 1. HTTP — Hosted workspace (`src/http/app.ts`)
 
-Base: process listens on `PORT` (default 8000), bound `0.0.0.0` when run as main. All `/api/*` routes share per-IP rate limiting.
+Base: `scripts/start-dual.mjs` supervises Next on public `PORT` (default 8000) and Nest on `API_HOST:API_PORT` (defaults `127.0.0.1:4000`). Next proxies API/health/metrics to Nest. All `/api/*` routes share per-IP rate limiting.
 
 ### 1.1 `GET /healthz`
 
@@ -48,7 +48,10 @@ Hosted limits and LLM availability for UI gating.
 ```json
 {
   "llm_available": false,
+  "llm_disabled_reason": "No supported LLM API key is configured on this host.",
   "max_file_bytes": 20971520,
+  "web_budget_min": 100,
+  "web_budget_max": 20000,
   "rate_limit": 100,
   "rate_window_minutes": 5,
   "rate_cost_answer": 4,
@@ -190,13 +193,12 @@ JSON (`4kb`): `{ "parity_handle": "<32 hex>" }`.
 }
 ```
 
-### 1.11 Static / docs
+### 1.11 Static assets
 
 | Route | Role |
 | --- | --- |
-| `GET /` + static assets | `public/` |
-| `GET /README.md` | Repo README |
-| `GET /ARCHITECTURE.md` | Architecture doc |
+| Next routes + `_next/static/*` | Next standalone server |
+| `GET /samples/*` | Dereferenced sample files copied into standalone `public/samples/` |
 
 ### 1.12 Status code summary
 

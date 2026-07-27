@@ -53,7 +53,7 @@ docker run -p 8000:8000 -e GEMINI_API_KEY=$GEMINI_API_KEY context-compiler
 # open http://localhost:8000
 ```
 
-Point Render, Railway, or Fly at [`render.yaml`](./render.yaml) for a blueprint. This needs a real container or VM — it shells out to Python and keeps upload handles in memory.
+On Render, use [`render.yaml`](./render.yaml) as the Blueprint. On Railway, Fly, or another container host, deploy the Dockerfile and expose `PORT`. This needs a real container or VM — it shells out to Python and keeps upload handles in memory.
 
 **Free-tier hosts (Render Free, etc.):** the service sleeps after roughly fifteen minutes idle. The next request wakes it — expect a **30–60 second cold start** before `/healthz` or the UI responds. Ping `/healthz` every few minutes (UptimeRobot or similar) to keep it warm, or use a paid always-on plan.
 
@@ -144,6 +144,8 @@ Claude Code: `claude mcp add context-compiler -- node /path/to/context-compiler/
 
 | Variable | Role |
 | --- | --- |
+| `PORT` | Public Next port (default 8000) |
+| `API_PORT` / `API_HOST` | Internal Nest listener (defaults `4000` / `127.0.0.1`) |
 | `CC_ROOT` | MCP read confine (default: home directory) |
 | `CC_CACHE_DIR` | Converted-markdown cache (default: `~/.cache/context-compiler`) |
 | `CC_MAX_FILE_BYTES` | Upload size cap (default 20 MB) |
@@ -161,7 +163,7 @@ Rate limits, concurrency, and other ops knobs are documented in [ARCHITECTURE.md
 npm test
 ```
 
-Builds the server and typed browser client, then runs a plain `node:assert` suite (chunking, ranking, packing, cache, expand, conversion, guards, failover, agent loop, and more). No test framework — the file is readable top to bottom.
+Builds the shared engine/MCP/test TypeScript, then runs a plain `node:assert` suite (chunking, ranking, packing, cache, expand, conversion, guards, failover, agent loop, and more). `npm run build` separately type-checks and bundles the Nest and Next apps. No test framework — the test file is readable top to bottom.
 
 ## Security, briefly
 
