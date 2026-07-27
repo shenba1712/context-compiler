@@ -1,9 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { motion } from "framer-motion";
+import { motion, useReducedMotion } from "framer-motion";
 
 export default function HomePage() {
+  const reduceMotion = useReducedMotion();
   return (
     <>
       <section className="hero" aria-label="Hero composition">
@@ -14,8 +15,8 @@ export default function HomePage() {
           <p className="coords">MCP · LOCAL BM25 · NO KEY FOR COMPILE</p>
           <h1 className="title">Stop paying for pages your agent doesn’t read.</h1>
           <p className="lede">
-            Chart the useful terrain in any file, then pack only the sections your task needs, under a
-            budget you set. Plug it into any AI agent over MCP, or try it right here.
+            Chart the useful terrain in any file, then pack only the sections your task needs, under a budget
+            you set. Plug it into any AI agent over MCP, or try it right here.
           </p>
           <div className="cta">
             <Link className="btn primary" href="/workspace">
@@ -49,9 +50,9 @@ export default function HomePage() {
               <div className="htrack">
                 <motion.div
                   className="hbar raw"
-                  initial={{ scaleX: 0 }}
+                  initial={reduceMotion ? false : { scaleX: 0 }}
                   animate={{ scaleX: 1 }}
-                  transition={{ duration: 0.9, ease: [0.22, 1, 0.36, 1] }}
+                  transition={{ duration: reduceMotion ? 0 : 0.9, ease: [0.22, 1, 0.36, 1] }}
                   style={{ width: "100%", transformOrigin: "left center" }}
                 />
               </div>
@@ -64,9 +65,13 @@ export default function HomePage() {
               <div className="htrack">
                 <motion.div
                   className="hbar small"
-                  initial={{ scaleX: 0 }}
+                  initial={reduceMotion ? false : { scaleX: 0 }}
                   animate={{ scaleX: 1 }}
-                  transition={{ duration: 0.9, delay: 0.28, ease: [0.22, 1, 0.36, 1] }}
+                  transition={{
+                    duration: reduceMotion ? 0 : 0.9,
+                    delay: reduceMotion ? 0 : 0.28,
+                    ease: [0.22, 1, 0.36, 1],
+                  }}
                   style={{ width: "4%", transformOrigin: "left center" }}
                 />
               </div>
@@ -85,8 +90,8 @@ export default function HomePage() {
               <div className="n">1 · Convert</div>
               <div className="h">Any file → markdown</div>
               <div className="d">
-                PDF, docx, xlsx, pptx, images. Cached by content hash — convert once, ask new questions
-                for free.
+                PDF, docx, xlsx, pptx, HTML, CSV, and text. Cached by content hash — convert once, ask new
+                questions for free.
               </div>
             </div>
             <div className="c">
@@ -98,15 +103,15 @@ export default function HomePage() {
               <div className="n">3 · Pack</div>
               <div className="h">Pack under a token ceiling</div>
               <div className="d">
-                Coverage-first: best sections in, stop when the question is covered. Manifest lists what
-                was left out.
+                Coverage-first: best sections in, stop when the question is covered. Manifest lists what was
+                left out.
               </div>
             </div>
           </div>
           <div className="keynote">
-            The compiled result is <strong>exactly what your AI agent receives instead of the whole file</strong>.
-            None of this needs an API key. A key unlocks <strong>Prove answer parity</strong> and{" "}
-            <strong>Run agent</strong>.
+            The compiled result is{" "}
+            <strong>exactly what your AI agent receives instead of the whole file</strong>. None of this needs
+            an API key. A key unlocks <strong>Prove answer parity</strong> and <strong>Run agent</strong>.
           </div>
         </div>
       </section>

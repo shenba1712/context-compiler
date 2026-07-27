@@ -7,16 +7,8 @@ import { useWorkspace } from "@/lib/workspace-context";
 import type { AnswerApiResult } from "@/lib/types";
 
 export default function ProvePage() {
-  const {
-    file,
-    task,
-    budget,
-    compile,
-    config,
-    proveStale,
-    proveExpandedIds,
-    proveExpandedTokenSum,
-  } = useWorkspace();
+  const { file, task, budget, compile, config, proveStale, proveExpandedIds, proveExpandedTokenSum } =
+    useWorkspace();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [result, setResult] = useState<AnswerApiResult | null>(null);
@@ -81,11 +73,21 @@ export default function ProvePage() {
           Stale compile. <Link href="/workspace">Recompile</Link> before proving.
         </p>
       ) : null}
+      {!file ? (
+        <p className="hostnote" role="status">
+          The source file is no longer available. <Link href="/workspace">Choose it and recompile</Link>.
+        </p>
+      ) : null}
+      {!llmOk ? (
+        <p className="hostnote" role="status">
+          Prove disabled: {config?.llm_disabled_reason || "no supported LLM API key is configured."}
+        </p>
+      ) : null}
       <div className="row">
         <button
           className="btn primary"
           type="button"
-          disabled={busy || proveStale || !llmOk}
+          disabled={busy || proveStale || !file || !llmOk}
           onClick={() => void runProve()}
         >
           {busy ? "Proving…" : "Prove"}
@@ -106,7 +108,9 @@ export default function ProvePage() {
         >
           <div>
             <p className="alabel">Full file · {result.full.context_tokens.toLocaleString()} tok</p>
-            <div className="aanswer">{result.full.answer}</div>
+            <div className="aanswer" dir="auto">
+              {result.full.answer}
+            </div>
           </div>
           <div>
             <p className="alabel">
@@ -116,7 +120,9 @@ export default function ProvePage() {
                 ? ` · includes ${result.compiled.expanded_ids.join(", ")}`
                 : ""}
             </p>
-            <div className="aanswer">{result.compiled.answer}</div>
+            <div className="aanswer" dir="auto">
+              {result.compiled.answer}
+            </div>
           </div>
           <p className="sub" style={{ gridColumn: "1 / -1" }}>
             Model: {result.model}

@@ -29,7 +29,12 @@ export function WorkspaceChrome({ children }: { children: React.ReactNode }) {
             );
           }
           return (
-            <Link key={s.href} href={s.href} className={`workspace-step${active ? " active" : ""}`}>
+            <Link
+              key={s.href}
+              href={s.href}
+              className={`workspace-step${active ? " active" : ""}`}
+              aria-current={active ? "step" : undefined}
+            >
               {s.label}
             </Link>
           );

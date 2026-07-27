@@ -18,11 +18,19 @@ export function SiteHeader() {
           Context <span>Compiler</span>
         </Link>
         <nav aria-label="Primary">
-          {links.map((l) => (
-            <Link key={l.href} href={l.href} className={path === l.href || (l.href !== "/" && path.startsWith(l.href)) ? "active" : ""}>
-              {l.label}
-            </Link>
-          ))}
+          {links.map((l) => {
+            const active = path === l.href || (l.href !== "/" && path.startsWith(l.href));
+            return (
+              <Link
+                key={l.href}
+                href={l.href}
+                className={active ? "active" : ""}
+                aria-current={active ? "page" : undefined}
+              >
+                {l.label}
+              </Link>
+            );
+          })}
           <a href="https://github.com/shenba1712/context-compiler" target="_blank" rel="noopener noreferrer">
             Code
           </a>

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { motion } from "framer-motion";
+import { motion, useReducedMotion } from "framer-motion";
 import { useState } from "react";
 
 import { useWorkspace } from "@/lib/workspace-context";
@@ -12,14 +12,17 @@ function metaFor(s: SectionInfo): string {
   if (s.truncated && s.full_tokens != null) {
     return truncatedSectionMeta(s.tokens, s.full_tokens, s.remainder_tokens ?? 0, s.relevance);
   }
-  const rel = s.relevance != null ? ` · rel ${(s.relevance * 100).toFixed(0)}%` : "";
+  const rel = s.relevance != null ? ` · rel ${s.relevance}%` : "";
   return `${s.tokens.toLocaleString()} tok${rel}${s.truncated ? " · truncated" : ""}`;
 }
 
 export default function ResultsPage() {
   const {
     compile,
+    file,
     proveStale,
+    questionStale,
+    budgetStale,
     proveExpandedIds,
     proveExpandedTokenSum,
     setProveInclude,
@@ -27,7 +30,10 @@ export default function ResultsPage() {
     budget,
   } = useWorkspace();
   const [peek, setPeek] = useState<Record<string, string>>({});
+  const [pending, setPending] = useState<Set<string>>(() => new Set());
+  const [showAllRelevance, setShowAllRelevance] = useState(false);
   const [err, setErr] = useState("");
+  const reduceMotion = useReducedMotion();
 
   if (!compile) {
     return (
@@ -41,7 +47,9 @@ export default function ResultsPage() {
   }
 
   async function expand(id: string) {
+    if (peek[id] || pending.has(id)) return;
     setErr("");
+    setPending((current) => new Set(current).add(id));
     try {
       const res = await fetch("/api/expand", {
         method: "POST",
@@ -53,19 +61,28 @@ export default function ResultsPage() {
       setPeek((p) => ({ ...p, [id]: data.markdown }));
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Expand failed");
+    } finally {
+      setPending((current) => {
+        const next = new Set(current);
+        next.delete(id);
+        return next;
+      });
     }
   }
 
   const pct = Math.min(100, Math.round((100 * compile.tokens_used) / Math.max(1, compile.token_budget)));
   const early = compile.compile_hints?.early_stopped;
+  const budgetOmitted = compile.budget_omitted_sections ?? [];
+  const relevanceOmitted = compile.relevance_omitted_sections ?? [];
+  const visibleRelevance = showAllRelevance ? relevanceOmitted : relevanceOmitted.slice(0, 12);
 
   return (
     <section>
       <motion.div
         className="panel"
-        initial={{ opacity: 0, y: 8 }}
+        initial={reduceMotion ? false : { opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
+        transition={{ duration: reduceMotion ? 0 : 0.45, ease: [0.22, 1, 0.36, 1] }}
       >
         <h2 className="sec">Compiled context</h2>
         <p className="sub">
@@ -91,10 +108,15 @@ export default function ResultsPage() {
           ) : null}
         </div>
 
-        {proveStale ? (
+        {questionStale || budgetStale || !file ? (
           <p className="hostnote" role="status">
-            Inputs changed since this compile (task or budget). Expands for Prove were cleared.{" "}
-            <Link href="/workspace">Recompile</Link> before Prove / Agent.
+            {!file
+              ? "The source file is not available in this browser session. "
+              : questionStale
+                ? "The question changed since this compile. Expands for Prove were cleared. "
+                : "The budget changed since this compile. Prove requires matching results; Agent can use the live budget. "}
+            <Link href="/workspace">Recompile</Link>
+            {questionStale || !file ? " before Prove / Agent." : " before Prove."}
           </p>
         ) : null}
 
@@ -106,10 +128,10 @@ export default function ResultsPage() {
         ) : null}
 
         <div className="row" style={{ marginBottom: 16 }}>
-          <Link className="btn ghost" href={proveStale ? "/workspace" : "/workspace/prove"}>
+          <Link className="btn ghost" href={proveStale || !file ? "/workspace" : "/workspace/prove"}>
             Prove answer parity
           </Link>
-          <Link className="btn quiet" href={proveStale ? "/workspace" : "/workspace/agent"}>
+          <Link className="btn quiet" href={questionStale || !file ? "/workspace" : "/workspace/agent"}>
             Run agent
           </Link>
         </div>
@@ -124,16 +146,18 @@ export default function ResultsPage() {
                 <div className="nm">
                   {s.section} <span className="afaint">· {metaFor(s)}</span>
                 </div>
-                {s.text ? <pre className="sectext">{s.text}</pre> : null}
+                {s.text ? (
+                  <pre className="sectext" dir="auto">
+                    {s.text}
+                  </pre>
+                ) : null}
                 {s.truncated && (s.remainder_tokens ?? 0) > 0 ? (
                   <label className="include-lab">
                     <input
                       type="checkbox"
                       disabled={proveStale}
                       checked={proveExpandedIds.includes(s.id)}
-                      onChange={(ev) =>
-                        setProveInclude(s.id, s.remainder_tokens ?? 0, ev.target.checked)
-                      }
+                      onChange={(ev) => setProveInclude(s.id, s.remainder_tokens ?? 0, ev.target.checked)}
                     />{" "}
                     {includeRestHint(s.remainder_tokens ?? 0, sectionLeaf(s.section))}
                   </label>
@@ -143,57 +167,90 @@ export default function ResultsPage() {
           )}
         </div>
 
-        <p className="alabel">Omitted (budget)</p>
-        <div className="section-list">
-          {(compile.budget_omitted_sections ?? []).map((s) => (
-            <article key={s.id} className="scard-static">
-              <div className="nm">
-                {s.section} <span className="afaint">· {metaFor(s)}</span>
-              </div>
-              <div className="row" style={{ marginTop: 8 }}>
-                <button type="button" className="btn quiet" onClick={() => void expand(s.id)}>
-                  Peek expand
-                </button>
-                <label className="include-lab">
-                  <input
-                    type="checkbox"
-                    disabled={proveStale}
-                    checked={proveExpandedIds.includes(s.id)}
-                    onChange={(ev) => setProveInclude(s.id, s.tokens, ev.target.checked)}
-                  />{" "}
-                  Include in Prove
-                </label>
-              </div>
-              {peek[s.id] ? <pre className="sectext peek">{peek[s.id]}</pre> : null}
-            </article>
-          ))}
-        </div>
+        {budgetOmitted.length > 0 ? (
+          <>
+            <p className="alabel">Omitted (budget) · {budgetOmitted.length}</p>
+            <div className="section-list">
+              {budgetOmitted.map((s) => (
+                <article key={s.id} className="scard-static">
+                  <div className="nm">
+                    {s.section} <span className="afaint">· {metaFor(s)}</span>
+                  </div>
+                  <div className="row" style={{ marginTop: 8 }}>
+                    <button
+                      type="button"
+                      className="btn quiet"
+                      disabled={pending.has(s.id) || Boolean(peek[s.id])}
+                      onClick={() => void expand(s.id)}
+                    >
+                      {pending.has(s.id) ? "Expanding…" : peek[s.id] ? "Expanded" : "Peek expand"}
+                    </button>
+                    <label className="include-lab">
+                      <input
+                        type="checkbox"
+                        disabled={proveStale}
+                        checked={proveExpandedIds.includes(s.id)}
+                        onChange={(ev) => setProveInclude(s.id, s.tokens, ev.target.checked)}
+                      />{" "}
+                      Include in Prove
+                    </label>
+                  </div>
+                  {peek[s.id] ? (
+                    <pre className="sectext peek" dir="auto">
+                      {peek[s.id]}
+                    </pre>
+                  ) : null}
+                </article>
+              ))}
+            </div>
+          </>
+        ) : null}
 
-        <p className="alabel">Omitted (relevance)</p>
-        <div className="section-list">
-          {(compile.relevance_omitted_sections ?? []).slice(0, 12).map((s) => (
-            <article key={s.id} className="scard-static">
-              <div className="nm">
-                {s.section} <span className="afaint">· {metaFor(s)}</span>
-              </div>
-              <div className="row" style={{ marginTop: 8 }}>
-                <button type="button" className="btn quiet" onClick={() => void expand(s.id)}>
-                  Peek expand
-                </button>
-                <label className="include-lab">
-                  <input
-                    type="checkbox"
-                    disabled={proveStale}
-                    checked={proveExpandedIds.includes(s.id)}
-                    onChange={(ev) => setProveInclude(s.id, s.tokens, ev.target.checked)}
-                  />{" "}
-                  Include in Prove
-                </label>
-              </div>
-              {peek[s.id] ? <pre className="sectext peek">{peek[s.id]}</pre> : null}
-            </article>
-          ))}
-        </div>
+        {relevanceOmitted.length > 0 ? (
+          <>
+            <p className="alabel">
+              Omitted (relevance) · showing {visibleRelevance.length} of {relevanceOmitted.length}
+            </p>
+            <div className="section-list">
+              {visibleRelevance.map((s) => (
+                <article key={s.id} className="scard-static">
+                  <div className="nm">
+                    {s.section} <span className="afaint">· {metaFor(s)}</span>
+                  </div>
+                  <div className="row" style={{ marginTop: 8 }}>
+                    <button
+                      type="button"
+                      className="btn quiet"
+                      disabled={pending.has(s.id) || Boolean(peek[s.id])}
+                      onClick={() => void expand(s.id)}
+                    >
+                      {pending.has(s.id) ? "Expanding…" : peek[s.id] ? "Expanded" : "Peek expand"}
+                    </button>
+                    <label className="include-lab">
+                      <input
+                        type="checkbox"
+                        disabled={proveStale}
+                        checked={proveExpandedIds.includes(s.id)}
+                        onChange={(ev) => setProveInclude(s.id, s.tokens, ev.target.checked)}
+                      />{" "}
+                      Include in Prove
+                    </label>
+                  </div>
+                  {peek[s.id] ? (
+                    <pre className="sectext peek" dir="auto">
+                      {peek[s.id]}
+                    </pre>
+                  ) : null}
+                </article>
+              ))}
+            </div>
+            {relevanceOmitted.length > 12 ? (
+              <button className="btn quiet" type="button" onClick={() => setShowAllRelevance((v) => !v)}>
+                {showAllRelevance ? "Show first 12" : `Show all ${relevanceOmitted.length}`}
+              </button>
+            ) : null}
+          </>
+        ) : null}
 
         {err ? (
           <div className="err" role="alert">
@@ -203,7 +260,9 @@ export default function ResultsPage() {
 
         <details className="formhint" style={{ marginTop: 18 }}>
           <summary>Raw packed markdown</summary>
-          <pre className="sectext">{compile.markdown}</pre>
+          <pre className="sectext" dir="auto">
+            {compile.markdown}
+          </pre>
         </details>
         <p className="sub" style={{ marginTop: 12 }}>
           Live inputs: budget {budget.toLocaleString()} · task “{task.slice(0, 80)}

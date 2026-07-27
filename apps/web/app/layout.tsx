@@ -5,8 +5,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Context Compiler: stop paying for pages your agent doesn't read",
-  description:
-    "Task-aware, token-budgeted file-to-markdown compiler for AI agents. MCP + hosted workspace.",
+  description: "Task-aware, token-budgeted file-to-markdown compiler for AI agents. MCP + hosted workspace.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -21,9 +20,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         />
       </head>
       <body>
+        <a className="skip-link" href="#main-content">
+          Skip to main content
+        </a>
         <WorkspaceProvider>
           <SiteHeader />
-          <div className="page-main">{children}</div>
+          <main id="main-content" className="page-main" tabIndex={-1}>
+            {children}
+          </main>
         </WorkspaceProvider>
       </body>
     </html>

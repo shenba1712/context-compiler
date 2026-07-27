@@ -6,19 +6,18 @@ import { useRef, useState } from "react";
 import { useWorkspace } from "@/lib/workspace-context";
 import type { AgentParityResult } from "@/lib/types";
 
-type Step = { kind?: string; title?: string; detail?: string; action?: string; n?: number; [k: string]: unknown };
+type Step = {
+  kind?: string;
+  title?: string;
+  detail?: string;
+  action?: string;
+  n?: number;
+  [k: string]: unknown;
+};
 
 export default function AgentPage() {
-  const {
-    file,
-    task,
-    budget,
-    compile,
-    config,
-    proveStale,
-    agentParityHandle,
-    setAgentParityHandle,
-  } = useWorkspace();
+  const { file, task, budget, compile, config, questionStale, agentParityHandle, setAgentParityHandle } =
+    useWorkspace();
   const [busy, setBusy] = useState(false);
   const [parityBusy, setParityBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -41,8 +40,8 @@ export default function AgentPage() {
       setErr("Compile a document first.");
       return;
     }
-    if (proveStale) {
-      setErr("Task or budget changed — recompile first.");
+    if (questionStale) {
+      setErr("Task changed — recompile first.");
       return;
     }
     if (!llmOk) {
@@ -149,16 +148,22 @@ export default function AgentPage() {
       <p className="sub">
         SSE step trace — the model retrieves with compile_context / expand_section under your ceiling.
       </p>
-      {proveStale ? (
+      {questionStale || !file ? (
         <p className="hostnote">
-          Stale compile. <Link href="/workspace">Recompile</Link> first.
+          {questionStale ? "The question changed." : "The source file is no longer available."}{" "}
+          <Link href="/workspace">Recompile</Link> first.
+        </p>
+      ) : null}
+      {!llmOk ? (
+        <p className="hostnote" role="status">
+          Agent disabled: {config?.llm_disabled_reason || "no supported LLM API key is configured."}
         </p>
       ) : null}
       <div className="row">
         <button
           className="btn primary"
           type="button"
-          disabled={busy || proveStale || !llmOk}
+          disabled={busy || questionStale || !file || !llmOk}
           onClick={() => void runAgent()}
         >
           {busy ? "Running…" : "Run agent"}
@@ -190,7 +195,7 @@ export default function AgentPage() {
           {parityErr}
         </div>
       ) : null}
-      <div className="asteps" style={{ marginTop: 16 }}>
+      <div className="asteps" style={{ marginTop: 16 }} aria-live="polite" aria-busy={busy}>
         {steps.map((st, i) => (
           <div key={i} className="astep">
             <div className="abody">
@@ -198,7 +203,9 @@ export default function AgentPage() {
                 {String(st.title ?? st.action ?? st.kind ?? `Step ${st.n ?? i + 1}`)}
               </div>
               {st.detail || st.reasoning ? (
-                <div className="areason">{String(st.detail ?? st.reasoning)}</div>
+                <div className="areason" dir="auto">
+                  {String(st.detail ?? st.reasoning)}
+                </div>
               ) : null}
             </div>
           </div>
@@ -207,20 +214,24 @@ export default function AgentPage() {
       {answer ? (
         <>
           <p className="alabel">Answer</p>
-          <div className="aanswer">{answer}</div>
+          <div className="aanswer" dir="auto">
+            {answer}
+          </div>
         </>
       ) : null}
       {parity ? (
-        <div
-          style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginTop: 20 }}
-        >
+        <div className="parity-grid" style={{ marginTop: 20 }}>
           <div>
             <p className="alabel">Full file · {parity.full.context_tokens.toLocaleString()} tok</p>
-            <div className="aanswer">{parity.full.answer}</div>
+            <div className="aanswer" dir="auto">
+              {parity.full.answer}
+            </div>
           </div>
           <div>
             <p className="alabel">Agent context · {parity.agent.context_tokens.toLocaleString()} tok</p>
-            <div className="aanswer">{parity.agent.answer}</div>
+            <div className="aanswer" dir="auto">
+              {parity.agent.answer}
+            </div>
           </div>
           <p className="sub" style={{ gridColumn: "1 / -1" }}>
             Model: {parity.model}

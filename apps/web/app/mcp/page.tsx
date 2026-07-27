@@ -2,9 +2,9 @@ export default function McpPage() {
   const snippet = `{
   "mcpServers": {
     "context-compiler": {
-      "command": "npx",
-      "args": ["-y", "context-compiler"],
-      "env": { "CC_ROOT": "/absolute/path/to/your/docs" }
+      "command": "node",
+      "args": ["/absolute/path/to/context-compiler/dist/mcp/server.js"],
+      "env": { "CC_ROOT": "/absolute/path/to/docs" }
     }
   }
 }`;
@@ -18,7 +18,10 @@ export default function McpPage() {
           key. Your IDE agent reads the omit manifest and expands when needed.
         </p>
         <p className="alabel">Cursor / Claude / Codex-style config</p>
-        <pre className="aanswer" style={{ fontFamily: "IBM Plex Mono, ui-monospace, monospace", fontSize: 13 }}>
+        <pre
+          className="aanswer"
+          style={{ fontFamily: "IBM Plex Mono, ui-monospace, monospace", fontSize: 13 }}
+        >
           {snippet}
         </pre>
         <p className="sub" style={{ marginTop: 16 }}>
@@ -26,7 +29,12 @@ export default function McpPage() {
           repo README and ARCHITECTURE for contracts.
         </p>
         <p className="row">
-          <a className="btn primary" href="https://github.com/shenba1712/context-compiler" target="_blank" rel="noopener noreferrer">
+          <a
+            className="btn primary"
+            href="https://github.com/shenba1712/context-compiler"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
             View on GitHub
           </a>
           <a className="btn ghost" href="/workspace">

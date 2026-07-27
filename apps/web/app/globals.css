@@ -625,6 +625,12 @@
 .bpre small { font-weight:500; font-size:11px; color:var(--faint); }
 .bpre.active, .bpre[aria-pressed="true"] { border-color:var(--forest); color:var(--forest); background:var(--accent-soft); box-shadow:inset 2px 0 0 var(--forest); }
 .bpre-group { display:flex; gap:6px; flex-wrap:wrap; }
+.parity-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
 @media (max-width:720px) {
   .parity-grid { grid-template-columns:1fr !important; }
+}
+@media (max-width:560px) {
+  /* Keep touch sizing after the later workspace button resets above. */
+  .bpre,.qchip { padding-top:9px; padding-bottom:9px; min-height:40px; display:inline-flex; align-items:center; }
+  .bpre { align-items:flex-start; }
 }

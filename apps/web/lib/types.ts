@@ -62,7 +62,10 @@ export type CompileApiResult = {
 
 export type ServerConfig = {
   llm_available: boolean;
+  llm_disabled_reason?: string | null;
   max_file_bytes?: number;
+  web_budget_min?: number;
+  web_budget_max?: number;
   rate_limit?: number;
   rate_window_minutes?: number;
   rate_cost_answer?: number;

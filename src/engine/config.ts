@@ -8,6 +8,7 @@ import { intEnv, numEnv } from "./env.js";
 
 export const DEFAULT_TOKEN_BUDGET = 4000;
 export const MAX_TOKEN_BUDGET = 200_000;
+export const WEB_MAX_TOKEN_BUDGET = 20_000;
 
 // Different callers deliberately use different floors:
 //  - the web demo slider mins at 100 (same as BUDGET_FLOORS.web); presets clamp

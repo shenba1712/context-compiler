@@ -18,6 +18,7 @@ import { applyProveIncludeChange, computePresets, DEFAULT_PRESETS, type BudgetPr
 type WorkspaceState = {
   config: ServerConfig | null;
   samples: Sample[];
+  loadError: string;
   file: File | null;
   sampleKey: string | null;
   task: string;
@@ -56,6 +57,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [hydrated, setHydrated] = useState(false);
   const [config, setConfig] = useState<ServerConfig | null>(null);
   const [samples, setSamples] = useState<Sample[]>([]);
+  const [loadError, setLoadError] = useState("");
   const [file, setFileState] = useState<File | null>(null);
   const [sampleKey, setSampleKeyState] = useState<string | null>(null);
   const [task, setTask] = useState("");
@@ -78,16 +80,23 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       setTask(saved.task);
       setBudget(saved.budget);
       setSampleKeyState(saved.sampleKey);
-      setCompileState(saved.compile);
-      setCompiledTask(saved.compiledTask);
-      setCompiledBudget(saved.compiledBudget);
-      setProveIncludeState({
-        expandedIds: new Set(saved.proveExpandedIds),
-        expandedTokens: new Map(saved.proveExpandedTokens),
-      });
-      if (saved.compile) {
-        setRawTokensHint(saved.compile.raw_tokens);
-        setDocSizeNote(`Restored compile (~${saved.compile.raw_tokens.toLocaleString()} tokens).`);
+      // Browser storage cannot restore a custom File. Only restore actionable
+      // compile state when a sample key lets us fetch the bytes again.
+      const restorableCompile = saved.sampleKey ? saved.compile : null;
+      setCompileState(restorableCompile);
+      setCompiledTask(restorableCompile ? saved.compiledTask : null);
+      setCompiledBudget(restorableCompile ? saved.compiledBudget : null);
+      setProveIncludeState(
+        restorableCompile
+          ? {
+              expandedIds: new Set(saved.proveExpandedIds),
+              expandedTokens: new Map(saved.proveExpandedTokens),
+            }
+          : { expandedIds: new Set(), expandedTokens: new Map() }
+      );
+      if (restorableCompile) {
+        setRawTokensHint(restorableCompile.raw_tokens);
+        setDocSizeNote(`Restored compile (~${restorableCompile.raw_tokens.toLocaleString()} tokens).`);
       }
     }
     restored.current = true;
@@ -97,14 +106,19 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     void (async () => {
       try {
+        const fetchJson = async <T,>(url: string): Promise<T> => {
+          const response = await fetch(url);
+          if (!response.ok) throw new Error(`${url} failed (${response.status})`);
+          return response.json() as Promise<T>;
+        };
         const [c, s] = await Promise.all([
-          fetch("/api/config").then((r) => r.json() as Promise<ServerConfig>),
-          fetch("/api/samples").then((r) => r.json() as Promise<Sample[]>),
+          fetchJson<ServerConfig>("/api/config"),
+          fetchJson<Sample[]>("/api/samples"),
         ]);
         setConfig(c);
         setSamples(Array.isArray(s) ? s : []);
       } catch (e) {
-        console.warn("config/samples load failed", e);
+        setLoadError(e instanceof Error ? e.message : "Could not load host configuration and samples.");
       }
     })();
   }, []);
@@ -200,6 +214,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     () => ({
       config,
       samples,
+      loadError,
       file,
       sampleKey,
       task,
@@ -233,6 +248,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     [
       config,
       samples,
+      loadError,
       file,
       sampleKey,
       task,

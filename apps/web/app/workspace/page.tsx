@@ -7,8 +7,8 @@ import { useWorkspace } from "@/lib/workspace-context";
 import type { CompileApiResult, MeasureApiResult, Sample } from "@/lib/types";
 import { computePresets, DEFAULT_PRESETS, SLIDER_MAX, SLIDER_MIN } from "@/lib/ux";
 
-async function fileFromSample(s: Sample): Promise<File> {
-  const res = await fetch(`/samples/${s.file}`);
+async function fileFromSample(s: Sample, signal: AbortSignal): Promise<File> {
+  const res = await fetch(`/samples/${s.file}`, { signal });
   if (!res.ok) throw new Error(`Could not load sample ${s.file}`);
   const buf = await res.arrayBuffer();
   return new File([buf], s.file, { type: res.headers.get("content-type") || "application/octet-stream" });
@@ -17,9 +17,11 @@ async function fileFromSample(s: Sample): Promise<File> {
 export default function WorkspaceCompilePage() {
   const router = useRouter();
   const measureSeq = useRef(0);
+  const sampleAbort = useRef<AbortController | null>(null);
   const {
     config,
     samples,
+    loadError,
     file,
     sampleKey,
     task,
@@ -51,7 +53,11 @@ export default function WorkspaceCompilePage() {
       const d = (await res.json()) as MeasureApiResult;
       if (seq !== measureSeq.current) return;
       if (d.error) throw new Error(d.error);
-      const p = computePresets(d.raw_tokens);
+      const p = computePresets(
+        d.raw_tokens,
+        config?.web_budget_min ?? SLIDER_MIN,
+        config?.web_budget_max ?? SLIDER_MAX
+      );
       setPresets(p, "standard");
       setRawTokensHint(d.raw_tokens);
       const scaled = p !== DEFAULT_PRESETS;
@@ -72,16 +78,26 @@ export default function WorkspaceCompilePage() {
   }
 
   async function pickSample(s: Sample) {
+    sampleAbort.current?.abort();
+    const controller = new AbortController();
+    sampleAbort.current = controller;
+    const seq = ++measureSeq.current;
     setErr("");
     clearCompile();
     setSampleKey(s.key);
+    setFile(null);
     try {
-      const f = await fileFromSample(s);
+      const f = await fileFromSample(s, controller.signal);
+      if (controller.signal.aborted || seq !== measureSeq.current) return;
       setFile(f);
       setPicked(`Sample: ${s.nm}`);
       if (s.q[0]) setTask(s.q[0]);
       if (s.tok != null) {
-        const p = computePresets(s.tok);
+        const p = computePresets(
+          s.tok,
+          config?.web_budget_min ?? SLIDER_MIN,
+          config?.web_budget_max ?? SLIDER_MAX
+        );
         setPresets(p, "standard");
         setRawTokensHint(s.tok);
         setDocSizeNote(
@@ -94,7 +110,10 @@ export default function WorkspaceCompilePage() {
         void measureUpload(f);
       }
     } catch (e) {
+      if (controller.signal.aborted) return;
       setErr(e instanceof Error ? e.message : "Sample load failed");
+    } finally {
+      if (sampleAbort.current === controller) sampleAbort.current = null;
     }
   }
 
@@ -130,6 +149,10 @@ export default function WorkspaceCompilePage() {
 
   const pool = config?.rate_limit ?? 100;
   const windowMin = config?.rate_window_minutes ?? 5;
+  const sliderMin = config?.web_budget_min ?? SLIDER_MIN;
+  const sliderMax = config?.web_budget_max ?? SLIDER_MAX;
+  const maxFileMb = (config?.max_file_bytes ?? 20 * 1024 * 1024) / (1024 * 1024);
+  const maxFileLabel = Number.isInteger(maxFileMb) ? String(maxFileMb) : maxFileMb.toFixed(1);
 
   return (
     <section>
@@ -141,12 +164,16 @@ export default function WorkspaceCompilePage() {
         </p>
 
         <form onSubmit={onCompile}>
-          <label htmlFor="file">Upload (pdf, docx, xlsx, pptx, html, csv, txt, md). Max 20 MB</label>
+          <label htmlFor="file">
+            Upload (pdf, docx, xlsx, pptx, html, csv, txt, md). Max {maxFileLabel} MB
+          </label>
           <input
             id="file"
             type="file"
             accept=".pdf,.docx,.xlsx,.pptx,.html,.htm,.csv,.txt,.md,.markdown"
             onChange={(ev) => {
+              sampleAbort.current?.abort();
+              ++measureSeq.current;
               const f = ev.target.files?.[0] ?? null;
               clearCompile();
               setSampleKey(null);
@@ -178,6 +205,7 @@ export default function WorkspaceCompilePage() {
                   key={s.key}
                   type="button"
                   className={`scard${sampleKey === s.key ? " active" : ""}`}
+                  aria-pressed={sampleKey === s.key}
                   onClick={() => void pickSample(s)}
                 >
                   <div className="nm">
@@ -199,7 +227,7 @@ export default function WorkspaceCompilePage() {
             value={task}
             onChange={(ev) => setTask(ev.target.value)}
             onKeyDown={(ev) => {
-              if (ev.key === "Enter" && !ev.shiftKey) {
+              if (ev.key === "Enter" && !ev.shiftKey && !ev.nativeEvent.isComposing) {
                 ev.preventDefault();
                 (ev.currentTarget.form as HTMLFormElement | null)?.requestSubmit();
               }
@@ -246,20 +274,25 @@ export default function WorkspaceCompilePage() {
           <input
             id="budget"
             type="range"
-            min={SLIDER_MIN}
-            max={SLIDER_MAX}
+            min={sliderMin}
+            max={sliderMax}
             step={50}
             value={budget}
             onChange={(ev) => setBudget(Number(ev.target.value))}
           />
           <div className="sliderscale">
-            <span>{SLIDER_MIN.toLocaleString()}</span>
-            <span>{SLIDER_MAX.toLocaleString()}</span>
+            <span>{sliderMin.toLocaleString()}</span>
+            <span>{sliderMax.toLocaleString()}</span>
           </div>
 
           {err ? (
             <div className="err" role="alert">
               {err}
+            </div>
+          ) : null}
+          {loadError ? (
+            <div className="err" role="alert">
+              Host setup could not load: {loadError}
             </div>
           ) : null}
 
@@ -280,7 +313,11 @@ export default function WorkspaceCompilePage() {
               </li>
               <li>
                 Prove / Agent need an LLM key on the server
-                {config ? (config.llm_available ? " (available here)." : " (not configured here).") : "."}
+                {config
+                  ? config.llm_available
+                    ? " (available here)."
+                    : ` (${config.llm_disabled_reason || "not configured here"}).`
+                  : "."}
               </li>
             </ul>
           </div>

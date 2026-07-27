@@ -1,4 +1,4 @@
-import { MAX_FILE_BYTES } from "../engine/config.js";
+import { BUDGET_FLOORS, MAX_FILE_BYTES, WEB_MAX_TOKEN_BUDGET } from "../engine/config.js";
 import { intEnv } from "../engine/env.js";
 import { hasLlm } from "../engine/llm.js";
 
@@ -11,7 +11,10 @@ const WINDOW_MS = 5 * 60_000;
 export function getApiConfig() {
   return {
     llm_available: hasLlm(),
+    llm_disabled_reason: hasLlm() ? null : "No supported LLM API key is configured on this host.",
     max_file_bytes: MAX_FILE_BYTES,
+    web_budget_min: BUDGET_FLOORS.web,
+    web_budget_max: WEB_MAX_TOKEN_BUDGET,
     rate_limit: RATE_LIMIT,
     rate_window_minutes: Math.round(WINDOW_MS / 60_000),
     rate_cost_answer: RATE_COST_ANSWER,
