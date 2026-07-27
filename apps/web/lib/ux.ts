@@ -127,8 +127,7 @@ export function shouldRetryBusy503(status: number, attemptIndex: number): boolea
 }
 
 export function busy503RetryDelayMs(random: () => number = Math.random): number {
-  return BUSY_503_RETRY_MS_MIN +
-    Math.floor(random() * (BUSY_503_RETRY_MS_MAX - BUSY_503_RETRY_MS_MIN + 1));
+  return BUSY_503_RETRY_MS_MIN + Math.floor(random() * (BUSY_503_RETRY_MS_MAX - BUSY_503_RETRY_MS_MIN + 1));
 }
 
 export async function fetchWithBusyRetry(

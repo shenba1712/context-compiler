@@ -172,7 +172,8 @@ export default function ProvePage() {
           </p>
           {result.compiled.selected_content_tokens != null ? (
             <p className="sub" style={{ gridColumn: "1 / -1" }}>
-              Effective Prove context: <strong>{result.compiled.context_tokens.toLocaleString()}</strong> tokens
+              Effective Prove context: <strong>{result.compiled.context_tokens.toLocaleString()}</strong>{" "}
+              tokens
               {result.compiled.expand_content_tokens
                 ? ` (${result.compiled.selected_content_tokens.toLocaleString()} compiled + ${result.compiled.expand_content_tokens.toLocaleString()} expanded)`
                 : ""}

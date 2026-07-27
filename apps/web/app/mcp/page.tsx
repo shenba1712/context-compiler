@@ -20,8 +20,7 @@ CC_ROOT = "/absolute/path/agents/may/read"`,
     }
   }
 }`,
-    claude:
-      "claude mcp add context-compiler -- node /absolute/path/to/context-compiler/dist/mcp/server.js",
+    claude: "claude mcp add context-compiler -- node /absolute/path/to/context-compiler/dist/mcp/server.js",
   } as const;
 
   async function copy(key: keyof typeof snippets) {

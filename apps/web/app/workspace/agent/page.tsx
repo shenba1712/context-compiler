@@ -252,7 +252,7 @@ export default function AgentPage() {
           {parityErr}
         </div>
       ) : null}
-      {(busy || steps.length > 0 || runMeta) ? (
+      {busy || steps.length > 0 || runMeta ? (
         <div className="agent-meter" aria-label="Agent tokens read">
           <div className="meter-label">
             <strong>{meterTokens.toLocaleString()} tokens read</strong>

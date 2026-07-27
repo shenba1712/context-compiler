@@ -60,10 +60,8 @@ export default function WorkspaceCompilePage() {
     try {
       const fd = new FormData();
       fd.append("file", f);
-      const res = await fetchWithBusyRetry(
-        "/api/measure",
-        { method: "POST", body: fd },
-        () => setDocSizeNote("Server busy — retrying size check once…")
+      const res = await fetchWithBusyRetry("/api/measure", { method: "POST", body: fd }, () =>
+        setDocSizeNote("Server busy — retrying size check once…")
       );
       const d = (await res.json()) as MeasureApiResult;
       if (seq !== measureSeq.current) return;
@@ -151,7 +149,9 @@ export default function WorkspaceCompilePage() {
     compileAbort.current?.abort();
     compileAbort.current = controller;
     setBusy(true);
-    setLoadingDetail("Converting a file for the first time can take a few seconds; cached files are instant.");
+    setLoadingDetail(
+      "Converting a file for the first time can take a few seconds; cached files are instant."
+    );
     try {
       const fd = new FormData();
       fd.append("file", file);
