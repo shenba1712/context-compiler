@@ -1,11 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { useWorkspace } from "@/lib/workspace-context";
 import type { AgentParityResult } from "@/lib/types";
-import { shouldDisableAgentWhenStale } from "@/lib/ux";
+import { apiFailureMessage, fetchWithBusyRetry, shouldDisableAgentWhenStale } from "@/lib/ux";
 
 type Step = {
   kind?: string;
@@ -13,6 +13,9 @@ type Step = {
   detail?: string;
   action?: string;
   n?: number;
+  section_id?: string;
+  tokens_added?: number;
+  truncated?: boolean;
   [k: string]: unknown;
 };
 
@@ -27,6 +30,8 @@ export default function AgentPage() {
     config,
     agentParityHandle,
     setAgentParityHandle,
+    pendingRun,
+    consumeRun,
   } = useWorkspace();
   const [busy, setBusy] = useState(false);
   const [parityBusy, setParityBusy] = useState(false);
@@ -35,6 +40,14 @@ export default function AgentPage() {
   const [steps, setSteps] = useState<Step[]>([]);
   const [answer, setAnswer] = useState("");
   const [parity, setParity] = useState<AgentParityResult | null>(null);
+  const [loadingDetail, setLoadingDetail] = useState("");
+  const [runMeta, setRunMeta] = useState<{
+    tokensRead: number;
+    rawTokens: number;
+    finalTokens: number;
+    stoppedReason: string;
+    unreadRemaining: boolean;
+  } | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
   const llmOk = config?.llm_available ?? false;
@@ -52,9 +65,10 @@ export default function AgentPage() {
     setSteps([]);
     setAnswer("");
     setParity(null);
+    setRunMeta(null);
     setAgentParityHandle(null);
-    if (!file || !compile) {
-      setErr("Compile a document first.");
+    if (!file) {
+      setErr("Choose a document first.");
       return;
     }
     if (agentStale) {
@@ -68,16 +82,21 @@ export default function AgentPage() {
     const ac = new AbortController();
     abortRef.current = ac;
     setBusy(true);
+    setLoadingDetail("First step can take a few seconds while the file converts and the model plans.");
     try {
       const fd = new FormData();
       fd.append("file", file);
       fd.append("task", task.trim());
       fd.append("token_budget", String(budget));
-      const res = await fetch("/api/agent", { method: "POST", body: fd, signal: ac.signal });
+      const res = await fetchWithBusyRetry(
+        "/api/agent",
+        { method: "POST", body: fd, signal: ac.signal },
+        () => setLoadingDetail("Server busy — retrying once…")
+      );
       const ctype = res.headers.get("content-type") || "";
       if (!ctype.includes("text/event-stream")) {
         const data = (await res.json()) as { error?: string };
-        throw new Error(data.error || `Agent failed (${res.status})`);
+        throw new Error(apiFailureMessage(res, data.error, "agent"));
       }
       const reader = res.body?.getReader();
       if (!reader) throw new Error("No response stream");
@@ -105,6 +124,13 @@ export default function AgentPage() {
           if (event === "done") {
             sawDone = true;
             setAnswer(String(data.answer ?? data.final_answer ?? ""));
+            setRunMeta({
+              tokensRead: Number(data.tokens_read ?? 0),
+              rawTokens: Number(data.raw_tokens ?? 0),
+              finalTokens: Number(data.final_context_tokens ?? 0),
+              stoppedReason: String(data.stopped_reason ?? "unknown"),
+              unreadRemaining: Boolean(data.unread_remaining),
+            });
             const handle = typeof data.parity_handle === "string" ? data.parity_handle : null;
             setAgentParityHandle(handle);
           }
@@ -119,9 +145,17 @@ export default function AgentPage() {
       }
     } finally {
       setBusy(false);
+      setLoadingDetail("");
       abortRef.current = null;
     }
   }
+
+  useEffect(() => {
+    if (pendingRun !== "agent" || !consumeRun("agent")) return;
+    void runAgent();
+    // One-shot route handoff from the compile form.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingRun]);
 
   async function runParity() {
     setParityErr("");
@@ -132,13 +166,17 @@ export default function AgentPage() {
     }
     setParityBusy(true);
     try {
-      const res = await fetch("/api/agent-parity", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ parity_handle: agentParityHandle }),
-      });
+      const res = await fetchWithBusyRetry(
+        "/api/agent-parity",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ parity_handle: agentParityHandle }),
+        },
+        () => setParityErr("Server busy — retrying comparison once…")
+      );
       const data = (await res.json()) as AgentParityResult & { error?: string };
-      if (!res.ok) throw new Error(data.error || `Compare failed (${res.status})`);
+      if (!res.ok) throw new Error(apiFailureMessage(res, data.error, "agentParity"));
       setParity(data);
       setAgentParityHandle(null); // one-shot
     } catch (e) {
@@ -148,16 +186,9 @@ export default function AgentPage() {
     }
   }
 
-  if (!compile) {
-    return (
-      <section className="panel">
-        <h2 className="sec">Run agent</h2>
-        <p className="sub">
-          <Link href="/workspace">Compile</Link> first. The model drives compile → expand under your budget.
-        </p>
-      </section>
-    );
-  }
+  const liveTokens = steps.reduce((sum, step) => sum + Math.max(0, Number(step.tokens_added ?? 0)), 0);
+  const meterTokens = runMeta?.tokensRead ?? liveTokens;
+  const meterPct = Math.min(100, (100 * meterTokens) / Math.max(1, budget));
 
   return (
     <section className="panel">
@@ -198,10 +229,19 @@ export default function AgentPage() {
         >
           {parityBusy ? "Comparing…" : "Compare to full file"}
         </button>
-        <Link className="btn quiet" href="/workspace/results">
-          Back to results
+        <Link className="btn quiet" href={compile ? "/workspace/results" : "/workspace"}>
+          {compile ? "Back to results" : "Back to compile"}
         </Link>
       </div>
+      {busy ? (
+        <div className="loading-banner" role="status" aria-live="polite" aria-busy="true">
+          <span className="spinner" aria-hidden="true" />
+          <span>
+            <strong>Starting agent…</strong>
+            <small>{loadingDetail}</small>
+          </span>
+        </div>
+      ) : null}
       {err ? (
         <div className="err" role="alert">
           {err}
@@ -210,6 +250,20 @@ export default function AgentPage() {
       {parityErr ? (
         <div className="err" role="alert">
           {parityErr}
+        </div>
+      ) : null}
+      {(busy || steps.length > 0 || runMeta) ? (
+        <div className="agent-meter" aria-label="Agent tokens read">
+          <div className="meter-label">
+            <strong>{meterTokens.toLocaleString()} tokens read</strong>
+            <span>
+              ceiling {budget.toLocaleString()}
+              {runMeta?.rawTokens ? ` · whole file ${runMeta.rawTokens.toLocaleString()}` : ""}
+            </span>
+          </div>
+          <div className="htrack">
+            <div className="hbar small" style={{ width: `${meterPct}%` }} />
+          </div>
         </div>
       ) : null}
       <div className="asteps" style={{ marginTop: 16 }} aria-live="polite" aria-busy={busy}>
@@ -224,6 +278,14 @@ export default function AgentPage() {
                   {String(st.detail ?? st.reasoning)}
                 </div>
               ) : null}
+              {st.section_id || st.tokens_added != null ? (
+                <div className="step-meta">
+                  {st.section_id ? `section ${st.section_id}` : ""}
+                  {st.section_id && st.tokens_added != null ? " · " : ""}
+                  {st.tokens_added != null ? `+${Number(st.tokens_added).toLocaleString()} tokens` : ""}
+                  {st.truncated ? " · truncated to remaining headroom" : ""}
+                </div>
+              ) : null}
             </div>
           </div>
         ))}
@@ -235,6 +297,20 @@ export default function AgentPage() {
             {answer}
           </div>
         </>
+      ) : null}
+      {runMeta ? (
+        <p className="hostnote" role="status">
+          Stopped: <strong>{runMeta.stoppedReason.replaceAll("_", " ")}</strong>. Final answer used{" "}
+          <strong>{runMeta.finalTokens.toLocaleString()}</strong> content tokens.
+          {runMeta.tokensRead > budget
+            ? ` The soft ceiling may overshoot slightly at tokenizer/wrapper boundaries (+${(
+                runMeta.tokensRead - budget
+              ).toLocaleString()} tokens).`
+            : ""}
+          {runMeta.stoppedReason === "token_ceiling" && runMeta.unreadRemaining
+            ? " Unread sections remain; raise the budget and run again for broader coverage."
+            : ""}
+        </p>
       ) : null}
       {parity ? (
         <div className="parity-grid" style={{ marginTop: 20 }}>
