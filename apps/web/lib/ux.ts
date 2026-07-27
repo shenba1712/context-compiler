@@ -38,6 +38,11 @@ export function truncatedSectionMeta(
   return `${rel}${packedTokens.toLocaleString()} content tokens (truncated from ${fullTokens.toLocaleString()}${rest})`;
 }
 
+/** Relevance values arrive from the API as percentages (0–100). */
+export function relevancePercentLabel(relevance: number | null | undefined): string {
+  return relevance == null ? "" : `rel ${relevance}%`;
+}
+
 export type BudgetPresets = { quick: number; standard: number; deep: number };
 
 export const DEFAULT_PRESETS: BudgetPresets = { quick: 1000, standard: 4000, deep: 8000 };
@@ -61,4 +66,19 @@ export function computePresets(rawTokens: number | null, min = SLIDER_MIN, max =
 export function sectionLeaf(section: string): string {
   const parts = section.split(/\s*[>›/]\s*/);
   return (parts[parts.length - 1] || section).trim();
+}
+
+/** Agent performs its own compile, so a budget-only edit remains runnable. */
+export function shouldDisableAgentWhenStale(opts: {
+  hasCompiledOnce: boolean;
+  lastCompiledTask: string | null;
+  currentTask: string;
+  lastCompiledBudget: number | null;
+  currentBudget: number;
+}): boolean {
+  return Boolean(
+    opts.hasCompiledOnce &&
+    opts.lastCompiledTask !== null &&
+    opts.lastCompiledTask.trim() !== opts.currentTask.trim()
+  );
 }

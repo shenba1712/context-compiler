@@ -66,9 +66,7 @@ function run(cmd, args, opts = {}) {
   });
   child.on("exit", (code, signal) => {
     if (!shuttingDown) {
-      console.error(
-        `${cmd} exited unexpectedly${signal ? ` with ${signal}` : ` with code ${code ?? 1}`}`,
-      );
+      console.error(`${cmd} exited unexpectedly${signal ? ` with ${signal}` : ` with code ${code ?? 1}`}`);
       shutdown(code && code !== 0 ? code : 1);
     }
   });

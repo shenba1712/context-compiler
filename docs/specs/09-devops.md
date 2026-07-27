@@ -60,7 +60,7 @@ On push to `main`/`master` and on PRs:
 2. Node 20 + npm cache  
 3. Python 3.12 + markitdown extras  
 4. `npm ci`  
-5. Lint → format check → build → `npm test`  
+5. Lint → expanded format check → build → standalone/Nest post-build smoke → `npm test`  
 
 No production secrets required; LLM paths are tested with mocks / injected completions where needed.
 

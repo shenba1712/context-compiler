@@ -17,13 +17,14 @@
     "build": "npm run build:engine && npm run build:api && npm run build:web",
     "build:test": "npm run build:engine",
     "test": "npm run build:test && NODE_ENV=test node dist/tests/test.js",
+    "smoke:postbuild": "node scripts/postbuild-smoke.mjs",
     "mcp": "node dist/mcp/server.js",
     "web": "node scripts/start-dual.mjs",
     "api:dev": "npm run build:engine && npm run build:api && API_PORT=4000 API_HOST=127.0.0.1 npm run start -w @cc/api",
     "web:dev": "API_PORT=4000 npm run dev -w @cc/web",
     "lint": "eslint .",
     "format": "prettier --write \"src/**/*.ts\" \"apps/**/*.{ts,tsx}\" \"*.{js,json}\"",
-    "format:check": "prettier --check \"src/**/*.ts\" \"*.{js,json}\""
+    "format:check": "prettier --check \"src/**/*.ts\" \"apps/**/*.{ts,tsx}\" \"scripts/*.mjs\" \"*.{js,json}\""
   },
   "engines": {
     "node": ">=20"

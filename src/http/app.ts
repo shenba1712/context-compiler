@@ -55,11 +55,7 @@ function parseExpandedIds(raw: unknown): string[] {
 }
 
 // Prefer CC_PRICE_PER_MTOK; fall back to legacy CC_DEMO_PRICE_PER_MTOK.
-const PRICE_PER_MTOK = numEnv(
-  "CC_PRICE_PER_MTOK",
-  numEnv("CC_DEMO_PRICE_PER_MTOK", 3.0, 0),
-  0
-);
+const PRICE_PER_MTOK = numEnv("CC_PRICE_PER_MTOK", numEnv("CC_DEMO_PRICE_PER_MTOK", 3.0, 0), 0);
 const UPLOAD_DIR = join(tmpdir(), "cc-demo-uploads");
 // Uploaded files are transient. Sweep anything older than this so the upload
 // dir can't grow without bound (it was never cleaned before).
@@ -600,6 +596,11 @@ app.post("/api/agent", upload.single("file"), guardUpload, async (req, res) => {
   };
   req.on("close", abortOnDisconnect);
   res.on("close", abortOnDisconnect);
+  const heartbeat = setInterval(() => {
+    if (!res.writableEnded && !res.destroyed) res.write(": heartbeat\n\n");
+  }, 15_000);
+  heartbeat.unref();
+  res.on("close", () => clearInterval(heartbeat));
 
   inc("agent_runs");
   try {
@@ -641,6 +642,7 @@ app.post("/api/agent", upload.single("file"), guardUpload, async (req, res) => {
     }
     if (!cancelled) send("error", { error: msg });
   } finally {
+    clearInterval(heartbeat);
     releaseLlmJob();
     if (!res.writableEnded) res.end();
   }

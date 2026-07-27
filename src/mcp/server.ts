@@ -10,8 +10,8 @@ import { resolve } from "node:path";
 import { z } from "zod";
 
 import { BUDGET_FLOORS, DEFAULT_TOKEN_BUDGET, clampBudget } from "../engine/config.js";
-import { ConversionError } from "../engine/convert.js";
 import { checkPathWithin } from "./path-guard.js";
+import { mcpToolError } from "./tool-result.js";
 import { compileContext, expandSection } from "../engine/pipeline.js";
 
 const ROOT = resolve(process.env.CC_ROOT ?? homedir());
@@ -46,11 +46,7 @@ server.registerTool(
       result.selected_sections = result.selected_sections.map(({ text: _t, ...r }) => r);
       return { content: [{ type: "text", text: JSON.stringify(result) }] };
     } catch (e) {
-      const msg = e instanceof ConversionError || e instanceof Error ? e.message : String(e);
-      return {
-        isError: true,
-        content: [{ type: "text", text: JSON.stringify({ error: msg }) }],
-      };
+      return mcpToolError(e);
     }
   }
 );
@@ -77,11 +73,7 @@ server.registerTool(
       );
       return { content: [{ type: "text", text: JSON.stringify(result) }] };
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      return {
-        isError: true,
-        content: [{ type: "text", text: JSON.stringify({ error: msg }) }],
-      };
+      return mcpToolError(e);
     }
   }
 );

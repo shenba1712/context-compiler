@@ -12,9 +12,9 @@ import { HostService } from "./host.service.js";
  * Path: apps/api/dist/main.js → ../../../dist/http/app.js
  */
 async function loadHttpApp(): Promise<{ app: Express }> {
-  const mod = (await import(
-    /* webpackIgnore: true */ "../../../dist/http/app.js" as string
-  )) as { app: Express };
+  const mod = (await import(/* webpackIgnore: true */ "../../../dist/http/app.js" as string)) as {
+    app: Express;
+  };
   return mod;
 }
 

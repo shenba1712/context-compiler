@@ -5,6 +5,7 @@ import { useRef, useState } from "react";
 
 import { useWorkspace } from "@/lib/workspace-context";
 import type { AgentParityResult } from "@/lib/types";
+import { shouldDisableAgentWhenStale } from "@/lib/ux";
 
 type Step = {
   kind?: string;
@@ -16,8 +17,17 @@ type Step = {
 };
 
 export default function AgentPage() {
-  const { file, task, budget, compile, config, questionStale, agentParityHandle, setAgentParityHandle } =
-    useWorkspace();
+  const {
+    file,
+    task,
+    budget,
+    compile,
+    compiledTask,
+    compiledBudget,
+    config,
+    agentParityHandle,
+    setAgentParityHandle,
+  } = useWorkspace();
   const [busy, setBusy] = useState(false);
   const [parityBusy, setParityBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -28,6 +38,13 @@ export default function AgentPage() {
   const abortRef = useRef<AbortController | null>(null);
 
   const llmOk = config?.llm_available ?? false;
+  const agentStale = shouldDisableAgentWhenStale({
+    hasCompiledOnce: Boolean(compile),
+    lastCompiledTask: compiledTask,
+    currentTask: task,
+    lastCompiledBudget: compiledBudget,
+    currentBudget: budget,
+  });
 
   async function runAgent() {
     setErr("");
@@ -40,7 +57,7 @@ export default function AgentPage() {
       setErr("Compile a document first.");
       return;
     }
-    if (questionStale) {
+    if (agentStale) {
       setErr("Task changed — recompile first.");
       return;
     }
@@ -148,9 +165,9 @@ export default function AgentPage() {
       <p className="sub">
         SSE step trace — the model retrieves with compile_context / expand_section under your ceiling.
       </p>
-      {questionStale || !file ? (
+      {agentStale || !file ? (
         <p className="hostnote">
-          {questionStale ? "The question changed." : "The source file is no longer available."}{" "}
+          {agentStale ? "The question changed." : "The source file is no longer available."}{" "}
           <Link href="/workspace">Recompile</Link> first.
         </p>
       ) : null}
@@ -163,7 +180,7 @@ export default function AgentPage() {
         <button
           className="btn primary"
           type="button"
-          disabled={busy || questionStale || !file || !llmOk}
+          disabled={busy || agentStale || !file || !llmOk}
           onClick={() => void runAgent()}
         >
           {busy ? "Running…" : "Run agent"}

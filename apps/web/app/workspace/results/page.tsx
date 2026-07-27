@@ -6,13 +6,14 @@ import { useState } from "react";
 
 import { useWorkspace } from "@/lib/workspace-context";
 import type { ExpandApiResult, SectionInfo } from "@/lib/types";
-import { includeRestHint, sectionLeaf, truncatedSectionMeta } from "@/lib/ux";
+import { includeRestHint, relevancePercentLabel, sectionLeaf, truncatedSectionMeta } from "@/lib/ux";
 
 function metaFor(s: SectionInfo): string {
   if (s.truncated && s.full_tokens != null) {
     return truncatedSectionMeta(s.tokens, s.full_tokens, s.remainder_tokens ?? 0, s.relevance);
   }
-  const rel = s.relevance != null ? ` · rel ${s.relevance}%` : "";
+  const relevance = relevancePercentLabel(s.relevance);
+  const rel = relevance ? ` · ${relevance}` : "";
   return `${s.tokens.toLocaleString()} tok${rel}${s.truncated ? " · truncated" : ""}`;
 }
 

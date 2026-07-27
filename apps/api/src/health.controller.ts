@@ -1,4 +1,4 @@
-import { Controller, Get } from "@nestjs/common";
+import { Controller, Get, Header } from "@nestjs/common";
 
 import { HostService } from "./host.service.js";
 
@@ -8,6 +8,7 @@ export class HealthController {
 
   /** Platform liveness — must stay cheap (no markitdown). */
   @Get("healthz")
+  @Header("X-CC-Route-Owner", "nest")
   healthz() {
     return this.host.healthz();
   }

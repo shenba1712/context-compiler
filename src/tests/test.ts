@@ -113,6 +113,8 @@ import {
   proveFlowUsesLocalError,
   questionStaleBannerHtml,
   rateLimitRetryHint,
+  relevancePercentLabel,
+  shouldDisableAgentWhenStale,
   shouldRetryBusy503,
   taskInvalidatesCompile,
   truncatedSectionMeta,
@@ -121,6 +123,7 @@ import { convertToMarkdown, ConversionError } from "../engine/convert.js";
 import { intEnv, numEnv, trustProxyFromEnv } from "../engine/env.js";
 import { assemble, pack, truncateSectionToBudget } from "../engine/pack.js";
 import { checkPathWithin } from "../mcp/path-guard.js";
+import { mcpToolError } from "../mcp/tool-result.js";
 import { assembleProveContext, compileContext, expandSection, fullMarkdown } from "../engine/pipeline.js";
 import {
   bm25Scores,
@@ -1646,6 +1649,30 @@ function testClientUxContracts() {
     true,
     "combined Prove stale includes budget drift"
   );
+  assert.equal(
+    shouldDisableAgentWhenStale({
+      hasCompiledOnce: true,
+      lastCompiledTask: "Q1",
+      currentTask: "Q1",
+      lastCompiledBudget: 4000,
+      currentBudget: 8000,
+    }),
+    false,
+    "budget-only drift must not stale Agent, which recompiles independently"
+  );
+  assert.equal(
+    shouldDisableAgentWhenStale({
+      hasCompiledOnce: true,
+      lastCompiledTask: "Q1",
+      currentTask: "Q2",
+      lastCompiledBudget: 4000,
+      currentBudget: 4000,
+    }),
+    true,
+    "task drift still stales Agent"
+  );
+  assert.equal(relevancePercentLabel(95), "rel 95%", "API relevance is already 0–100");
+  assert.equal(relevancePercentLabel(0.95), "rel 0.95%", "display helper must never multiply by 100");
   assert.equal(shouldKeepAgentStepsOnCancel(), true, "cancel must keep partial agent steps");
   assert.ok(agentStreamIncompleteMessage().includes("connection ended"), "incomplete SSE named");
   assert.ok(emptyCompiledSectionsMessage().includes("No sections fit"), "empty included bucket is explicit");
@@ -2184,7 +2211,8 @@ async function testGeminiModelFailover() {
         process.env.CC_GEMINI_BASE_URL = `http://127.0.0.1:${port}`;
         // Existing 429 path must stay fast — cooldown is covered in its own test.
         process.env.CC_LLM_FAILOVER_COOLDOWN_MS = "0";
-        const { complete, geminiModels, answerModel, clearGeminiDeadModels } = await import("../engine/llm.js");
+        const { complete, geminiModels, answerModel, clearGeminiDeadModels } =
+          await import("../engine/llm.js");
         clearGeminiDeadModels();
         assert.deepEqual(geminiModels(), [
           "gemini-flash-lite-latest",
@@ -3766,6 +3794,7 @@ async function testDiskStorageNotMemory() {
 
 function testPathGuardMessagesArePathFree() {
   const root = mkdtempSync(join(tmpdir(), "cc-root-"));
+  const invalidRoot = join(root, "operator-secret-root-name");
   try {
     try {
       checkPathWithin(root, join(root, "missing.txt"));
@@ -3775,10 +3804,25 @@ function testPathGuardMessagesArePathFree() {
       assert.ok(!m.includes(root), "missing-file error must not echo absolute root");
       assert.match(m, /readable file|Access denied/i);
     }
+    try {
+      checkPathWithin(invalidRoot, join(root, "missing.txt"));
+      assert.fail("expected invalid root to throw");
+    } catch (e) {
+      const m = String((e as Error).message);
+      assert.ok(!m.includes(invalidRoot), "invalid CC_ROOT error must not echo its absolute path");
+      assert.match(m, /configured allowed root/i);
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
   console.log("  path-guard messages ok: no absolute paths in client-facing errors");
+}
+
+function testMcpToolFailuresAreMarked() {
+  const result = mcpToolError(new Error("safe failure"));
+  assert.equal(result.isError, true, "MCP SDK result must mark failures with isError");
+  assert.deepEqual(JSON.parse(result.content[0].text), { error: "safe failure" });
+  console.log("  mcp error result ok: isError=true with JSON error body");
 }
 
 function testTokenizeCjkAndStem() {
@@ -4336,6 +4380,7 @@ for (const fn of [
   testTrustProxyFailsSafe,
   testSanitizeSourceNameBlocksCommentBreakout,
   testPathGuardMessagesArePathFree,
+  testMcpToolFailuresAreMarked,
   testDiskStorageNotMemory,
   testCacheCorruptionFallsThrough,
   testWeightedRateLimitBlocksAgentSpend,

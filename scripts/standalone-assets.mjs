@@ -60,7 +60,7 @@ export function copyStandaloneAssets(webDir, server = findStandaloneServer(webDi
     const copiedFiles = assertRegularTree(destination, `standalone ${label}`);
     if (copiedFiles.length !== sourceFiles.length) {
       throw new Error(
-        `Incomplete ${label} copy: expected ${sourceFiles.length} files, copied ${copiedFiles.length}`,
+        `Incomplete ${label} copy: expected ${sourceFiles.length} files, copied ${copiedFiles.length}`
       );
     }
   }

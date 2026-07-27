@@ -76,6 +76,11 @@ export function truncatedSectionMeta(
   );
 }
 
+/** Relevance values are already percentages on the API contract (0–100). */
+export function relevancePercentLabel(relevance: number | null | undefined): string {
+  return relevance == null ? "" : `rel ${relevance}%`;
+}
+
 /** Include-hint on a truncated card or omitted peek. */
 export function includeRestHint(remainderTokens: number, sectionLeaf?: string): string {
   if (remainderTokens <= 0) return "";
@@ -225,6 +230,21 @@ export function shouldDisableProveWhenStale(opts: {
   return (
     shouldDisableProveAgentWhenQuestionStale(opts.hasCompiledOnce, opts.lastCompiledTask, opts.currentTask) ||
     shouldDisableProveWhenBudgetStale(opts.hasCompiledOnce, opts.lastCompiledBudget, opts.currentBudget)
+  );
+}
+
+/** Agent recompiles independently, so only task drift—not budget drift—stales it. */
+export function shouldDisableAgentWhenStale(opts: {
+  hasCompiledOnce: boolean;
+  lastCompiledTask: string | null;
+  currentTask: string;
+  lastCompiledBudget: number | null;
+  currentBudget: number;
+}): boolean {
+  return shouldDisableProveAgentWhenQuestionStale(
+    opts.hasCompiledOnce,
+    opts.lastCompiledTask,
+    opts.currentTask
   );
 }
 

@@ -1,4 +1,4 @@
-import { Controller, Get } from "@nestjs/common";
+import { Controller, Get, Header } from "@nestjs/common";
 
 import { HostService } from "./host.service.js";
 
@@ -7,6 +7,7 @@ export class SamplesController {
   constructor(private readonly host: HostService) {}
 
   @Get("samples")
+  @Header("X-CC-Route-Owner", "nest")
   samples() {
     return this.host.samples();
   }
