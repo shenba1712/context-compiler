@@ -2,11 +2,19 @@
 
 import Link from "next/link";
 import { motion, useReducedMotion } from "framer-motion";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { useWorkspace } from "@/lib/workspace-context";
 import type { ExpandApiResult, SectionInfo } from "@/lib/types";
-import { includeRestHint, relevancePercentLabel, sectionLeaf, truncatedSectionMeta } from "@/lib/ux";
+import {
+  apiFailureMessage,
+  fetchWithBusyRetry,
+  includeRestHint,
+  packagingGapNote,
+  relevancePercentLabel,
+  sectionLeaf,
+  truncatedSectionMeta,
+} from "@/lib/ux";
 
 function metaFor(s: SectionInfo): string {
   if (s.truncated && s.full_tokens != null) {
@@ -36,7 +44,17 @@ export default function ResultsPage() {
   const [pending, setPending] = useState<Set<string>>(() => new Set());
   const [showAllRelevance, setShowAllRelevance] = useState(false);
   const [err, setErr] = useState("");
+  const autoPeekedHandle = useRef("");
   const reduceMotion = useReducedMotion();
+
+  useEffect(() => {
+    const first = compile?.budget_omitted_sections?.[0];
+    if (!compile || !first || autoPeekedHandle.current === compile.handle) return;
+    autoPeekedHandle.current = compile.handle;
+    void expand(first.id);
+    // expand is deliberately one-shot for each compile handle.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [compile?.handle]);
 
   if (!compile) {
     return (
@@ -54,13 +72,17 @@ export default function ResultsPage() {
     setErr("");
     setPending((current) => new Set(current).add(id));
     try {
-      const res = await fetch("/api/expand", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ handle: compile!.handle, section_id: id }),
-      });
+      const res = await fetchWithBusyRetry(
+        "/api/expand",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ handle: compile!.handle, section_id: id }),
+        },
+        () => setErr("Server busy — retrying this peek once…")
+      );
       const data = (await res.json()) as ExpandApiResult & { error?: string };
-      if (!res.ok) throw new Error(data.error || "Expand failed");
+      if (!res.ok) throw new Error(apiFailureMessage(res, data.error, "expand"));
       setPeek((p) => ({ ...p, [id]: data.markdown }));
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Expand failed");
@@ -85,6 +107,15 @@ export default function ResultsPage() {
   const selectedByRelevance = [...compile.selected_sections].sort(
     (a, b) => (b.relevance ?? -1) - (a.relevance ?? -1)
   );
+  const packaging = packagingGapNote(compile.selected_content_tokens, compile.tokens_used);
+
+  function dismissPeek(id: string) {
+    setPeek((current) => {
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
+  }
 
   return (
     <section>
@@ -111,7 +142,9 @@ export default function ResultsPage() {
             <div className="l">packed content</div>
           </div>
           <div className="stat">
-            <div className="v result-win">{compile.reduction_pct}%</div>
+            <div className={`v result-win${compile.reduction_pct === 0 ? " neutral-result" : ""}`}>
+              {compile.reduction_pct}%
+            </div>
             <div className="l">reduction</div>
           </div>
           <div className="stat">
@@ -121,6 +154,19 @@ export default function ResultsPage() {
             <div className="l">cost / read · ${compile.price_per_mtok}/Mtok</div>
           </div>
         </div>
+        <div className="badge-row" aria-label="Compile details">
+          <span className="badge">{compile.cache_hit ? "⚡ conversion cached" : "converted fresh"}</span>
+          <span className="badge">BM25 ranking</span>
+          <span className="badge">{compile.omitted_sections.length} omitted</span>
+          <span className="badge">{budgetOmitted.length} budget-blocked</span>
+        </div>
+        {packaging ? (
+          <p className="bucket-help">
+            {packaging}. Packed-content meters count section substance; the larger wire value includes safety
+            wrappers. The omitted-section manifest is inspectability metadata and is not sent in Prove/Agent
+            model context.
+          </p>
+        ) : null}
         <div className="bars" aria-label="Raw versus packed tokens">
           <div className="brow">
             <div className="blab">raw file</div>
@@ -233,7 +279,8 @@ export default function ResultsPage() {
             selectedByRelevance.map((s) => (
               <article key={s.id} className="scard-static in">
                 <div className="nm">
-                  {s.section} <span className="afaint">· {metaFor(s)}</span>
+                  {s.section} <span className="section-id">[{s.id}]</span>{" "}
+                  <span className="afaint">· {metaFor(s)}</span>
                 </div>
                 {s.matched_queries?.length ? (
                   <div className="section-queries" aria-label="Matched questions">
@@ -250,15 +297,40 @@ export default function ResultsPage() {
                   </pre>
                 ) : null}
                 {s.truncated && (s.remainder_tokens ?? 0) > 0 ? (
-                  <label className="include-lab">
-                    <input
-                      type="checkbox"
-                      disabled={proveStale}
-                      checked={proveExpandedIds.includes(s.id)}
-                      onChange={(ev) => setProveInclude(s.id, s.remainder_tokens ?? 0, ev.target.checked)}
-                    />{" "}
-                    {includeRestHint(s.remainder_tokens ?? 0, sectionLeaf(s.section))}
-                  </label>
+                  <>
+                    <div className="peek-actions">
+                      <label className="include-lab">
+                        <input
+                          type="checkbox"
+                          disabled={proveStale}
+                          checked={proveExpandedIds.includes(s.id)}
+                          onChange={(ev) => setProveInclude(s.id, s.remainder_tokens ?? 0, ev.target.checked)}
+                        />{" "}
+                        {includeRestHint(s.remainder_tokens ?? 0, sectionLeaf(s.section))}
+                      </label>
+                      <button
+                        className="btn quiet"
+                        type="button"
+                        disabled={pending.has(s.id) || Boolean(peek[s.id])}
+                        onClick={() => void expand(s.id)}
+                      >
+                        {pending.has(s.id) ? "Loading rest…" : "Peek rest"}
+                      </button>
+                    </div>
+                    {peek[s.id] ? (
+                      <details open>
+                        <summary>Unread remainder · section {s.id}</summary>
+                        <pre className="sectext peek" dir="auto">
+                          {peek[s.id].startsWith(s.text ?? "")
+                            ? peek[s.id].slice((s.text ?? "").length).trim()
+                            : peek[s.id]}
+                        </pre>
+                        <button className="btn quiet" type="button" onClick={() => dismissPeek(s.id)}>
+                          Dismiss peek
+                        </button>
+                      </details>
+                    ) : null}
+                  </>
                 ) : null}
               </article>
             ))
@@ -275,7 +347,8 @@ export default function ResultsPage() {
               {budgetOmitted.map((s) => (
                 <article key={s.id} className="scard-static">
                   <div className="nm">
-                    {s.section} <span className="afaint">· {metaFor(s)}</span>
+                    {s.section} <span className="section-id">[{s.id}]</span>{" "}
+                    <span className="afaint">· {metaFor(s)}</span>
                   </div>
                   <div className="row" style={{ marginTop: 8 }}>
                     <button
@@ -297,9 +370,15 @@ export default function ResultsPage() {
                     </label>
                   </div>
                   {peek[s.id] ? (
-                    <pre className="sectext peek" dir="auto">
-                      {peek[s.id]}
-                    </pre>
+                    <details open>
+                      <summary>Loaded peek · section {s.id}</summary>
+                      <pre className="sectext peek" dir="auto">
+                        {peek[s.id]}
+                      </pre>
+                      <button className="btn quiet" type="button" onClick={() => dismissPeek(s.id)}>
+                        Dismiss peek
+                      </button>
+                    </details>
                   ) : null}
                 </article>
               ))}
@@ -320,7 +399,8 @@ export default function ResultsPage() {
               {visibleRelevance.map((s) => (
                 <article key={s.id} className="scard-static">
                   <div className="nm">
-                    {s.section} <span className="afaint">· {metaFor(s)}</span>
+                    {s.section} <span className="section-id">[{s.id}]</span>{" "}
+                    <span className="afaint">· {metaFor(s)}</span>
                   </div>
                   <div className="row" style={{ marginTop: 8 }}>
                     <button
@@ -342,9 +422,15 @@ export default function ResultsPage() {
                     </label>
                   </div>
                   {peek[s.id] ? (
-                    <pre className="sectext peek" dir="auto">
-                      {peek[s.id]}
-                    </pre>
+                    <details open>
+                      <summary>Loaded peek · section {s.id}</summary>
+                      <pre className="sectext peek" dir="auto">
+                        {peek[s.id]}
+                      </pre>
+                      <button className="btn quiet" type="button" onClick={() => dismissPeek(s.id)}>
+                        Dismiss peek
+                      </button>
+                    </details>
                   ) : null}
                 </article>
               ))}
