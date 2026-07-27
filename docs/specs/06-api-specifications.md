@@ -216,7 +216,7 @@ JSON (`4kb`): `{ "parity_handle": "<32 hex>" }`.
 
 ---
 
-## 2. MCP — `server.ts`
+## 2. MCP — `src/mcp/server.ts`
 
 Transport: stdio JSON-RPC via `@modelcontextprotocol/sdk`.  
 Root: `CC_ROOT` (default home directory). Budgets clamped with MCP floors.

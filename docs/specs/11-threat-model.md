@@ -34,13 +34,13 @@
 ## 3. Trust boundaries
 
 ```
-[Browser] --HTTP--> [web.ts] --subprocess--> [markitdown]
+[Browser] --HTTP--> [http/app.ts] --subprocess--> [markitdown]
                          |
                          +--HTTPS--> [LLM providers]   (opt-in)
                          |
                          +--memory--> handles / rate maps / parity
 
-[MCP client] --stdio--> [server.ts] --realpath--> files under CC_ROOT
+[MCP client] --stdio--> [mcp/server.ts] --realpath--> files under CC_ROOT
                               |
                               +--subprocess--> [markitdown]
 ```
@@ -53,7 +53,7 @@ Web never accepts caller-supplied paths. MCP accepts paths only after realpath c
 
 | ID | Threat | Mitigation in code | Residual risk |
 | --- | --- | --- | --- |
-| T1 | Path escape via `../` or symlink under root | `path-guard.ts` realpaths root and target before prefix check | Mis-set `CC_ROOT` to a broad tree still exposes that tree |
+| T1 | Path escape via `../` or symlink under root | `src/mcp/path-guard.ts` realpaths root and target before prefix check | Mis-set `CC_ROOT` to a broad tree still exposes that tree |
 | T2 | Web path traversal / arbitrary read | Opaque handles; resolve must stay under upload dir | Handle guess entropy; process memory disclosure out of scope |
 | T3 | Zip / decompression bomb | Upload ZIP CD checks; Linux `ulimit -v`; size limits; convert timeout | Novel archive tricks; non-Linux without mem cap relies more on precheck |
 | T4 | Oversized upload / convert DoS | `CC_MAX_FILE_BYTES`, multer limits, convert concurrency/queue → 503 | Distributed many-IP flood still costs CPU until platform limits |

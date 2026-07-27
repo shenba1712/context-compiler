@@ -234,7 +234,7 @@ MCP tool failure / conversion failure:
 
 ## 7. In-memory / ephemeral stores (not durable)
 
-### Upload handles (`web.ts`)
+### Upload handles (`src/http/app.ts`)
 
 ```ts
 Map<string, { path: string; ts: number }>

@@ -89,9 +89,9 @@ Provider surface for opt-in features. Detection from env, tried in fixed priorit
 
 Demo-controlled loop over the same two tools MCP exposes. The web path uses the token-budget slider as both the first compile budget and a soft **content-token** reading ceiling (capped at file size). The loop stops *starting* new expands once `tokens_read` reaches that ceiling (an in-flight expand may finish slightly over). When start budget already equals the ceiling, recompile is omitted from the decide prompt. If pack left nothing omitted (tiny / fully covered docs), the agent answers once with `stopped_reason: "whole_file"`. Unusable decisions collapse to “answer with what we have.”
 
-### Surfaces — `server.ts`, `web.ts`, guards
+### Surfaces — `src/mcp/server.ts`, `src/http/app.ts`, guards
 
-`server.ts` registers exactly two tools. `path-guard.ts` realpaths both root and target before the prefix check (closes symlink escape). Errors return in-band as `{error: ...}` JSON.
+`src/mcp/server.ts` registers exactly two tools. `src/mcp/path-guard.ts` realpaths both root and target before the prefix check (closes symlink escape). Errors return in-band as `{error: ...}` JSON.
 
 The hosted demo is a **single Docker image, dual process**: Next (`apps/web`) on the public `PORT`, Nest (`apps/api`) on localhost `API_PORT`. Next proxies `/api/*`, `/healthz`, and `/metrics` at runtime to Nest. Nest controllers own `GET /healthz`, `/api/config`, and `/api/samples` via `HostService` over `src/http/config.ts` + `samples-catalog.ts`. Upload/SSE routes stay on `src/http/app.ts` (Express app mounted by Nest; rate-limited per IP). The product UI is routed under `/workspace`. Sample bytes live under `public/samples/` (served by the API process and symlinked into the Next `public/` tree). API routes: `/api/compile`, `/api/expand`, `/api/answer`, `/api/measure`, `/api/samples`, `/api/config`, `/api/agent` (SSE; aborts LLM work on disconnect), `/api/agent-parity` (one-shot opaque handle after an agent run). Upload validation lives in `src/engine/upload-guard.ts` (extension allowlist, magic bytes, archive decompression-bomb limit). Shared clamps live in `src/engine/config.ts`; `src/engine/env.ts` parses numbers safely so bad env cannot become NaN and silently disable rate limiting.
 
