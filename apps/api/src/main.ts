@@ -2,7 +2,7 @@ import "reflect-metadata";
 
 import { NestFactory } from "@nestjs/core";
 import type { NestExpressApplication } from "@nestjs/platform-express";
-import type { Express } from "express";
+import type { Express, NextFunction, Request, Response } from "express";
 
 import { AppModule } from "./app.module.js";
 import { HostService } from "./host.service.js";
@@ -32,7 +32,16 @@ async function bootstrap() {
     bodyParser: false,
     logger: ["error", "warn", "log"],
   });
-  nest.use(httpApp);
+  // These reads are implemented by Nest controllers. Letting the shared
+  // Express app answer them here would shadow the controllers because Nest
+  // middleware is registered before controller routes.
+  nest.use((req: Request, res: Response, next: NextFunction) => {
+    const nestOwned =
+      req.method === "GET" &&
+      (req.path === "/healthz" || req.path === "/api/config" || req.path === "/api/samples");
+    if (nestOwned) return next();
+    return httpApp(req, res, next);
+  });
 
   const port = intEnv("API_PORT", 4000);
   const host = process.env.API_HOST ?? "127.0.0.1";

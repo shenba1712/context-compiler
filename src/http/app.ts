@@ -12,6 +12,7 @@ import {
   realpathSync,
   statSync,
   unlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -248,6 +249,10 @@ function saveUpload(file: Express.Multer.File): { path: string; handle: string }
       }
     }
   }
+  // A content-addressed destination may be reused by measure → compile. Keep
+  // its filesystem TTL aligned with the newly issued live handle.
+  const now = new Date();
+  utimesSync(dest, now, now);
   const handle = randomBytes(16).toString("hex");
   handles.set(handle, { path: dest, ts: Date.now() });
   return { path: dest, handle };

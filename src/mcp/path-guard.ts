@@ -12,7 +12,15 @@ import { homedir } from "node:os";
 import { resolve, sep } from "node:path";
 
 export function checkPathWithin(root: string, filePath: string): string {
-  const realRoot = realpathSync(resolve(root));
+  let realRoot: string;
+  try {
+    realRoot = realpathSync(resolve(root));
+    if (!statSync(realRoot).isDirectory()) throw new Error("not a directory");
+  } catch {
+    // Native ENOENT messages include the operator's absolute CC_ROOT. MCP
+    // responses are client-visible, so keep configuration failures path-free.
+    throw new Error("The configured allowed root is not a readable directory.");
+  }
   const requested = resolve(filePath.replace(/^~(?=$|\/)/, homedir()));
   const st = statSync(requested, { throwIfNoEntry: false });
   if (!st?.isFile()) {

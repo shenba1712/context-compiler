@@ -48,11 +48,14 @@ export function samplesPayload(): SampleRow[] {
 export function warmSampleTokenCache(): Promise<void> {
   if (sampleWarmPromise) return sampleWarmPromise;
   sampleWarmPromise = (async () => {
+    let hadFailure = false;
     for (const s of SAMPLES_MANIFEST) {
+      if (typeof sampleTokByKey.get(s.key) === "number") continue;
       try {
         const markdown = await fullMarkdown(resolveSampleFile(s.file));
         sampleTokByKey.set(s.key, countTokens(markdown));
       } catch (e) {
+        hadFailure = true;
         log.warn("could not measure sample", {
           file: s.file,
           err: e instanceof Error ? e.message : String(e),
@@ -60,6 +63,9 @@ export function warmSampleTokenCache(): Promise<void> {
         sampleTokByKey.set(s.key, null);
       }
     }
+    // Nulls are transient failures (converter startup, queue pressure, etc.).
+    // Permit a later catalog request to retry only those entries.
+    if (hadFailure) sampleWarmPromise = null;
   })();
   return sampleWarmPromise;
 }

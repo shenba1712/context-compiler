@@ -47,7 +47,10 @@ server.registerTool(
       return { content: [{ type: "text", text: JSON.stringify(result) }] };
     } catch (e) {
       const msg = e instanceof ConversionError || e instanceof Error ? e.message : String(e);
-      return { content: [{ type: "text", text: JSON.stringify({ error: msg }) }] };
+      return {
+        isError: true,
+        content: [{ type: "text", text: JSON.stringify({ error: msg }) }],
+      };
     }
   }
 );
@@ -75,7 +78,10 @@ server.registerTool(
       return { content: [{ type: "text", text: JSON.stringify(result) }] };
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      return { content: [{ type: "text", text: JSON.stringify({ error: msg }) }] };
+      return {
+        isError: true,
+        content: [{ type: "text", text: JSON.stringify({ error: msg }) }],
+      };
     }
   }
 );
