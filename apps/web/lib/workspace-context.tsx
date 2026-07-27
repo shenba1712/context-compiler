@@ -20,6 +20,7 @@ type WorkspaceState = {
   samples: Sample[];
   loadError: string;
   file: File | null;
+  filePicked: string;
   sampleKey: string | null;
   task: string;
   budget: number;
@@ -34,6 +35,7 @@ type WorkspaceState = {
   sessionSavedTokens: number;
   sessionSavedUsd: number;
   agentParityHandle: string | null;
+  pendingRun: "prove" | "agent" | null;
   hydrated: boolean;
   setFile: (f: File | null) => void;
   setSampleKey: (k: string | null) => void;
@@ -47,6 +49,8 @@ type WorkspaceState = {
   setProveInclude: (id: string, tokens: number, included: boolean) => void;
   clearProveIncludes: () => void;
   setAgentParityHandle: (h: string | null) => void;
+  requestRun: (action: "prove" | "agent") => void;
+  consumeRun: (action: "prove" | "agent") => boolean;
   questionStale: boolean;
   budgetStale: boolean;
   proveStale: boolean;
@@ -61,6 +65,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [samples, setSamples] = useState<Sample[]>([]);
   const [loadError, setLoadError] = useState("");
   const [file, setFileState] = useState<File | null>(null);
+  const [filePicked, setFilePicked] = useState("");
   const [sampleKey, setSampleKeyState] = useState<string | null>(null);
   const [task, setTask] = useState("");
   const [budget, setBudget] = useState(4000);
@@ -77,6 +82,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [sessionSavedTokens, setSessionSavedTokens] = useState(0);
   const [sessionSavedUsd, setSessionSavedUsd] = useState(0);
   const [agentParityHandle, setAgentParityHandle] = useState<string | null>(null);
+  const [pendingRun, setPendingRun] = useState<"prove" | "agent" | null>(null);
 
   useEffect(() => {
     const saved = loadPersistedWorkspace();
@@ -142,6 +148,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         setFileState(
           new File([buf], s.file, { type: res.headers.get("content-type") || "application/octet-stream" })
         );
+        setFilePicked(`Sample: ${s.nm}`);
         if (s.tok != null) {
           setPresetsState(computePresets(s.tok));
         }
@@ -192,6 +199,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
 
   const setFile = useCallback((f: File | null) => {
     setFileState(f);
+    setFilePicked(f?.name ?? "");
   }, []);
 
   const setSampleKey = useCallback((k: string | null) => {
@@ -222,6 +230,16 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     setProveIncludeState((prev) => applyProveIncludeChange(prev, id, tokens, included));
   }, []);
 
+  const requestRun = useCallback((action: "prove" | "agent") => setPendingRun(action), []);
+  const consumeRun = useCallback(
+    (action: "prove" | "agent") => {
+      if (pendingRun !== action) return false;
+      setPendingRun(null);
+      return true;
+    },
+    [pendingRun]
+  );
+
   const questionStale = Boolean(compile && compiledTask !== null && task.trim() !== compiledTask.trim());
   const budgetStale = Boolean(compile && compiledBudget !== null && budget !== compiledBudget);
   const proveStale = questionStale || budgetStale;
@@ -239,6 +257,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       samples,
       loadError,
       file,
+      filePicked,
       sampleKey,
       task,
       budget,
@@ -253,6 +272,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       sessionSavedTokens,
       sessionSavedUsd,
       agentParityHandle,
+      pendingRun,
       hydrated,
       setFile,
       setSampleKey,
@@ -266,6 +286,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       setProveInclude,
       clearProveIncludes,
       setAgentParityHandle,
+      requestRun,
+      consumeRun,
       questionStale,
       budgetStale,
       proveStale,
@@ -275,6 +297,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       samples,
       loadError,
       file,
+      filePicked,
       sampleKey,
       task,
       budget,
@@ -289,6 +312,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       sessionSavedTokens,
       sessionSavedUsd,
       agentParityHandle,
+      pendingRun,
       hydrated,
       setFile,
       setSampleKey,
@@ -297,6 +321,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       setProveInclude,
       clearProveIncludes,
       setPresets,
+      consumeRun,
       questionStale,
       budgetStale,
       proveStale,

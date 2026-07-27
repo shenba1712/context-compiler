@@ -82,3 +82,98 @@ export function shouldDisableAgentWhenStale(opts: {
     opts.lastCompiledTask.trim() !== opts.currentTask.trim()
   );
 }
+
+export type RetryContext = "compile" | "prove" | "agent" | "agentParity" | "expand" | "measure";
+
+export function retryControlHint(context: RetryContext): string {
+  switch (context) {
+    case "compile":
+      return " Use Compile when ready.";
+    case "prove":
+      return " Use Prove when ready.";
+    case "agent":
+      return " Use Run agent when ready.";
+    case "agentParity":
+      return " Use Compare to full file when ready, or run the agent again.";
+    case "expand":
+      return " Use Peek again when ready.";
+    case "measure":
+      return " Select the file again, or continue and Compile.";
+  }
+}
+
+export function apiFailureMessage(
+  response: Response,
+  error: string | undefined,
+  context: RetryContext
+): string {
+  const base = error || `Request failed (${response.status})`;
+  if (response.status === 429) {
+    const retryAfter = response.headers.get("Retry-After");
+    return `${base}${retryAfter ? ` Retry after about ${retryAfter}s.` : ""}${retryControlHint(context)}`;
+  }
+  if (response.status === 503) {
+    const retryAfter = response.headers.get("Retry-After");
+    return `${base}${retryAfter ? ` Retry in about ${retryAfter}s.` : " Retry in a few seconds."}${retryControlHint(context)}`;
+  }
+  return base;
+}
+
+export const BUSY_503_RETRY_MS_MIN = 400;
+export const BUSY_503_RETRY_MS_MAX = 900;
+
+export function shouldRetryBusy503(status: number, attemptIndex: number): boolean {
+  return status === 503 && attemptIndex === 0;
+}
+
+export function busy503RetryDelayMs(random: () => number = Math.random): number {
+  return BUSY_503_RETRY_MS_MIN +
+    Math.floor(random() * (BUSY_503_RETRY_MS_MAX - BUSY_503_RETRY_MS_MIN + 1));
+}
+
+export async function fetchWithBusyRetry(
+  input: RequestInfo | URL,
+  init: RequestInit,
+  onRetry?: () => void
+): Promise<Response> {
+  const response = await fetch(input, init);
+  if (!shouldRetryBusy503(response.status, 0)) return response;
+  await response.body?.cancel();
+  onRetry?.();
+  await new Promise<void>((resolve, reject) => {
+    const timer = window.setTimeout(resolve, busy503RetryDelayMs());
+    const signal = init.signal;
+    signal?.addEventListener(
+      "abort",
+      () => {
+        window.clearTimeout(timer);
+        reject(new DOMException("Aborted", "AbortError"));
+      },
+      { once: true }
+    );
+  });
+  return fetch(input, init);
+}
+
+const ALLOWED_UPLOAD_EXT = /\.(docx|pdf|xlsx|pptx|csv|md|markdown|txt|html?)$/i;
+
+export function validateUploadFile(file: File, maxBytes: number): string | null {
+  if (file.size === 0) return `"${file.name}" is empty. Pick a non-empty document.`;
+  if (file.size > maxBytes) {
+    const maxMb = maxBytes / (1024 * 1024);
+    return `"${file.name}" is ${(file.size / 1e6).toFixed(1)} MB, over the ${maxMb.toFixed(
+      maxMb % 1 ? 1 : 0
+    )} MB limit. Pick a smaller file.`;
+  }
+  if (!ALLOWED_UPLOAD_EXT.test(file.name)) {
+    return `Unsupported file type. Use PDF, DOCX, XLSX, PPTX, HTML, CSV, TXT, or Markdown. Images are not supported.`;
+  }
+  return null;
+}
+
+export function packagingGapNote(contentTokens: number, wireTokens: number): string | null {
+  if (contentTokens <= 0 || wireTokens <= contentTokens) return null;
+  const gap = wireTokens - contentTokens;
+  if (gap / contentTokens <= 0.1) return null;
+  return `${contentTokens.toLocaleString()} content tokens · ~${wireTokens.toLocaleString()} with wrappers`;
+}

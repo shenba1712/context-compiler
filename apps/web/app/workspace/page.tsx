@@ -5,7 +5,15 @@ import { useRef, useState } from "react";
 
 import { useWorkspace } from "@/lib/workspace-context";
 import type { CompileApiResult, MeasureApiResult, Sample } from "@/lib/types";
-import { computePresets, DEFAULT_PRESETS, SLIDER_MAX, SLIDER_MIN } from "@/lib/ux";
+import {
+  apiFailureMessage,
+  computePresets,
+  DEFAULT_PRESETS,
+  fetchWithBusyRetry,
+  SLIDER_MAX,
+  SLIDER_MIN,
+  validateUploadFile,
+} from "@/lib/ux";
 
 async function fileFromSample(s: Sample, signal: AbortSignal): Promise<File> {
   const res = await fetch(`/samples/${s.file}`, { signal });
@@ -18,11 +26,13 @@ export default function WorkspaceCompilePage() {
   const router = useRouter();
   const measureSeq = useRef(0);
   const sampleAbort = useRef<AbortController | null>(null);
+  const compileAbort = useRef<AbortController | null>(null);
   const {
     config,
     samples,
     loadError,
     file,
+    filePicked,
     sampleKey,
     task,
     budget,
@@ -37,10 +47,11 @@ export default function WorkspaceCompilePage() {
     setRawTokensHint,
     setCompile,
     clearCompile,
+    requestRun,
   } = useWorkspace();
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
-  const [picked, setPicked] = useState("");
+  const [loadingDetail, setLoadingDetail] = useState("");
 
   async function measureUpload(f: File) {
     const seq = ++measureSeq.current;
@@ -49,10 +60,14 @@ export default function WorkspaceCompilePage() {
     try {
       const fd = new FormData();
       fd.append("file", f);
-      const res = await fetch("/api/measure", { method: "POST", body: fd });
+      const res = await fetchWithBusyRetry(
+        "/api/measure",
+        { method: "POST", body: fd },
+        () => setDocSizeNote("Server busy — retrying size check once…")
+      );
       const d = (await res.json()) as MeasureApiResult;
       if (seq !== measureSeq.current) return;
-      if (d.error) throw new Error(d.error);
+      if (!res.ok || d.error) throw new Error(apiFailureMessage(res, d.error, "measure"));
       const p = computePresets(
         d.raw_tokens,
         config?.web_budget_min ?? SLIDER_MIN,
@@ -90,7 +105,6 @@ export default function WorkspaceCompilePage() {
       const f = await fileFromSample(s, controller.signal);
       if (controller.signal.aborted || seq !== measureSeq.current) return;
       setFile(f);
-      setPicked(`Sample: ${s.nm}`);
       if (s.q[0]) setTask(s.q[0]);
       if (s.tok != null) {
         const p = computePresets(
@@ -124,27 +138,58 @@ export default function WorkspaceCompilePage() {
       setErr("Upload a file or pick a sample.");
       return;
     }
+    const validationError = validateUploadFile(file, config?.max_file_bytes ?? 20 * 1024 * 1024);
+    if (validationError) {
+      setErr(validationError);
+      return;
+    }
     if (!task.trim()) {
       setErr("Enter a question / task.");
       return;
     }
+    const controller = new AbortController();
+    compileAbort.current?.abort();
+    compileAbort.current = controller;
     setBusy(true);
+    setLoadingDetail("Converting a file for the first time can take a few seconds; cached files are instant.");
     try {
       const fd = new FormData();
       fd.append("file", file);
       fd.append("task", task.trim());
       fd.append("token_budget", String(budget));
-      const res = await fetch("/api/compile", { method: "POST", body: fd });
+      const res = await fetchWithBusyRetry(
+        "/api/compile",
+        { method: "POST", body: fd, signal: controller.signal },
+        () => setLoadingDetail("Server busy — retrying once…")
+      );
       const data = (await res.json()) as CompileApiResult & { error?: string };
-      if (!res.ok) throw new Error(data.error || `Compile failed (${res.status})`);
+      if (!res.ok) throw new Error(apiFailureMessage(res, data.error, "compile"));
       setCompile(data, task.trim(), budget);
       setRawTokensHint(data.raw_tokens);
       router.push("/workspace/results");
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Compile failed");
+      setErr(
+        e instanceof Error && e.name === "AbortError"
+          ? "Compile cancelled."
+          : e instanceof Error
+            ? e.message
+            : "Compile failed"
+      );
     } finally {
       setBusy(false);
+      setLoadingDetail("");
+      if (compileAbort.current === controller) compileAbort.current = null;
     }
+  }
+
+  function launch(action: "prove" | "agent") {
+    setErr("");
+    if (!file) return setErr("Upload a file or pick a sample.");
+    if (!task.trim()) return setErr("Enter a question / task.");
+    const validationError = validateUploadFile(file, config?.max_file_bytes ?? 20 * 1024 * 1024);
+    if (validationError) return setErr(validationError);
+    requestRun(action);
+    router.push(`/workspace/${action}`);
   }
 
   const pool = config?.rate_limit ?? 100;
@@ -175,10 +220,19 @@ export default function WorkspaceCompilePage() {
               sampleAbort.current?.abort();
               ++measureSeq.current;
               const f = ev.target.files?.[0] ?? null;
+              const validationError = f
+                ? validateUploadFile(f, config?.max_file_bytes ?? 20 * 1024 * 1024)
+                : null;
+              if (validationError) {
+                ev.target.value = "";
+                setErr(validationError);
+                setFile(null);
+                return;
+              }
+              setErr("");
               clearCompile();
               setSampleKey(null);
               setFile(f);
-              setPicked(f ? f.name : "");
               if (f) void measureUpload(f);
               else {
                 setDocSizeNote("");
@@ -187,9 +241,9 @@ export default function WorkspaceCompilePage() {
               }
             }}
           />
-          {picked ? (
+          {filePicked ? (
             <p className="filepicked" role="status">
-              {picked}
+              {filePicked}
             </p>
           ) : null}
 
@@ -225,7 +279,11 @@ export default function WorkspaceCompilePage() {
             id="task"
             rows={2}
             value={task}
-            onChange={(ev) => setTask(ev.target.value)}
+            onChange={(ev) => {
+              setTask(ev.target.value);
+              ev.currentTarget.style.height = "auto";
+              ev.currentTarget.style.height = `${ev.currentTarget.scrollHeight}px`;
+            }}
             onKeyDown={(ev) => {
               if (ev.key === "Enter" && !ev.shiftKey && !ev.nativeEvent.isComposing) {
                 ev.preventDefault();
@@ -311,10 +369,41 @@ export default function WorkspaceCompilePage() {
               Host setup could not load: {loadError}
             </div>
           ) : null}
+          {busy ? (
+            <div className="loading-banner" role="status" aria-live="polite" aria-busy="true">
+              <span className="spinner" aria-hidden="true" />
+              <span>
+                <strong>Compiling…</strong>
+                <small>{loadingDetail}</small>
+              </span>
+            </div>
+          ) : null}
 
           <div className="row">
             <button className="btn primary" type="submit" disabled={busy}>
               {busy ? "Compiling…" : "Compile"}
+            </button>
+            {busy ? (
+              <button className="btn ghost" type="button" onClick={() => compileAbort.current?.abort()}>
+                Cancel
+              </button>
+            ) : null}
+            <button
+              className="btn quiet"
+              type="button"
+              disabled={busy || !config?.llm_available}
+              onClick={() => launch("prove")}
+              title="Skip compile results and compare full-file vs budgeted answers"
+            >
+              Prove…
+            </button>
+            <button
+              className="btn quiet"
+              type="button"
+              disabled={busy || !config?.llm_available}
+              onClick={() => launch("agent")}
+            >
+              Run agent ▸
             </button>
           </div>
         </form>
@@ -334,6 +423,17 @@ export default function WorkspaceCompilePage() {
                     ? " (available here)."
                     : ` (${config.llm_disabled_reason || "not configured here"}).`
                   : "."}
+              </li>
+              <li>
+                Prove costs <strong>{config?.rate_cost_answer ?? 4}</strong> points (about{" "}
+                <strong>{Math.max(1, Math.floor(pool / (config?.rate_cost_answer ?? 4)))}</strong> runs per
+                window); Agent costs <strong>{config?.rate_cost_agent ?? 12}</strong> (about{" "}
+                <strong>{Math.max(1, Math.floor(pool / (config?.rate_cost_agent ?? 12)))}</strong>).
+              </li>
+              <li>
+                Full-file comparisons cap context at about{" "}
+                <strong>{(config?.answer_context_cap ?? 60_000).toLocaleString()}</strong> tokens; at most{" "}
+                <strong>{config?.max_concurrent_llm ?? 2}</strong> LLM jobs run concurrently.
               </li>
             </ul>
           </div>
