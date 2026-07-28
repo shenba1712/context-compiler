@@ -6,6 +6,8 @@ apps/**/.next/
 .DS_Store
 .idea/
 .test-tmp/
+test-results/
+playwright-report/
 
 
 # Internal notes (local only; not shipped in the repo)
