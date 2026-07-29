@@ -107,3 +107,30 @@ export type AnswerApiResult = {
   };
   error?: string;
 };
+
+export type ProveRunStatus = "running" | "succeeded" | "failed" | "cancelled";
+
+export type ProveRunSourceIdentity = Readonly<{
+  documentName: string;
+  sampleKey: string | null;
+  size: number;
+  type: string;
+  lastModified: number;
+}>;
+
+export type ProveRunSnapshot = Readonly<{
+  id: string;
+  retryOf: string | null;
+  task: string;
+  budget: number;
+  compileHandle: string | null;
+  expandedIds: readonly string[];
+  expandedTokenSum: number;
+  source: ProveRunSourceIdentity;
+  sourceFile: File;
+  status: ProveRunStatus;
+  result: AnswerApiResult | null;
+  error: string | null;
+  submittedAt: string;
+  completedAt: string | null;
+}>;

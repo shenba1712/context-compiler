@@ -4,15 +4,25 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 
 import { useWorkspace } from "@/lib/workspace-context";
-import type { AnswerApiResult } from "@/lib/types";
+import type { AnswerApiResult, ProveRunSnapshot } from "@/lib/types";
 import { apiFailureMessage, fetchWithBusyRetry, packagingGapNote } from "@/lib/ux";
+
+function freezeResult(result: AnswerApiResult): AnswerApiResult {
+  const copy = structuredClone(result);
+  Object.freeze(copy.full);
+  if (copy.compiled.expanded_ids) Object.freeze(copy.compiled.expanded_ids);
+  Object.freeze(copy.compiled);
+  return Object.freeze(copy);
+}
 
 export default function ProvePage() {
   const {
     file,
+    sampleKey,
     task,
     budget,
     compile,
+    compiledSnapshot,
     config,
     workspaceStatus,
     proveExpandedIds,
@@ -20,67 +30,154 @@ export default function ProvePage() {
     pendingRun,
     consumeRun,
   } = useWorkspace();
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
-  const [result, setResult] = useState<AnswerApiResult | null>(null);
+  const [run, setRun] = useState<ProveRunSnapshot | null>(null);
+  const [validationError, setValidationError] = useState("");
   const [loadingDetail, setLoadingDetail] = useState("");
-  const abortRef = useRef<AbortController | null>(null);
+  const attemptSeq = useRef(0);
+  const activeAttempt = useRef<{ id: string; controller: AbortController } | null>(null);
 
   const llmOk = config?.llm_available ?? false;
   const { proveStale, sourceUnavailable } = workspaceStatus;
+  const busy = run?.status === "running";
 
-  async function runProve() {
-    setErr("");
-    setResult(null);
-    if (!file) {
-      setErr("Choose a document first.");
+  async function runProve(retrySnapshot?: ProveRunSnapshot) {
+    setValidationError("");
+    if (!retrySnapshot) {
+      if (!file) {
+        setValidationError("Choose a document first.");
+        return;
+      }
+      if (!task.trim()) {
+        setValidationError("Enter a question first.");
+        return;
+      }
+      if (proveStale) {
+        setValidationError("Task or budget changed — recompile first.");
+        return;
+      }
+      if (!llmOk) {
+        setValidationError("This host has no LLM API key. Prove is disabled.");
+        return;
+      }
+    } else if (!llmOk) {
+      setValidationError("This host has no LLM API key. Prove is disabled.");
       return;
     }
-    if (!task.trim()) {
-      setErr("Enter a question first.");
+
+    const sourceFile = retrySnapshot?.sourceFile ?? file;
+    if (!sourceFile) {
+      setValidationError("Choose a document first.");
       return;
     }
-    if (proveStale) {
-      setErr("Task or budget changed — recompile first.");
-      return;
-    }
-    if (!llmOk) {
-      setErr("This host has no LLM API key. Prove is disabled.");
-      return;
-    }
+
+    const attemptNumber = ++attemptSeq.current;
+    const id = `prove-${Date.now()}-${attemptNumber}`;
+    const submittedAt = new Date().toISOString();
+    const expandedIds = retrySnapshot
+      ? retrySnapshot.expandedIds
+      : Object.freeze(compile ? [...proveExpandedIds] : []);
+    const source = retrySnapshot
+      ? retrySnapshot.source
+      : Object.freeze({
+          documentName: compiledSnapshot?.documentName ?? sourceFile.name,
+          sampleKey,
+          size: sourceFile.size,
+          type: sourceFile.type,
+          lastModified: sourceFile.lastModified,
+        });
+    const runningSnapshot: ProveRunSnapshot = Object.freeze({
+      id,
+      retryOf: retrySnapshot?.id ?? null,
+      task: retrySnapshot?.task ?? task.trim(),
+      budget: retrySnapshot?.budget ?? budget,
+      compileHandle: retrySnapshot ? retrySnapshot.compileHandle : (compile?.handle ?? null),
+      expandedIds,
+      expandedTokenSum:
+        retrySnapshot?.expandedTokenSum ?? (compile && expandedIds.length ? proveExpandedTokenSum : 0),
+      source,
+      sourceFile,
+      status: "running",
+      result: null,
+      error: null,
+      submittedAt,
+      completedAt: null,
+    });
+
     const controller = new AbortController();
-    abortRef.current?.abort();
-    abortRef.current = controller;
-    setBusy(true);
+    activeAttempt.current?.controller.abort();
+    activeAttempt.current = { id, controller };
+    setRun(runningSnapshot);
     setLoadingDetail("Asking the model twice: full file vs your budgeted compile.");
     try {
       const fd = new FormData();
-      fd.append("file", file);
-      fd.append("task", task.trim());
-      fd.append("token_budget", String(budget));
-      if (compile && proveExpandedIds.length) fd.append("expanded_ids", JSON.stringify(proveExpandedIds));
+      fd.append("file", runningSnapshot.sourceFile);
+      fd.append("task", runningSnapshot.task);
+      fd.append("token_budget", String(runningSnapshot.budget));
+      if (runningSnapshot.expandedIds.length) {
+        fd.append("expanded_ids", JSON.stringify(runningSnapshot.expandedIds));
+      }
       const res = await fetchWithBusyRetry(
         "/api/answer",
         { method: "POST", body: fd, signal: controller.signal },
-        () => setLoadingDetail("Server busy — retrying once…")
+        () => {
+          if (activeAttempt.current?.id === id) setLoadingDetail("Server busy — retrying once…");
+        }
       );
       const data = (await res.json()) as AnswerApiResult & { error?: string };
       if (!res.ok) throw new Error(apiFailureMessage(res, data.error, "prove"));
-      setResult(data);
+      if (activeAttempt.current?.id !== id || controller.signal.aborted) return;
+      setRun(
+        Object.freeze({
+          ...runningSnapshot,
+          status: "succeeded",
+          result: freezeResult(data),
+          completedAt: new Date().toISOString(),
+        })
+      );
     } catch (e) {
-      setErr(
-        e instanceof Error && e.name === "AbortError"
-          ? "Prove cancelled."
-          : e instanceof Error
-            ? e.message
-            : "Prove failed"
+      if (activeAttempt.current?.id !== id) return;
+      const cancelled = e instanceof Error && e.name === "AbortError";
+      setRun(
+        Object.freeze({
+          ...runningSnapshot,
+          status: cancelled ? "cancelled" : "failed",
+          error: cancelled ? "Prove cancelled." : e instanceof Error ? e.message : "Prove failed",
+          completedAt: new Date().toISOString(),
+        })
       );
     } finally {
-      setBusy(false);
-      setLoadingDetail("");
-      if (abortRef.current === controller) abortRef.current = null;
+      if (activeAttempt.current?.id === id) {
+        activeAttempt.current = null;
+        setLoadingDetail("");
+      }
     }
   }
+
+  function cancelRun() {
+    const active = activeAttempt.current;
+    if (!active) return;
+    activeAttempt.current = null;
+    active.controller.abort();
+    setLoadingDetail("");
+    setRun((current) =>
+      current?.id === active.id && current.status === "running"
+        ? Object.freeze({
+            ...current,
+            status: "cancelled",
+            error: "Prove cancelled.",
+            completedAt: new Date().toISOString(),
+          })
+        : current
+    );
+  }
+
+  useEffect(
+    () => () => {
+      activeAttempt.current?.controller.abort();
+      activeAttempt.current = null;
+    },
+    []
+  );
 
   useEffect(() => {
     if (pendingRun !== "prove" || !consumeRun("prove")) return;
@@ -94,10 +191,20 @@ export default function ProvePage() {
       <h2 className="sec">Prove answer parity</h2>
       <p className="sub">
         Same question answered from the full file and from your compiled context — side by side.
-        {compile && proveExpandedIds.length > 0
-          ? ` Includes ${proveExpandedIds.length} expanded section(s) (+${proveExpandedTokenSum.toLocaleString()} tokens).`
+        {(run?.expandedIds.length ?? (compile ? proveExpandedIds.length : 0)) > 0
+          ? ` Includes ${(run?.expandedIds.length ?? proveExpandedIds.length).toLocaleString()} expanded section(s) (+${(
+              run?.expandedTokenSum ?? proveExpandedTokenSum
+            ).toLocaleString()} tokens).`
           : " Mark Include in Prove on Results to merge omitted sections."}
       </p>
+      {run ? (
+        <div className="hostnote" data-testid="prove-run-snapshot">
+          <strong>Submitted snapshot:</strong> “{run.task}” · {run.budget.toLocaleString()} token budget ·{" "}
+          {run.source.documentName}
+          {run.compileHandle ? ` · compile ${run.compileHandle}` : ""}
+          {run.expandedIds.length ? ` · includes ${run.expandedIds.join(", ")}` : ""}
+        </div>
+      ) : null}
       {compile && proveStale ? (
         <p className="hostnote">
           Stale compile. <Link href="/workspace">Recompile</Link> before proving.
@@ -120,11 +227,16 @@ export default function ProvePage() {
           disabled={busy || proveStale || sourceUnavailable || !llmOk}
           onClick={() => void runProve()}
         >
-          {busy ? "Proving…" : "Prove"}
+          {busy ? "Proving…" : run ? "Prove again" : "Prove"}
         </button>
         {busy ? (
-          <button className="btn ghost" type="button" onClick={() => abortRef.current?.abort()}>
+          <button className="btn ghost" type="button" onClick={cancelRun}>
             Cancel
+          </button>
+        ) : null}
+        {run && (run.status === "failed" || run.status === "cancelled") ? (
+          <button className="btn ghost" type="button" disabled={!llmOk} onClick={() => void runProve(run)}>
+            Retry submitted snapshot
           </button>
         ) : null}
         <Link className="btn ghost" href={compile ? "/workspace/results" : "/workspace"}>
@@ -140,55 +252,57 @@ export default function ProvePage() {
           </span>
         </div>
       ) : null}
-      {err ? (
+      {validationError || run?.error ? (
         <div className="err" role="alert">
-          {err}
+          {validationError || run?.error}
         </div>
       ) : null}
-      {result ? (
+      {run?.result ? (
         <div
           className="parity-grid"
           style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginTop: 20 }}
         >
           <div>
-            <p className="alabel">Full file · {result.full.context_tokens.toLocaleString()} tok</p>
+            <p className="alabel">Full file · {run.result.full.context_tokens.toLocaleString()} tok</p>
             <div className="aanswer" dir="auto">
-              {result.full.answer}
+              {run.result.full.answer}
             </div>
           </div>
           <div>
             <p className="alabel">
-              Compiled · {result.compiled.context_tokens.toLocaleString()} tok ·{" "}
-              {result.compiled.reduction_pct}% fewer
-              {result.compiled.expanded_ids?.length
-                ? ` · includes ${result.compiled.expanded_ids.join(", ")}`
+              Compiled · {run.result.compiled.context_tokens.toLocaleString()} tok ·{" "}
+              {run.result.compiled.reduction_pct}% fewer
+              {run.result.compiled.expanded_ids?.length
+                ? ` · includes ${run.result.compiled.expanded_ids.join(", ")}`
                 : ""}
             </p>
             <div className="aanswer" dir="auto">
-              {result.compiled.answer}
+              {run.result.compiled.answer}
             </div>
           </div>
           <p className="sub" style={{ gridColumn: "1 / -1" }}>
-            Model: {result.model}
+            Model: {run.result.model}
           </p>
-          {result.compiled.selected_content_tokens != null ? (
+          {run.result.compiled.selected_content_tokens != null ? (
             <p className="sub" style={{ gridColumn: "1 / -1" }}>
-              Effective Prove context: <strong>{result.compiled.context_tokens.toLocaleString()}</strong>{" "}
+              Effective Prove context: <strong>{run.result.compiled.context_tokens.toLocaleString()}</strong>{" "}
               tokens
-              {result.compiled.expand_content_tokens
-                ? ` (${result.compiled.selected_content_tokens.toLocaleString()} compiled + ${result.compiled.expand_content_tokens.toLocaleString()} expanded)`
+              {run.result.compiled.expand_content_tokens
+                ? ` (${run.result.compiled.selected_content_tokens.toLocaleString()} compiled + ${run.result.compiled.expand_content_tokens.toLocaleString()} expanded)`
                 : ""}
-              {result.full.context_tokens > 0 &&
-              result.compiled.context_tokens / result.full.context_tokens >= 0.9
+              {run.result.full.context_tokens > 0 &&
+              run.result.compiled.context_tokens / run.result.full.context_tokens >= 0.9
                 ? " · Near full-document size; savings may be marginal."
                 : ""}
               {packagingGapNote(
-                result.compiled.selected_content_tokens + (result.compiled.expand_content_tokens ?? 0),
-                result.compiled.context_tokens
+                run.result.compiled.selected_content_tokens +
+                  (run.result.compiled.expand_content_tokens ?? 0),
+                run.result.compiled.context_tokens
               )
                 ? ` · ${packagingGapNote(
-                    result.compiled.selected_content_tokens + (result.compiled.expand_content_tokens ?? 0),
-                    result.compiled.context_tokens
+                    run.result.compiled.selected_content_tokens +
+                      (run.result.compiled.expand_content_tokens ?? 0),
+                    run.result.compiled.context_tokens
                   )}. The gap is safety wrappers; the omit manifest is not sent to the model.`
                 : ""}
             </p>

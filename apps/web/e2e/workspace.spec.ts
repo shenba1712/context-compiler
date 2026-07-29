@@ -91,6 +91,7 @@ type MockOptions = {
   llmAvailable?: boolean;
   compileError?: string;
   compileResults?: Array<Record<string, unknown>>;
+  answerDelayMs?: number;
   measureError?: string;
   measureDelayMs?: number;
   compileDelayMs?: number;
@@ -165,6 +166,9 @@ async function mockWorkspace(page: Page, options: MockOptions = {}) {
     }
     if (path === "/api/answer") {
       requests.answerBodies.push(route.request().postData() ?? "");
+      if (options.answerDelayMs) {
+        await new Promise((resolve) => setTimeout(resolve, options.answerDelayMs));
+      }
       await fulfillJson(route, {
         model: "golden-model",
         full: { answer: "Full-file answer", context_tokens: 10_000 },
@@ -228,6 +232,41 @@ async function compileSample(page: Page) {
   await page.getByRole("button", { name: "Compile", exact: true }).click();
   await expect(page).toHaveURL(/\/workspace\/results$/);
   await expect(page.getByRole("heading", { name: "Compiled context" })).toBeVisible();
+}
+
+async function mockAnswersIgnoringAbort(
+  page: Page,
+  attempts: Array<{ delayMs: number; fullAnswer: string; compiledAnswer: string }>
+) {
+  await page.addInitScript((answerAttempts) => {
+    const nativeFetch = window.fetch.bind(window);
+    let answerIndex = 0;
+    window.fetch = (input, init) => {
+      if (!String(input).endsWith("/api/answer")) return nativeFetch(input, init);
+      const attempt = answerAttempts[Math.min(answerIndex++, answerAttempts.length - 1)];
+      return new Promise<Response>((resolve) => {
+        window.setTimeout(() => {
+          resolve(
+            new Response(
+              JSON.stringify({
+                model: "snapshot-model",
+                full: { answer: attempt.fullAnswer, context_tokens: 10_000 },
+                compiled: {
+                  answer: attempt.compiledAnswer,
+                  context_tokens: 2_000,
+                  selected_content_tokens: 1_900,
+                  expand_content_tokens: 0,
+                  reduction_pct: 80,
+                  expanded_ids: [],
+                },
+              }),
+              { status: 200, headers: { "content-type": "application/json" } }
+            )
+          );
+        }, attempt.delayMs);
+      });
+    };
+  }, attempts);
 }
 
 test("flag off keeps legacy workspace steps and guards result-only routes", async ({ page }) => {
@@ -400,6 +439,35 @@ test("@revamp budget drift retains Results cards but disables Prove includes", a
   await expect(canvas.getByTestId("stale-results-status")).toContainText("budget changed since this compile");
   await expect(canvas.getByTestId("stale-results-status")).toContainText("Use Compile in the live task rail");
   await expect(canvas.getByTestId("stale-results-status").getByRole("link")).toHaveCount(0);
+});
+
+test("@revamp Prove keeps submitted labels and answers through live rail edits", async ({ page }) => {
+  test.skip(
+    process.env.NEXT_PUBLIC_CC_WORKSPACE_REVAMP !== "1",
+    "Run with NEXT_PUBLIC_CC_WORKSPACE_REVAMP=1 and a matching web build."
+  );
+  const requests = await mockWorkspace(page, { answerDelayMs: 150 });
+  await page.goto("/workspace");
+  await compileSample(page);
+  await page.getByLabel("Include in Prove", { exact: true }).check();
+  await page.getByRole("link", { name: "Prove answer parity" }).click();
+  await page.getByRole("button", { name: "Prove", exact: true }).click();
+
+  const snapshot = page.getByTestId("prove-run-snapshot");
+  await expect(snapshot).toContainText("What is covered?");
+  await expect(snapshot).toContainText("4,000 token budget");
+  await expect(snapshot).toContainText("compile compile-golden");
+  await expect(snapshot).toContainText("includes omitted-1");
+
+  await page.locator("#task").fill("Edited while Prove is running");
+  await page.locator("#budget").fill("6000");
+  await expect(snapshot).not.toContainText("Edited while Prove is running");
+  await expect(snapshot).not.toContainText("6,000 token budget");
+  await expect(page.getByText("Compiled answer", { exact: true })).toBeVisible();
+  await expect(snapshot).toContainText("What is covered?");
+  await expect(snapshot).toContainText("4,000 token budget");
+  expect(requests.answerBodies.at(-1)).toContain("What is covered?");
+  expect(requests.answerBodies.at(-1)).toContain('["omitted-1"]');
 });
 
 test("@revamp rail resolves upload, sample, and measurement races", async ({ page }) => {
@@ -750,6 +818,44 @@ test("cancels an in-flight compile and exposes API errors", async ({ page }) => 
   await pickSample(errorPage);
   await errorPage.getByRole("button", { name: "Compile", exact: true }).click();
   await expect(errorPage.getByText("Golden compile rejected", { exact: true })).toBeVisible();
+});
+
+test("cancelled Prove snapshot cannot be overwritten by a late response", async ({ page }) => {
+  await mockWorkspace(page);
+  await mockAnswersIgnoringAbort(page, [
+    { delayMs: 150, fullAnswer: "Late full answer", compiledAnswer: "Late compiled answer" },
+  ]);
+  await page.goto("/workspace");
+  await compileSample(page);
+  await page.getByRole("link", { name: "Prove answer parity" }).click();
+  await page.getByRole("button", { name: "Prove", exact: true }).click();
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+
+  await expect(page.locator(".err[role=alert]")).toHaveText("Prove cancelled.");
+  await page.waitForTimeout(200);
+  await expect(page.locator(".err[role=alert]")).toHaveText("Prove cancelled.");
+  await expect(page.getByText("Late compiled answer", { exact: true })).toHaveCount(0);
+});
+
+test("newer Prove retry wins when two attempts finish out of order", async ({ page }) => {
+  await mockWorkspace(page);
+  await mockAnswersIgnoringAbort(page, [
+    { delayMs: 250, fullAnswer: "Older full answer", compiledAnswer: "Older compiled answer" },
+    { delayMs: 20, fullAnswer: "Newer full answer", compiledAnswer: "Newer compiled answer" },
+  ]);
+  await page.goto("/workspace");
+  await compileSample(page);
+  await page.getByRole("link", { name: "Prove answer parity" }).click();
+  await page.getByRole("button", { name: "Prove", exact: true }).click();
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await page.getByRole("button", { name: "Retry submitted snapshot" }).click();
+
+  await expect(page.getByText("Newer compiled answer", { exact: true })).toBeVisible();
+  await page.waitForTimeout(300);
+  await expect(page.getByText("Newer compiled answer", { exact: true })).toBeVisible();
+  await expect(page.getByText("Older compiled answer", { exact: true })).toHaveCount(0);
+  await expect(page.getByTestId("prove-run-snapshot")).toContainText("What is covered?");
+  await expect(page.getByTestId("prove-run-snapshot")).toContainText("4,000 token budget");
 });
 
 test("mocks expand, answer, and agent flows with stable golden output", async ({ page }) => {
