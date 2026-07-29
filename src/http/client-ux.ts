@@ -115,6 +115,46 @@ export function taskInvalidatesCompile(lastCompiledTask: string | null, currentT
   return lastCompiledTask.trim() !== currentTask.trim();
 }
 
+export interface WorkspaceStatusInput {
+  hasCompiledOnce: boolean;
+  lastCompiledTask: string | null;
+  currentTask: string;
+  lastCompiledBudget: number | null;
+  currentBudget: number;
+  sourceAvailable: boolean;
+  taskValid: boolean;
+  sourceValid: boolean;
+  busy: boolean;
+}
+
+export interface WorkspaceStatus {
+  questionStale: boolean;
+  budgetStale: boolean;
+  proveStale: boolean;
+  agentStale: boolean;
+  sourceUnavailable: boolean;
+  compileAvailable: boolean;
+}
+
+/** Canonical workspace freshness and compile-capability policy. */
+export function deriveWorkspaceStatus(input: WorkspaceStatusInput): WorkspaceStatus {
+  const questionStale =
+    input.hasCompiledOnce && taskInvalidatesCompile(input.lastCompiledTask, input.currentTask);
+  const budgetStale =
+    input.hasCompiledOnce &&
+    input.lastCompiledBudget !== null &&
+    input.lastCompiledBudget !== input.currentBudget;
+
+  return {
+    questionStale,
+    budgetStale,
+    proveStale: questionStale || budgetStale,
+    agentStale: questionStale,
+    sourceUnavailable: !input.sourceAvailable,
+    compileAvailable: input.sourceAvailable && input.taskValid && input.sourceValid && !input.busy,
+  };
+}
+
 /** Banner HTML when the task field diverges from the last successful compile. */
 export function questionStaleBannerHtml(): string {
   return (
@@ -200,8 +240,17 @@ export function shouldDisableProveAgentWhenQuestionStale(
   lastCompiledTask: string | null,
   currentTask: string
 ): boolean {
-  if (!hasCompiledOnce || lastCompiledTask === null) return false;
-  return taskInvalidatesCompile(lastCompiledTask, currentTask);
+  return deriveWorkspaceStatus({
+    hasCompiledOnce,
+    lastCompiledTask,
+    currentTask,
+    lastCompiledBudget: null,
+    currentBudget: 0,
+    sourceAvailable: true,
+    taskValid: true,
+    sourceValid: true,
+    busy: false,
+  }).questionStale;
 }
 
 /**
@@ -215,8 +264,17 @@ export function shouldDisableProveWhenBudgetStale(
   lastCompiledBudget: number | null,
   currentBudget: number
 ): boolean {
-  if (!hasCompiledOnce || lastCompiledBudget === null) return false;
-  return lastCompiledBudget !== currentBudget;
+  return deriveWorkspaceStatus({
+    hasCompiledOnce,
+    lastCompiledTask: null,
+    currentTask: "",
+    lastCompiledBudget,
+    currentBudget,
+    sourceAvailable: true,
+    taskValid: true,
+    sourceValid: true,
+    busy: false,
+  }).budgetStale;
 }
 
 /** Combined Prove lockout: question soft-stale or budget soft-stale. */
@@ -227,10 +285,13 @@ export function shouldDisableProveWhenStale(opts: {
   lastCompiledBudget: number | null;
   currentBudget: number;
 }): boolean {
-  return (
-    shouldDisableProveAgentWhenQuestionStale(opts.hasCompiledOnce, opts.lastCompiledTask, opts.currentTask) ||
-    shouldDisableProveWhenBudgetStale(opts.hasCompiledOnce, opts.lastCompiledBudget, opts.currentBudget)
-  );
+  return deriveWorkspaceStatus({
+    ...opts,
+    sourceAvailable: true,
+    taskValid: true,
+    sourceValid: true,
+    busy: false,
+  }).proveStale;
 }
 
 /** Agent recompiles independently, so only task drift—not budget drift—stales it. */
@@ -241,11 +302,13 @@ export function shouldDisableAgentWhenStale(opts: {
   lastCompiledBudget: number | null;
   currentBudget: number;
 }): boolean {
-  return shouldDisableProveAgentWhenQuestionStale(
-    opts.hasCompiledOnce,
-    opts.lastCompiledTask,
-    opts.currentTask
-  );
+  return deriveWorkspaceStatus({
+    ...opts,
+    sourceAvailable: true,
+    taskValid: true,
+    sourceValid: true,
+    busy: false,
+  }).agentStale;
 }
 
 /** Agent cancel must keep partial steps visible (not wipe the panel). */

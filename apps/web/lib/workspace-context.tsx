@@ -13,7 +13,14 @@ import {
 
 import { loadPersistedWorkspace, savePersistedWorkspace } from "./workspace-persist";
 import type { CompileApiResult, Sample, ServerConfig } from "./types";
-import { applyProveIncludeChange, computePresets, DEFAULT_PRESETS, type BudgetPresets } from "./ux";
+import {
+  applyProveIncludeChange,
+  computePresets,
+  DEFAULT_PRESETS,
+  deriveWorkspaceStatus,
+  type BudgetPresets,
+  type WorkspaceStatus,
+} from "./ux";
 
 type WorkspaceState = {
   config: ServerConfig | null;
@@ -51,9 +58,7 @@ type WorkspaceState = {
   setAgentParityHandle: (h: string | null) => void;
   requestRun: (action: "prove" | "agent") => void;
   consumeRun: (action: "prove" | "agent") => boolean;
-  questionStale: boolean;
-  budgetStale: boolean;
-  proveStale: boolean;
+  workspaceStatus: WorkspaceStatus;
 };
 
 const Ctx = createContext<WorkspaceState | null>(null);
@@ -254,9 +259,17 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     [pendingRun]
   );
 
-  const questionStale = Boolean(compile && compiledTask !== null && task.trim() !== compiledTask.trim());
-  const budgetStale = Boolean(compile && compiledBudget !== null && budget !== compiledBudget);
-  const proveStale = questionStale || budgetStale;
+  const workspaceStatus = deriveWorkspaceStatus({
+    hasCompiledOnce: Boolean(compile),
+    lastCompiledTask: compiledTask,
+    currentTask: task,
+    lastCompiledBudget: compiledBudget,
+    currentBudget: budget,
+    sourceAvailable: Boolean(file),
+    taskValid: Boolean(task.trim()),
+    sourceValid: Boolean(file),
+    busy: false,
+  });
 
   const proveExpandedIds = useMemo(() => [...proveInclude.expandedIds], [proveInclude]);
   const proveExpandedTokenSum = useMemo(() => {
@@ -302,9 +315,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       setAgentParityHandle,
       requestRun,
       consumeRun,
-      questionStale,
-      budgetStale,
-      proveStale,
+      workspaceStatus,
     }),
     [
       config,
@@ -336,9 +347,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       clearProveIncludes,
       setPresets,
       consumeRun,
-      questionStale,
-      budgetStale,
-      proveStale,
+      workspaceStatus,
     ]
   );
 

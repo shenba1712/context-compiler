@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { useWorkspace } from "@/lib/workspace-context";
 import type { AgentParityResult } from "@/lib/types";
-import { apiFailureMessage, fetchWithBusyRetry, shouldDisableAgentWhenStale } from "@/lib/ux";
+import { apiFailureMessage, fetchWithBusyRetry } from "@/lib/ux";
 
 type Step = {
   kind?: string;
@@ -25,9 +25,8 @@ export default function AgentPage() {
     task,
     budget,
     compile,
-    compiledTask,
-    compiledBudget,
     config,
+    workspaceStatus,
     agentParityHandle,
     setAgentParityHandle,
     pendingRun,
@@ -51,13 +50,7 @@ export default function AgentPage() {
   const abortRef = useRef<AbortController | null>(null);
 
   const llmOk = config?.llm_available ?? false;
-  const agentStale = shouldDisableAgentWhenStale({
-    hasCompiledOnce: Boolean(compile),
-    lastCompiledTask: compiledTask,
-    currentTask: task,
-    lastCompiledBudget: compiledBudget,
-    currentBudget: budget,
-  });
+  const { agentStale, sourceUnavailable } = workspaceStatus;
 
   async function runAgent() {
     setErr("");
@@ -196,7 +189,7 @@ export default function AgentPage() {
       <p className="sub">
         SSE step trace — the model retrieves with compile_context / expand_section under your ceiling.
       </p>
-      {agentStale || !file ? (
+      {agentStale || sourceUnavailable ? (
         <p className="hostnote">
           {agentStale ? "The question changed." : "The source file is no longer available."}{" "}
           <Link href="/workspace">Recompile</Link> first.
@@ -211,7 +204,7 @@ export default function AgentPage() {
         <button
           className="btn primary"
           type="button"
-          disabled={busy || agentStale || !file || !llmOk}
+          disabled={busy || agentStale || sourceUnavailable || !llmOk}
           onClick={() => void runAgent()}
         >
           {busy ? "Running…" : "Run agent"}

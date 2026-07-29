@@ -93,6 +93,7 @@ import {
   agentStreamIncompleteMessage,
   applyProveIncludeChange,
   emptyCompiledSectionsMessage,
+  deriveWorkspaceStatus,
   includeRestHint,
   isNearVisibleRect,
   LAYOUT_FRAMES_BEFORE_SCROLL,
@@ -1680,6 +1681,172 @@ function testClientUxContracts() {
   assert.equal(taskInvalidatesCompile("Q1", "Q1"), false, "same task stays valid");
   assert.equal(taskInvalidatesCompile("Q1", "Q2"), true, "edited task invalidates compile");
   assert.equal(taskInvalidatesCompile("  Q1  ", "Q1"), false, "trim matches last compile task");
+
+  const workspaceStatusCases = [
+    {
+      name: "no compile",
+      input: {
+        hasCompiledOnce: false,
+        lastCompiledTask: null,
+        currentTask: "Q1",
+        lastCompiledBudget: null,
+        currentBudget: 4000,
+        sourceAvailable: true,
+        taskValid: true,
+        sourceValid: true,
+        busy: false,
+      },
+      expected: {
+        questionStale: false,
+        budgetStale: false,
+        proveStale: false,
+        agentStale: false,
+        sourceUnavailable: false,
+        compileAvailable: true,
+      },
+    },
+    {
+      name: "exact whitespace-normalized match",
+      input: {
+        hasCompiledOnce: true,
+        lastCompiledTask: "  Q1  ",
+        currentTask: "Q1",
+        lastCompiledBudget: 4000,
+        currentBudget: 4000,
+        sourceAvailable: true,
+        taskValid: true,
+        sourceValid: true,
+        busy: false,
+      },
+      expected: {
+        questionStale: false,
+        budgetStale: false,
+        proveStale: false,
+        agentStale: false,
+        sourceUnavailable: false,
+        compileAvailable: true,
+      },
+    },
+    {
+      name: "task drift",
+      input: {
+        hasCompiledOnce: true,
+        lastCompiledTask: "Q1",
+        currentTask: "Q2",
+        lastCompiledBudget: 4000,
+        currentBudget: 4000,
+        sourceAvailable: true,
+        taskValid: true,
+        sourceValid: true,
+        busy: false,
+      },
+      expected: {
+        questionStale: true,
+        budgetStale: false,
+        proveStale: true,
+        agentStale: true,
+        sourceUnavailable: false,
+        compileAvailable: true,
+      },
+    },
+    {
+      name: "budget drift",
+      input: {
+        hasCompiledOnce: true,
+        lastCompiledTask: "Q1",
+        currentTask: "Q1",
+        lastCompiledBudget: 4000,
+        currentBudget: 8000,
+        sourceAvailable: true,
+        taskValid: true,
+        sourceValid: true,
+        busy: false,
+      },
+      expected: {
+        questionStale: false,
+        budgetStale: true,
+        proveStale: true,
+        agentStale: false,
+        sourceUnavailable: false,
+        compileAvailable: true,
+      },
+    },
+    {
+      name: "both drifted",
+      input: {
+        hasCompiledOnce: true,
+        lastCompiledTask: "Q1",
+        currentTask: "Q2",
+        lastCompiledBudget: 4000,
+        currentBudget: 8000,
+        sourceAvailable: true,
+        taskValid: true,
+        sourceValid: true,
+        busy: false,
+      },
+      expected: {
+        questionStale: true,
+        budgetStale: true,
+        proveStale: true,
+        agentStale: true,
+        sourceUnavailable: false,
+        compileAvailable: true,
+      },
+    },
+    {
+      name: "missing source",
+      input: {
+        hasCompiledOnce: true,
+        lastCompiledTask: "Q1",
+        currentTask: "Q1",
+        lastCompiledBudget: 4000,
+        currentBudget: 4000,
+        sourceAvailable: false,
+        taskValid: true,
+        sourceValid: true,
+        busy: false,
+      },
+      expected: {
+        questionStale: false,
+        budgetStale: false,
+        proveStale: false,
+        agentStale: false,
+        sourceUnavailable: true,
+        compileAvailable: false,
+      },
+    },
+  ] as const;
+  for (const testCase of workspaceStatusCases) {
+    assert.deepEqual(
+      deriveWorkspaceStatus(testCase.input),
+      testCase.expected,
+      `workspace status truth table: ${testCase.name}`
+    );
+  }
+  assert.equal(
+    deriveWorkspaceStatus({
+      ...workspaceStatusCases[0].input,
+      busy: true,
+    }).compileAvailable,
+    false,
+    "busy state blocks compile availability"
+  );
+  assert.equal(
+    deriveWorkspaceStatus({
+      ...workspaceStatusCases[0].input,
+      taskValid: false,
+    }).compileAvailable,
+    false,
+    "invalid task blocks compile availability"
+  );
+  assert.equal(
+    deriveWorkspaceStatus({
+      ...workspaceStatusCases[0].input,
+      sourceValid: false,
+    }).compileAvailable,
+    false,
+    "invalid source blocks compile availability"
+  );
 
   const s0 = { expandedIds: new Set<string>(), expandedTokens: new Map<string, number>() };
   const s1 = applyProveIncludeChange(s0, "s2", 120, true);

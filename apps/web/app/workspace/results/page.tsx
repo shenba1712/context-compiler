@@ -28,10 +28,7 @@ function metaFor(s: SectionInfo): string {
 export default function ResultsPage() {
   const {
     compile,
-    file,
-    proveStale,
-    questionStale,
-    budgetStale,
+    workspaceStatus,
     proveExpandedIds,
     proveExpandedTokenSum,
     setProveInclude,
@@ -40,6 +37,7 @@ export default function ResultsPage() {
     sessionSavedTokens,
     sessionSavedUsd,
   } = useWorkspace();
+  const { proveStale, agentStale, questionStale, sourceUnavailable } = workspaceStatus;
   const [peek, setPeek] = useState<Record<string, string>>({});
   const [pending, setPending] = useState<Set<string>>(() => new Set());
   const [showAllRelevance, setShowAllRelevance] = useState(false);
@@ -243,15 +241,15 @@ export default function ResultsPage() {
           </div>
         ) : null}
 
-        {questionStale || budgetStale || !file ? (
+        {proveStale || sourceUnavailable ? (
           <p className="hostnote" role="status">
-            {!file
+            {sourceUnavailable
               ? "The source file is not available in this browser session. "
               : questionStale
                 ? "The question changed since this compile. Expands for Prove were cleared. "
                 : "The budget changed since this compile. Prove requires matching results; Agent can use the live budget. "}
             <Link href="/workspace">Recompile</Link>
-            {questionStale || !file ? " before Prove / Agent." : " before Prove."}
+            {agentStale || sourceUnavailable ? " before Prove / Agent." : " before Prove."}
           </p>
         ) : null}
 
@@ -263,10 +261,16 @@ export default function ResultsPage() {
         ) : null}
 
         <div className="row" style={{ marginBottom: 16 }}>
-          <Link className="btn ghost" href={proveStale || !file ? "/workspace" : "/workspace/prove"}>
+          <Link
+            className="btn ghost"
+            href={proveStale || sourceUnavailable ? "/workspace" : "/workspace/prove"}
+          >
             Prove answer parity
           </Link>
-          <Link className="btn quiet" href={questionStale || !file ? "/workspace" : "/workspace/agent"}>
+          <Link
+            className="btn quiet"
+            href={agentStale || sourceUnavailable ? "/workspace" : "/workspace/agent"}
+          >
             Run agent
           </Link>
         </div>

@@ -68,6 +68,50 @@ export function sectionLeaf(section: string): string {
   return (parts[parts.length - 1] || section).trim();
 }
 
+export type WorkspaceStatusInput = {
+  hasCompiledOnce: boolean;
+  lastCompiledTask: string | null;
+  currentTask: string;
+  lastCompiledBudget: number | null;
+  currentBudget: number;
+  sourceAvailable: boolean;
+  taskValid: boolean;
+  sourceValid: boolean;
+  busy: boolean;
+};
+
+export type WorkspaceStatus = {
+  questionStale: boolean;
+  budgetStale: boolean;
+  proveStale: boolean;
+  agentStale: boolean;
+  sourceUnavailable: boolean;
+  compileAvailable: boolean;
+};
+
+/** Canonical workspace freshness and compile-capability policy. */
+export function deriveWorkspaceStatus(input: WorkspaceStatusInput): WorkspaceStatus {
+  const questionStale = Boolean(
+    input.hasCompiledOnce &&
+    input.lastCompiledTask !== null &&
+    input.lastCompiledTask.trim() !== input.currentTask.trim()
+  );
+  const budgetStale = Boolean(
+    input.hasCompiledOnce &&
+    input.lastCompiledBudget !== null &&
+    input.lastCompiledBudget !== input.currentBudget
+  );
+
+  return {
+    questionStale,
+    budgetStale,
+    proveStale: questionStale || budgetStale,
+    agentStale: questionStale,
+    sourceUnavailable: !input.sourceAvailable,
+    compileAvailable: input.sourceAvailable && input.taskValid && input.sourceValid && !input.busy,
+  };
+}
+
 /** Agent performs its own compile, so a budget-only edit remains runnable. */
 export function shouldDisableAgentWhenStale(opts: {
   hasCompiledOnce: boolean;
@@ -76,11 +120,13 @@ export function shouldDisableAgentWhenStale(opts: {
   lastCompiledBudget: number | null;
   currentBudget: number;
 }): boolean {
-  return Boolean(
-    opts.hasCompiledOnce &&
-    opts.lastCompiledTask !== null &&
-    opts.lastCompiledTask.trim() !== opts.currentTask.trim()
-  );
+  return deriveWorkspaceStatus({
+    ...opts,
+    sourceAvailable: true,
+    taskValid: true,
+    sourceValid: true,
+    busy: false,
+  }).agentStale;
 }
 
 export type RetryContext = "compile" | "prove" | "agent" | "agentParity" | "expand" | "measure";

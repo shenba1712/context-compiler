@@ -9,6 +9,7 @@ import {
   apiFailureMessage,
   computePresets,
   DEFAULT_PRESETS,
+  deriveWorkspaceStatus,
   fetchWithBusyRetry,
   SLIDER_MAX,
   SLIDER_MIN,
@@ -52,6 +53,19 @@ export default function WorkspaceCompilePage() {
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState("");
+  const maxFileBytes = config?.max_file_bytes ?? 20 * 1024 * 1024;
+  const fileValidationError = file ? validateUploadFile(file, maxFileBytes) : null;
+  const workspaceStatus = deriveWorkspaceStatus({
+    hasCompiledOnce: false,
+    lastCompiledTask: null,
+    currentTask: task,
+    lastCompiledBudget: null,
+    currentBudget: budget,
+    sourceAvailable: Boolean(file),
+    taskValid: Boolean(task.trim()),
+    sourceValid: fileValidationError === null,
+    busy,
+  });
 
   async function measureUpload(f: File) {
     const seq = ++measureSeq.current;
@@ -132,19 +146,13 @@ export default function WorkspaceCompilePage() {
   async function onCompile(e: React.FormEvent) {
     e.preventDefault();
     setErr("");
-    if (!file) {
-      setErr("Upload a file or pick a sample.");
+    if (!workspaceStatus.compileAvailable) {
+      if (!file) setErr("Upload a file or pick a sample.");
+      else if (fileValidationError) setErr(fileValidationError);
+      else if (!task.trim()) setErr("Enter a question / task.");
       return;
     }
-    const validationError = validateUploadFile(file, config?.max_file_bytes ?? 20 * 1024 * 1024);
-    if (validationError) {
-      setErr(validationError);
-      return;
-    }
-    if (!task.trim()) {
-      setErr("Enter a question / task.");
-      return;
-    }
+    if (!file) return;
     const controller = new AbortController();
     compileAbort.current?.abort();
     compileAbort.current = controller;
@@ -184,10 +192,12 @@ export default function WorkspaceCompilePage() {
 
   function launch(action: "prove" | "agent") {
     setErr("");
-    if (!file) return setErr("Upload a file or pick a sample.");
-    if (!task.trim()) return setErr("Enter a question / task.");
-    const validationError = validateUploadFile(file, config?.max_file_bytes ?? 20 * 1024 * 1024);
-    if (validationError) return setErr(validationError);
+    if (!workspaceStatus.compileAvailable) {
+      if (!file) setErr("Upload a file or pick a sample.");
+      else if (fileValidationError) setErr(fileValidationError);
+      else if (!task.trim()) setErr("Enter a question / task.");
+      return;
+    }
     requestRun(action);
     router.push(`/workspace/${action}`);
   }
@@ -196,7 +206,7 @@ export default function WorkspaceCompilePage() {
   const windowMin = config?.rate_window_minutes ?? 5;
   const sliderMin = config?.web_budget_min ?? SLIDER_MIN;
   const sliderMax = config?.web_budget_max ?? SLIDER_MAX;
-  const maxFileMb = (config?.max_file_bytes ?? 20 * 1024 * 1024) / (1024 * 1024);
+  const maxFileMb = maxFileBytes / (1024 * 1024);
   const maxFileLabel = Number.isInteger(maxFileMb) ? String(maxFileMb) : maxFileMb.toFixed(1);
 
   return (
@@ -220,9 +230,7 @@ export default function WorkspaceCompilePage() {
               sampleAbort.current?.abort();
               ++measureSeq.current;
               const f = ev.target.files?.[0] ?? null;
-              const validationError = f
-                ? validateUploadFile(f, config?.max_file_bytes ?? 20 * 1024 * 1024)
-                : null;
+              const validationError = f ? validateUploadFile(f, maxFileBytes) : null;
               if (validationError) {
                 ev.target.value = "";
                 setErr(validationError);

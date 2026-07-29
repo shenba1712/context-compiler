@@ -1,4 +1,5 @@
 import type { CompileApiResult, Sample } from "./types";
+import { deriveWorkspaceStatus } from "./ux";
 
 export type SourceAvailability = "available" | "restorable" | "missing" | "not-selected";
 export type CompileStatus = "not-compiled" | "current" | "stale";
@@ -67,10 +68,18 @@ export function selectCompileStatus(
   if (!source.compile || source.compiledTask === null || source.compiledBudget === null) {
     return "not-compiled";
   }
-  const stale =
-    selectTaskLabel(source.task) !== selectTaskLabel(source.compiledTask) ||
-    source.budget !== source.compiledBudget;
-  return stale ? "stale" : "current";
+  const status = deriveWorkspaceStatus({
+    hasCompiledOnce: true,
+    lastCompiledTask: source.compiledTask,
+    currentTask: source.task,
+    lastCompiledBudget: source.compiledBudget,
+    currentBudget: source.budget,
+    sourceAvailable: true,
+    taskValid: true,
+    sourceValid: true,
+    busy: false,
+  });
+  return status.proveStale ? "stale" : "current";
 }
 
 export function selectTaskSummary(source: TaskSummarySource): TaskSummaryView {

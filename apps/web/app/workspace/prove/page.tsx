@@ -14,7 +14,7 @@ export default function ProvePage() {
     budget,
     compile,
     config,
-    proveStale,
+    workspaceStatus,
     proveExpandedIds,
     proveExpandedTokenSum,
     pendingRun,
@@ -27,6 +27,7 @@ export default function ProvePage() {
   const abortRef = useRef<AbortController | null>(null);
 
   const llmOk = config?.llm_available ?? false;
+  const { proveStale, sourceUnavailable } = workspaceStatus;
 
   async function runProve() {
     setErr("");
@@ -102,7 +103,7 @@ export default function ProvePage() {
           Stale compile. <Link href="/workspace">Recompile</Link> before proving.
         </p>
       ) : null}
-      {!file ? (
+      {sourceUnavailable ? (
         <p className="hostnote" role="status">
           The source file is no longer available. <Link href="/workspace">Choose it and recompile</Link>.
         </p>
@@ -116,7 +117,7 @@ export default function ProvePage() {
         <button
           className="btn primary"
           type="button"
-          disabled={busy || proveStale || !file || !llmOk}
+          disabled={busy || proveStale || sourceUnavailable || !llmOk}
           onClick={() => void runProve()}
         >
           {busy ? "Proving…" : "Prove"}
