@@ -120,6 +120,11 @@ import {
   taskInvalidatesCompile,
   truncatedSectionMeta,
 } from "../http/client-ux.js";
+import {
+  createInitialWorkspaceState,
+  workspaceReducer,
+  type WorkspaceCompileArtifact,
+} from "../http/workspace-reducer.js";
 import { convertToMarkdown, ConversionError } from "../engine/convert.js";
 import { intEnv, numEnv, trustProxyFromEnv } from "../engine/env.js";
 import { assemble, pack, truncateSectionToBudget } from "../engine/pack.js";
@@ -2116,6 +2121,138 @@ async function testAgentRecompileTokensReadNoDoubleCount() {
   } finally {
     unlinkSync(path);
   }
+}
+
+function testWorkspaceReducerTransitions() {
+  type TestCompile = WorkspaceCompileArtifact & {
+    handle: string;
+    selected: { ids: string[] };
+  };
+  type TestFile = { name: string };
+  const presets = { quick: 1000, standard: 4000, deep: 8000 };
+  const result: TestCompile = {
+    handle: "compile-1",
+    tokens_saved: 600,
+    cost_raw_usd: 1.5,
+    cost_compiled_usd: 0.5,
+    selected: { ids: ["s1"] },
+  };
+
+  let state = createInitialWorkspaceState<TestCompile, TestFile>(presets);
+  state = workspaceReducer(state, {
+    type: "DOCUMENT_SELECTED",
+    file: { name: "first.md" },
+    filePicked: "first.md",
+    sampleKey: null,
+  });
+  state = workspaceReducer(state, { type: "TASK_CHANGED", task: "Question one" });
+  state = workspaceReducer(state, { type: "BUDGET_CHANGED", budget: 4000 });
+  state = workspaceReducer(state, {
+    type: "PROVE_INCLUDE_CHANGED",
+    id: "old-section",
+    tokens: 80,
+    included: true,
+  });
+  state = workspaceReducer(state, {
+    type: "RUN_COMPLETED",
+    action: "agent",
+    parityHandle: "old-parity",
+  });
+  state = workspaceReducer(state, {
+    type: "COMPILE_SUCCEEDED",
+    result,
+    task: "Question one",
+    budget: 4000,
+    documentName: "first.md",
+  });
+
+  assert.notEqual(state.compiledSnapshot?.result, result, "compile success snapshots the API result");
+  assert.ok(Object.isFrozen(state.compiledSnapshot), "compiled snapshot metadata is immutable");
+  assert.ok(Object.isFrozen(state.compiledSnapshot?.result), "compiled result is immutable");
+  assert.ok(Object.isFrozen(state.compiledSnapshot?.result.selected), "compiled nested data is immutable");
+  assert.equal(state.proveInclude.expandedIds.size, 0, "compile success clears prior Prove includes");
+  assert.equal(state.agentParityHandle, null, "compile success clears prior parity handles");
+  assert.equal(state.sessionSavedTokens, 600, "compile success accumulates saved tokens atomically");
+  assert.equal(state.sessionSavedUsd, 1, "compile success accumulates saved cost atomically");
+
+  const compiled = state.compiledSnapshot;
+  state = workspaceReducer(state, {
+    type: "PROVE_INCLUDE_CHANGED",
+    id: "s2",
+    tokens: 120,
+    included: true,
+  });
+  state = workspaceReducer(state, {
+    type: "RUN_COMPLETED",
+    action: "agent",
+    parityHandle: "parity-1",
+  });
+  state = workspaceReducer(state, { type: "TASK_CHANGED", task: "Question two" });
+  assert.equal(state.compiledSnapshot, compiled, "task edits keep prior results");
+  assert.ok(state.proveInclude.expandedIds.has("s2"), "task edits keep include choices");
+  assert.equal(
+    deriveWorkspaceStatus({
+      hasCompiledOnce: true,
+      lastCompiledTask: state.compiledSnapshot!.taskLabel,
+      currentTask: state.task,
+      lastCompiledBudget: state.compiledSnapshot!.budget,
+      currentBudget: state.budget,
+      sourceAvailable: true,
+      taskValid: true,
+      sourceValid: true,
+      busy: false,
+    }).agentStale,
+    true,
+    "task edits stale Agent through the canonical status policy"
+  );
+
+  state = workspaceReducer(state, { type: "TASK_CHANGED", task: "Question one" });
+  state = workspaceReducer(state, { type: "BUDGET_CHANGED", budget: 8000 });
+  const budgetStatus = deriveWorkspaceStatus({
+    hasCompiledOnce: true,
+    lastCompiledTask: state.compiledSnapshot!.taskLabel,
+    currentTask: state.task,
+    lastCompiledBudget: state.compiledSnapshot!.budget,
+    currentBudget: state.budget,
+    sourceAvailable: true,
+    taskValid: true,
+    sourceValid: true,
+    busy: false,
+  });
+  assert.equal(budgetStatus.proveStale, true, "budget edits stale Prove");
+  assert.equal(budgetStatus.agentStale, false, "budget edits do not stale Agent");
+  assert.equal(state.compiledSnapshot, compiled, "budget edits retain the compiled snapshot");
+
+  const beforeFailure = state;
+  assert.equal(
+    workspaceReducer(state, { type: "COMPILE_FAILED" }),
+    beforeFailure,
+    "failed compile leaves the prior snapshot untouched"
+  );
+  assert.equal(
+    workspaceReducer(state, { type: "COMPILE_CANCELLED" }),
+    beforeFailure,
+    "cancelled compile leaves the prior snapshot untouched"
+  );
+
+  state = workspaceReducer(state, {
+    type: "DOCUMENT_SELECTED",
+    file: { name: "replacement.md" },
+    filePicked: "replacement.md",
+    sampleKey: null,
+  });
+  assert.equal(state.compiledSnapshot, null, "document replacement clears compile");
+  assert.equal(state.proveInclude.expandedIds.size, 0, "document replacement clears Prove includes");
+  assert.equal(state.agentParityHandle, null, "document replacement clears parity handles");
+  assert.equal(state.sessionSavedTokens, 600, "document replacement keeps session savings");
+
+  state = workspaceReducer(state, { type: "RUN_REQUESTED", action: "prove" });
+  assert.equal(state.pendingRun, "prove", "run handoff remains pending");
+  state = workspaceReducer(state, { type: "RUN_CONSUMED", action: "agent" });
+  assert.equal(state.pendingRun, "prove", "another route cannot consume the handoff");
+  state = workspaceReducer(state, { type: "RUN_CONSUMED", action: "prove" });
+  assert.equal(state.pendingRun, null, "matching route consumes the handoff once");
+  console.log("  workspace reducer ok: atomic compile, document, stale, run transitions");
 }
 
 async function testExpandQueryAwareTruncation() {
@@ -4531,6 +4668,7 @@ for (const fn of [
   testMultiFacetFinancialsBudget800,
   testDemoParityFy25Budget200,
   testClientUxContracts,
+  testWorkspaceReducerTransitions,
   testExpandQueryAwareTruncation,
   testAgentQueryMissOnExpand,
   testAgentExpandTokensCountedUnderCeiling,

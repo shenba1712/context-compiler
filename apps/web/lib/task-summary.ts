@@ -34,6 +34,7 @@ export type TaskSummarySource = {
   compile: CompileApiResult | null;
   compiledTask: string | null;
   compiledBudget: number | null;
+  compiledSnapshot?: CompiledTaskSnapshot | null;
 };
 
 export function selectDocumentName(
@@ -86,14 +87,15 @@ export function selectTaskSummary(source: TaskSummarySource): TaskSummaryView {
   const documentName = selectDocumentName(source);
   const sourceAvailability = selectSourceAvailability(source);
   const compiled =
-    source.compile && source.compiledTask !== null && source.compiledBudget !== null
+    source.compiledSnapshot ??
+    (source.compile && source.compiledTask !== null && source.compiledBudget !== null
       ? {
           documentName,
           taskLabel: selectTaskLabel(source.compiledTask),
           budget: selectBudget(source.compiledBudget),
           sourceAvailability,
         }
-      : null;
+      : null);
 
   return {
     live: {

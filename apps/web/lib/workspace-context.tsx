@@ -6,15 +6,22 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useReducer,
   useRef,
   useState,
   type ReactNode,
 } from "react";
 
+import {
+  createInitialWorkspaceState,
+  workspaceReducer,
+  type WorkspaceCompiledSnapshot,
+  type WorkspaceReducerEvent,
+  type WorkspaceReducerState,
+} from "../../../src/http/workspace-reducer";
 import { loadPersistedWorkspace, savePersistedWorkspace } from "./workspace-persist";
 import type { CompileApiResult, Sample, ServerConfig } from "./types";
 import {
-  applyProveIncludeChange,
   computePresets,
   DEFAULT_PRESETS,
   deriveWorkspaceStatus,
@@ -37,6 +44,7 @@ type WorkspaceState = {
   compile: CompileApiResult | null;
   compiledTask: string | null;
   compiledBudget: number | null;
+  compiledSnapshot: WorkspaceCompiledSnapshot<CompileApiResult> | null;
   proveExpandedIds: string[];
   proveExpandedTokenSum: number;
   sessionSavedTokens: number;
@@ -63,62 +71,71 @@ type WorkspaceState = {
 
 const Ctx = createContext<WorkspaceState | null>(null);
 
+type ReducerState = WorkspaceReducerState<CompileApiResult, File>;
+type ReducerEvent = WorkspaceReducerEvent<CompileApiResult, File>;
+
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const restored = useRef(false);
-  const [hydrated, setHydrated] = useState(false);
   const [config, setConfig] = useState<ServerConfig | null>(null);
   const [samples, setSamples] = useState<Sample[]>([]);
   const [loadError, setLoadError] = useState("");
-  const [file, setFileState] = useState<File | null>(null);
-  const [filePicked, setFilePicked] = useState("");
-  const [sampleKey, setSampleKeyState] = useState<string | null>(null);
-  const [task, setTask] = useState("");
-  const [budget, setBudget] = useState(4000);
-  const [presets, setPresetsState] = useState<BudgetPresets>(DEFAULT_PRESETS);
-  const [docSizeNote, setDocSizeNote] = useState("");
-  const [rawTokensHint, setRawTokensHint] = useState<number | null>(null);
-  const [compile, setCompileState] = useState<CompileApiResult | null>(null);
-  const [compiledTask, setCompiledTask] = useState<string | null>(null);
-  const [compiledBudget, setCompiledBudget] = useState<number | null>(null);
-  const [proveInclude, setProveIncludeState] = useState<{
-    expandedIds: Set<string>;
-    expandedTokens: Map<string, number>;
-  }>(() => ({ expandedIds: new Set(), expandedTokens: new Map() }));
-  const [sessionSavedTokens, setSessionSavedTokens] = useState(0);
-  const [sessionSavedUsd, setSessionSavedUsd] = useState(0);
-  const [agentParityHandle, setAgentParityHandle] = useState<string | null>(null);
-  const [pendingRun, setPendingRun] = useState<"prove" | "agent" | null>(null);
+  const [workspace, dispatch] = useReducer(
+    (state: ReducerState, event: ReducerEvent) => workspaceReducer(state, event),
+    createInitialWorkspaceState<CompileApiResult, File>(DEFAULT_PRESETS)
+  );
+  const {
+    file,
+    filePicked,
+    sampleKey,
+    task,
+    budget,
+    presets,
+    docSizeNote,
+    rawTokensHint,
+    compiledSnapshot,
+    proveInclude,
+    sessionSavedTokens,
+    sessionSavedUsd,
+    agentParityHandle,
+    pendingRun,
+    hydrated,
+  } = workspace;
+  const compile = compiledSnapshot?.result ?? null;
+  const compiledTask = compiledSnapshot?.taskLabel ?? null;
+  const compiledBudget = compiledSnapshot?.budget ?? null;
 
   useEffect(() => {
     const saved = loadPersistedWorkspace();
-    if (saved) {
-      setTask(saved.task);
-      setBudget(saved.budget);
-      setFilePicked(saved.filePicked ?? "");
-      setSampleKeyState(saved.sampleKey);
-      // Browser storage cannot restore a custom File. Only restore actionable
-      // compile state when a sample key lets us fetch the bytes again.
-      const restorableCompile = saved.sampleKey ? saved.compile : null;
-      setCompileState(restorableCompile);
-      setCompiledTask(restorableCompile ? saved.compiledTask : null);
-      setCompiledBudget(restorableCompile ? saved.compiledBudget : null);
-      setSessionSavedTokens(saved.sessionSavedTokens ?? 0);
-      setSessionSavedUsd(saved.sessionSavedUsd ?? 0);
-      setProveIncludeState(
-        restorableCompile
-          ? {
-              expandedIds: new Set(saved.proveExpandedIds),
-              expandedTokens: new Map(saved.proveExpandedTokens),
-            }
-          : { expandedIds: new Set(), expandedTokens: new Map() }
-      );
-      if (restorableCompile) {
-        setRawTokensHint(restorableCompile.raw_tokens);
-        setDocSizeNote(`Restored compile (~${restorableCompile.raw_tokens.toLocaleString()} tokens).`);
-      }
-    }
+    // Browser storage cannot restore a custom File. Only restore actionable
+    // compile state when a sample key lets us fetch the bytes again.
+    const restorableCompile = saved?.sampleKey ? saved.compile : null;
+    const restoredSnapshot =
+      saved && restorableCompile && saved.compiledTask !== null && saved.compiledBudget !== null
+        ? Object.freeze({
+            result: restorableCompile,
+            documentName: saved?.filePicked?.trim() || null,
+            taskLabel: saved.compiledTask,
+            budget: saved.compiledBudget,
+            sourceAvailability: "restorable" as const,
+          })
+        : null;
+    dispatch({
+      type: "WORKSPACE_HYDRATED",
+      task: saved?.task ?? "",
+      budget: saved?.budget ?? 4000,
+      filePicked: saved?.filePicked ?? "",
+      sampleKey: saved?.sampleKey ?? null,
+      compiledSnapshot: restoredSnapshot,
+      proveExpandedIds: saved?.proveExpandedIds ?? [],
+      proveExpandedTokens: saved?.proveExpandedTokens ?? [],
+      sessionSavedTokens: saved?.sessionSavedTokens ?? 0,
+      sessionSavedUsd: saved?.sessionSavedUsd ?? 0,
+      docSizeNote: restorableCompile
+        ? `Restored compile (~${restorableCompile.raw_tokens.toLocaleString()} tokens).`
+        : "",
+      rawTokensHint: restorableCompile?.raw_tokens ?? null,
+    });
     restored.current = true;
-    setHydrated(true);
   }, []);
 
   useEffect(() => {
@@ -162,13 +179,14 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         const res = await fetch(`/samples/${s.file}`);
         if (!res.ok) return;
         const buf = await res.arrayBuffer();
-        setFileState(
-          new File([buf], s.file, { type: res.headers.get("content-type") || "application/octet-stream" })
-        );
-        setFilePicked(`Sample: ${s.nm}`);
-        if (s.tok != null) {
-          setPresetsState(computePresets(s.tok));
-        }
+        dispatch({
+          type: "DOCUMENT_RESTORED",
+          file: new File([buf], s.file, {
+            type: res.headers.get("content-type") || "application/octet-stream",
+          }),
+          filePicked: `Sample: ${s.nm}`,
+          presets: s.tok != null ? computePresets(s.tok) : undefined,
+        });
       } catch (e) {
         console.warn("could not restore sample file", e);
       }
@@ -204,56 +222,67 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     sessionSavedUsd,
   ]);
 
-  const clearProveIncludes = useCallback(() => {
-    setProveIncludeState({ expandedIds: new Set(), expandedTokens: new Map() });
-  }, []);
+  const clearProveIncludes = useCallback(() => dispatch({ type: "PROVE_INCLUDE_CLEARED" }), []);
 
-  const clearCompile = useCallback(() => {
-    setCompileState(null);
-    setCompiledTask(null);
-    setCompiledBudget(null);
-    clearProveIncludes();
-    setAgentParityHandle(null);
-  }, [clearProveIncludes]);
+  const clearCompile = useCallback(() => dispatch({ type: "COMPILE_CLEARED" }), []);
 
   const setFile = useCallback((f: File | null) => {
-    setFileState(f);
-    setFilePicked(f?.name ?? "");
+    dispatch({ type: "DOCUMENT_SELECTED", file: f, filePicked: f?.name ?? "" });
   }, []);
 
   const setSampleKey = useCallback((k: string | null) => {
-    setSampleKeyState(k);
+    dispatch({ type: "DOCUMENT_SELECTED", sampleKey: k });
   }, []);
+
+  const setTask = useCallback((t: string) => dispatch({ type: "TASK_CHANGED", task: t }), []);
+  const setBudget = useCallback((n: number) => dispatch({ type: "BUDGET_CHANGED", budget: n }), []);
+  const setDocSizeNote = useCallback((s: string) => dispatch({ type: "DOC_SIZE_NOTE_CHANGED", note: s }), []);
+  const setRawTokensHint = useCallback(
+    (n: number | null) => dispatch({ type: "RAW_TOKENS_HINT_CHANGED", rawTokensHint: n }),
+    []
+  );
 
   const setCompile = useCallback(
     (r: CompileApiResult | null, t: string, b: number) => {
-      setCompileState(r);
-      setCompiledTask(r ? t : null);
-      setCompiledBudget(r ? b : null);
-      if (r) {
-        setSessionSavedTokens((n) => n + Math.max(0, r.tokens_saved));
-        setSessionSavedUsd((n) => n + Math.max(0, r.cost_raw_usd - r.cost_compiled_usd));
+      if (!r) {
+        dispatch({ type: "COMPILE_CLEARED" });
+        return;
       }
-      clearProveIncludes();
-      setAgentParityHandle(null);
+      const sampleName = sampleKey ? samples.find((sample) => sample.key === sampleKey)?.nm : null;
+      dispatch({
+        type: "COMPILE_SUCCEEDED",
+        result: r,
+        task: t,
+        budget: b,
+        documentName: sampleName ?? file?.name ?? (filePicked.trim() || null),
+      });
     },
-    [clearProveIncludes]
+    [file, filePicked, sampleKey, samples]
   );
 
   const setPresets = useCallback((p: BudgetPresets, selectTier: keyof BudgetPresets | null = null) => {
-    setPresetsState(p);
-    if (selectTier) setBudget(p[selectTier]);
+    dispatch({ type: "PRESETS_CHANGED", presets: p, selectTier });
   }, []);
 
   const setProveInclude = useCallback((id: string, tokens: number, included: boolean) => {
-    setProveIncludeState((prev) => applyProveIncludeChange(prev, id, tokens, included));
+    dispatch({ type: "PROVE_INCLUDE_CHANGED", id, tokens, included });
   }, []);
 
-  const requestRun = useCallback((action: "prove" | "agent") => setPendingRun(action), []);
+  const setAgentParityHandle = useCallback((h: string | null) => {
+    dispatch(
+      h
+        ? { type: "RUN_COMPLETED", action: "agent", parityHandle: h }
+        : { type: "RUN_STARTED", action: "agent" }
+    );
+  }, []);
+  const requestRun = useCallback(
+    (action: "prove" | "agent") => dispatch({ type: "RUN_REQUESTED", action }),
+    []
+  );
   const consumeRun = useCallback(
     (action: "prove" | "agent") => {
       if (pendingRun !== action) return false;
-      setPendingRun(null);
+      dispatch({ type: "RUN_CONSUMED", action });
       return true;
     },
     [pendingRun]
@@ -294,6 +323,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       compile,
       compiledTask,
       compiledBudget,
+      compiledSnapshot,
       proveExpandedIds,
       proveExpandedTokenSum,
       sessionSavedTokens,
@@ -332,6 +362,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       compile,
       compiledTask,
       compiledBudget,
+      compiledSnapshot,
       proveExpandedIds,
       proveExpandedTokenSum,
       sessionSavedTokens,
