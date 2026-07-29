@@ -90,6 +90,7 @@ const compileResult = {
 type MockOptions = {
   llmAvailable?: boolean;
   compileError?: string;
+  compileResults?: Array<Record<string, unknown>>;
   measureError?: string;
   measureDelayMs?: number;
   compileDelayMs?: number;
@@ -109,6 +110,7 @@ async function mockWorkspace(page: Page, options: MockOptions = {}) {
     answerBodies: [] as string[],
     agentBodies: [] as string[],
     compileBodies: [] as string[],
+    expandBodies: [] as string[],
   };
 
   await page.route("**/api/**", async (route) => {
@@ -144,13 +146,18 @@ async function mockWorkspace(page: Page, options: MockOptions = {}) {
       if (options.compileError) {
         await fulfillJson(route, { error: options.compileError }, 400);
       } else {
-        await fulfillJson(route, compileResult);
+        const compileResults = options.compileResults?.length ? options.compileResults : [compileResult];
+        const resultIndex = Math.min(requests.compileBodies.length - 1, compileResults.length - 1);
+        await fulfillJson(route, compileResults[resultIndex]);
       }
       return;
     }
     if (path === "/api/expand") {
+      const requestBody = route.request().postData() ?? "";
+      requests.expandBodies.push(requestBody);
+      const handle = (JSON.parse(requestBody) as { handle?: string }).handle ?? "unknown";
       await fulfillJson(route, {
-        markdown: "Expanded exclusion text",
+        markdown: handle === compileResult.handle ? "Expanded exclusion text" : `Expanded for ${handle}`,
         tokens_used: 700,
         cache_hit: true,
       });
@@ -285,6 +292,114 @@ test("@revamp flag on makes the rail the only task editor", async ({ page }) => 
   await expect(rail).toContainText("Current");
   await expect(page.locator('input[type="file"]')).toHaveCount(1);
   await expect(page.getByRole("button", { name: "Compile", exact: true })).toHaveCount(1);
+});
+
+test("@revamp Results stays bound to the compiled snapshot and payload order", async ({ page }) => {
+  test.skip(
+    process.env.NEXT_PUBLIC_CC_WORKSPACE_REVAMP !== "1",
+    "Run with NEXT_PUBLIC_CC_WORKSPACE_REVAMP=1 and a matching web build."
+  );
+  const orderedResult = {
+    ...compileResult,
+    raw_tokens: 12_345,
+    tokens_used: 2_345,
+    token_budget: 4_321,
+    reduction_pct: 81,
+    handle: "compile-ordered",
+    selected_sections: [
+      {
+        id: "payload-first",
+        section: "Payload > First",
+        tokens: 1_200,
+        relevance: 25,
+        text: "First in payload despite lower relevance",
+      },
+      {
+        id: "payload-second",
+        section: "Payload > Second",
+        tokens: 1_145,
+        relevance: 99,
+        text: "Second in payload despite higher relevance",
+      },
+    ],
+  };
+  await mockWorkspace(page, { compileResults: [orderedResult] });
+  await page.goto("/workspace");
+  await compileSample(page);
+
+  const canvas = page.getByRole("region", { name: "Workspace canvas" });
+  await expect(canvas.getByTestId("results-snapshot-label")).toContainText("What is covered?");
+  await expect(canvas.getByTestId("results-snapshot-label")).toContainText("4,000 token budget");
+  await expect(canvas.getByRole("heading", { name: "Compiled context" }).locator("..")).toContainText(
+    "12,345 → 2,345 tokens"
+  );
+  await expect(canvas.locator(".scard-static.in .nm")).toHaveText([
+    /Payload > First.*payload-first/,
+    /Payload > Second.*payload-second/,
+  ]);
+
+  await page.locator("#task").fill("Live task must stay in the rail");
+  await page.locator("#budget").fill("6000");
+  await expect(canvas.getByTestId("results-snapshot-label")).toContainText("What is covered?");
+  await expect(canvas.getByTestId("results-snapshot-label")).toContainText("4,000 token budget");
+  await expect(canvas).not.toContainText("Live task must stay in the rail");
+  await expect(canvas.getByTestId("stale-results-status")).toContainText(
+    "Stale result — showing the previous compiled snapshot"
+  );
+  await expect(canvas.getByText("First in payload despite lower relevance")).toBeVisible();
+});
+
+test("@revamp Results expands by visible handle and resets peeks and includes on compile", async ({
+  page,
+}) => {
+  test.skip(
+    process.env.NEXT_PUBLIC_CC_WORKSPACE_REVAMP !== "1",
+    "Run with NEXT_PUBLIC_CC_WORKSPACE_REVAMP=1 and a matching web build."
+  );
+  const requests = await mockWorkspace(page, {
+    compileResults: [
+      { ...compileResult, handle: "compile-visible-a" },
+      { ...compileResult, handle: "compile-visible-b", markdown: "# New compile" },
+    ],
+  });
+  await page.goto("/workspace");
+  await compileSample(page);
+
+  await expect(page.getByText("Expanded for compile-visible-a")).toBeVisible();
+  await page.getByLabel("Include in Prove", { exact: true }).check();
+  await expect(page.getByLabel("Include in Prove", { exact: true })).toBeChecked();
+  expect(requests.expandBodies.at(-1)).toContain('"handle":"compile-visible-a"');
+
+  await page
+    .getByRole("complementary", { name: "Live task" })
+    .getByRole("button", {
+      name: "Compile",
+      exact: true,
+    })
+    .click();
+  await expect(page.getByText("Expanded for compile-visible-b")).toBeVisible();
+  await expect(page.getByText("Expanded for compile-visible-a")).toHaveCount(0);
+  await expect(page.getByLabel("Include in Prove", { exact: true })).not.toBeChecked();
+  expect(requests.expandBodies.at(-1)).toContain('"handle":"compile-visible-b"');
+});
+
+test("@revamp budget drift retains Results cards but disables Prove includes", async ({ page }) => {
+  test.skip(
+    process.env.NEXT_PUBLIC_CC_WORKSPACE_REVAMP !== "1",
+    "Run with NEXT_PUBLIC_CC_WORKSPACE_REVAMP=1 and a matching web build."
+  );
+  await mockWorkspace(page);
+  await page.goto("/workspace");
+  await compileSample(page);
+
+  const canvas = page.getByRole("region", { name: "Workspace canvas" });
+  await page.locator("#budget").fill("5000");
+  await expect(canvas.getByText("Coverage > Included")).toBeVisible();
+  await expect(canvas.getByText("Coverage > Exclusion")).toBeVisible();
+  await expect(canvas.getByLabel("Include in Prove", { exact: true })).toBeDisabled();
+  await expect(canvas.getByTestId("stale-results-status")).toContainText("budget changed since this compile");
+  await expect(canvas.getByTestId("stale-results-status")).toContainText("Use Compile in the live task rail");
+  await expect(canvas.getByTestId("stale-results-status").getByRole("link")).toHaveCount(0);
 });
 
 test("@revamp rail resolves upload, sample, and measurement races", async ({ page }) => {

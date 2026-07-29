@@ -27,34 +27,47 @@ function metaFor(s: SectionInfo): string {
 
 export default function ResultsPage() {
   const {
-    compile,
+    compiledSnapshot,
     workspaceStatus,
     proveExpandedIds,
     proveExpandedTokenSum,
     setProveInclude,
-    task,
-    budget,
     sessionSavedTokens,
     sessionSavedUsd,
   } = useWorkspace();
   const { proveStale, agentStale, questionStale, sourceUnavailable } = workspaceStatus;
-  const [peek, setPeek] = useState<Record<string, string>>({});
-  const [pending, setPending] = useState<Set<string>>(() => new Set());
+  const compile = compiledSnapshot?.result ?? null;
+  const compileHandle = compile?.handle ?? "";
+  const activeHandle = useRef(compileHandle);
+  activeHandle.current = compileHandle;
+  const [peekState, setPeekState] = useState<{ handle: string; entries: Record<string, string> }>(() => ({
+    handle: compileHandle,
+    entries: {},
+  }));
+  const [pendingState, setPendingState] = useState<{ handle: string; ids: Set<string> }>(() => ({
+    handle: compileHandle,
+    ids: new Set(),
+  }));
   const [showAllRelevance, setShowAllRelevance] = useState(false);
   const [err, setErr] = useState("");
   const autoPeekedHandle = useRef("");
   const reduceMotion = useReducedMotion();
+  const peek = peekState.handle === compileHandle ? peekState.entries : {};
+  const pending = pendingState.handle === compileHandle ? pendingState.ids : new Set<string>();
+  const revampEnabled = process.env.NEXT_PUBLIC_CC_WORKSPACE_REVAMP === "1";
 
   useEffect(() => {
     const first = compile?.budget_omitted_sections?.[0];
     if (!compile || !first || autoPeekedHandle.current === compile.handle) return;
     autoPeekedHandle.current = compile.handle;
-    void expand(first.id);
+    setShowAllRelevance(false);
+    setErr("");
+    void expand(first.id, compile.handle);
     // expand is deliberately one-shot for each compile handle.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [compile?.handle]);
 
-  if (!compile) {
+  if (!compile || !compiledSnapshot) {
     return (
       <section className="panel">
         <h2 className="sec">No compile yet</h2>
@@ -65,30 +78,42 @@ export default function ResultsPage() {
     );
   }
 
-  async function expand(id: string) {
-    if (peek[id] || pending.has(id)) return;
+  async function expand(id: string, handle = compileHandle) {
+    if (!handle || (handle === compileHandle && (peek[id] || pending.has(id)))) return;
     setErr("");
-    setPending((current) => new Set(current).add(id));
+    setPendingState((current) => ({
+      handle,
+      ids: new Set(current.handle === handle ? current.ids : []).add(id),
+    }));
     try {
       const res = await fetchWithBusyRetry(
         "/api/expand",
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ handle: compile!.handle, section_id: id }),
+          body: JSON.stringify({ handle, section_id: id }),
         },
-        () => setErr("Server busy — retrying this peek once…")
+        () => {
+          if (activeHandle.current === handle) setErr("Server busy — retrying this peek once…");
+        }
       );
       const data = (await res.json()) as ExpandApiResult & { error?: string };
       if (!res.ok) throw new Error(apiFailureMessage(res, data.error, "expand"));
-      setPeek((p) => ({ ...p, [id]: data.markdown }));
+      if (activeHandle.current !== handle) return;
+      setPeekState((current) => ({
+        handle,
+        entries: { ...(current.handle === handle ? current.entries : {}), [id]: data.markdown },
+      }));
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Expand failed");
+      if (activeHandle.current === handle) {
+        setErr(e instanceof Error ? e.message : "Expand failed");
+      }
     } finally {
-      setPending((current) => {
-        const next = new Set(current);
+      setPendingState((current) => {
+        if (current.handle !== handle) return current;
+        const next = new Set(current.ids);
         next.delete(id);
-        return next;
+        return { handle, ids: next };
       });
     }
   }
@@ -102,16 +127,14 @@ export default function ResultsPage() {
   const budgetOmitted = compile.budget_omitted_sections ?? [];
   const relevanceOmitted = compile.relevance_omitted_sections ?? [];
   const visibleRelevance = showAllRelevance ? relevanceOmitted : relevanceOmitted.slice(0, 12);
-  const selectedByRelevance = [...compile.selected_sections].sort(
-    (a, b) => (b.relevance ?? -1) - (a.relevance ?? -1)
-  );
   const packaging = packagingGapNote(compile.selected_content_tokens, compile.tokens_used);
 
   function dismissPeek(id: string) {
-    setPeek((current) => {
-      const next = { ...current };
+    setPeekState((current) => {
+      if (current.handle !== compileHandle) return current;
+      const next = { ...current.entries };
       delete next[id];
-      return next;
+      return { handle: compileHandle, entries: next };
     });
   }
 
@@ -124,6 +147,10 @@ export default function ResultsPage() {
         transition={{ duration: reduceMotion ? 0 : 0.45, ease: [0.22, 1, 0.36, 1] }}
       >
         <h2 className="sec">Compiled context</h2>
+        <p className="alabel" data-testid="results-snapshot-label">
+          Snapshot for “{compiledSnapshot.taskLabel}” · {compiledSnapshot.budget.toLocaleString()} token
+          budget
+        </p>
         <p className="sub">
           {compile.raw_tokens.toLocaleString()} → {compile.tokens_used.toLocaleString()} tokens (
           {compile.reduction_pct}% fewer)
@@ -242,13 +269,20 @@ export default function ResultsPage() {
         ) : null}
 
         {proveStale || sourceUnavailable ? (
-          <p className="hostnote" role="status">
+          <p className="hostnote" role="status" data-testid="stale-results-status">
+            <strong>Stale result — showing the previous compiled snapshot.</strong>{" "}
             {sourceUnavailable
               ? "The source file is not available in this browser session. "
               : questionStale
                 ? "The question changed since this compile. Expands for Prove were cleared. "
                 : "The budget changed since this compile. Prove requires matching results; Agent can use the live budget. "}
-            <Link href="/workspace">Recompile</Link>
+            {revampEnabled ? (
+              <>
+                Use <strong>Compile</strong> in the live task rail
+              </>
+            ) : (
+              <Link href="/workspace">Recompile</Link>
+            )}
             {agentStale || sourceUnavailable ? " before Prove / Agent." : " before Prove."}
           </p>
         ) : null}
@@ -280,7 +314,7 @@ export default function ResultsPage() {
           {compile.selected_sections.length === 0 ? (
             <p className="sub">No sections included — try a higher budget or a sharper question.</p>
           ) : (
-            selectedByRelevance.map((s) => (
+            compile.selected_sections.map((s) => (
               <article key={s.id} className="scard-static in">
                 <div className="nm">
                   {s.section} <span className="section-id">[{s.id}]</span>{" "}
@@ -306,7 +340,7 @@ export default function ResultsPage() {
                       <label className="include-lab">
                         <input
                           type="checkbox"
-                          disabled={proveStale}
+                          disabled={proveStale || sourceUnavailable}
                           checked={proveExpandedIds.includes(s.id)}
                           onChange={(ev) => setProveInclude(s.id, s.remainder_tokens ?? 0, ev.target.checked)}
                         />{" "}
@@ -366,7 +400,7 @@ export default function ResultsPage() {
                     <label className="include-lab">
                       <input
                         type="checkbox"
-                        disabled={proveStale}
+                        disabled={proveStale || sourceUnavailable}
                         checked={proveExpandedIds.includes(s.id)}
                         onChange={(ev) => setProveInclude(s.id, s.tokens, ev.target.checked)}
                       />{" "}
@@ -418,7 +452,7 @@ export default function ResultsPage() {
                     <label className="include-lab">
                       <input
                         type="checkbox"
-                        disabled={proveStale}
+                        disabled={proveStale || sourceUnavailable}
                         checked={proveExpandedIds.includes(s.id)}
                         onChange={(ev) => setProveInclude(s.id, s.tokens, ev.target.checked)}
                       />{" "}
@@ -459,10 +493,6 @@ export default function ResultsPage() {
             {compile.markdown}
           </pre>
         </details>
-        <p className="sub" style={{ marginTop: 12 }}>
-          Live inputs: budget {budget.toLocaleString()} · task “{task.slice(0, 80)}
-          {task.length > 80 ? "…" : ""}”
-        </p>
       </motion.div>
     </section>
   );
