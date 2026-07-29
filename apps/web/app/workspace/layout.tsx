@@ -1,7 +1,6 @@
-"use client";
-
 import { WorkspaceChrome } from "@/components/WorkspaceChrome";
 
 export default function WorkspaceLayout({ children }: { children: React.ReactNode }) {
-  return <WorkspaceChrome>{children}</WorkspaceChrome>;
+  const revampEnabled = process.env.NEXT_PUBLIC_CC_WORKSPACE_REVAMP === "1";
+  return <WorkspaceChrome revampEnabled={revampEnabled}>{children}</WorkspaceChrome>;
 }

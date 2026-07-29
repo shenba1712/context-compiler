@@ -210,7 +210,7 @@ export default function WorkspaceCompilePage() {
   const maxFileLabel = Number.isInteger(maxFileMb) ? String(maxFileMb) : maxFileMb.toFixed(1);
 
   return (
-    <section>
+    <section id="workspace-compile" tabIndex={-1}>
       <div className="panel">
         <h2 className="sec">Compile a document</h2>
         <p className="sub">Upload your own file, or pick a sample. Then ask a question and set a budget.</p>

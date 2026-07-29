@@ -382,6 +382,37 @@
 .task-summary-view dl > div { min-width:0; }
 .task-summary-view dt { color:var(--faint); font-size:11px; }
 .task-summary-view dd { margin:1px 0 0; overflow-wrap:anywhere; color:var(--text); font-size:13px; font-weight:600; }
+.workspace-shell-revamp { max-width:1240px; display:grid; grid-template-columns:minmax(220px,280px) minmax(0,1fr);
+  gap:24px; align-items:start; }
+.workspace-rail { position:sticky; top:76px; padding:20px 18px; border-left:2px solid var(--forest); }
+.workspace-rail-heading { padding-bottom:12px; border-bottom:1px solid var(--border); }
+.workspace-rail-heading .alabel { margin:0 0 2px; }
+.workspace-rail-heading h2 { margin:0; font-family:"Fraunces",Georgia,serif; font-size:22px; font-weight:600; }
+.workspace-rail-summary { margin:0; }
+.workspace-rail-summary > div { padding:12px 0; border-bottom:1px solid var(--border); }
+.workspace-rail-summary dt { color:var(--faint); font-family:"IBM Plex Mono",ui-monospace,monospace;
+  font-size:10.5px; letter-spacing:.04em; }
+.workspace-rail-summary dd { margin:3px 0 0; color:var(--text); font-size:13.5px; font-weight:600;
+  line-height:1.4; overflow-wrap:anywhere; }
+.workspace-rail-summary dd.workspace-rail-meta { color:var(--muted); font-size:11.5px; font-weight:500; }
+.workspace-rail-snapshot { margin:14px 0 0; padding:10px 0 10px 12px; border-left:2px solid var(--compiled); }
+.workspace-rail-snapshot .alabel { margin:0 0 3px; }
+.workspace-rail-snapshot p { margin:0; font-size:12.5px; font-weight:600; line-height:1.4; }
+.workspace-rail-snapshot span { color:var(--muted); font-size:11.5px; }
+.workspace-rail-action { padding:18px 0; border-bottom:1px solid var(--border); }
+.workspace-rail-action .btn { width:100%; justify-content:center; }
+.workspace-rail-action p { margin:7px 0 0; color:var(--muted); font-size:11.5px; line-height:1.4; }
+.workspace-activity-nav { display:flex; flex-direction:column; gap:0; padding-top:15px; }
+.workspace-activity-nav .alabel { margin:0 0 6px; }
+.workspace-activity-link { display:flex; align-items:baseline; justify-content:space-between; gap:10px;
+  padding:9px 8px; border-left:2px solid transparent; color:var(--muted); font-size:13.5px; font-weight:600; }
+.workspace-activity-link:hover { color:var(--forest); background:var(--accent-soft); }
+.workspace-activity-link.active { border-left-color:var(--forest); color:var(--forest); background:var(--accent-soft); }
+.workspace-activity-link.disabled { opacity:.5; cursor:not-allowed; }
+.workspace-activity-link.disabled:hover { color:var(--muted); background:transparent; }
+.workspace-activity-link small { color:var(--faint); font-size:10.5px; font-weight:500; }
+.workspace-canvas { min-width:0; }
+.workspace-canvas > section:first-child { padding-top:0; }
 .page-main { min-height:calc(100vh - 52px); }
 
 .scard-static { border:1px solid var(--border2); padding:12px 14px; margin-bottom:8px; background:var(--surface); }
@@ -452,6 +483,14 @@
 .copybtn:hover { border-color:var(--accent); background:var(--accent-soft); }
 .site-footer { padding:26px 0 42px; border-top:1px solid var(--border); color:var(--faint); text-align:center; font-size:13.5px; }
 @media (max-width:720px) {
+  .workspace-shell-revamp { grid-template-columns:1fr; gap:18px; }
+  .workspace-rail { position:static; }
+  .workspace-rail-summary { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .workspace-rail-summary > div:nth-child(odd) { padding-right:12px; }
+  .workspace-rail-summary > div:nth-child(even) { padding-left:12px; border-left:1px solid var(--border); }
+  .workspace-activity-nav { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); }
+  .workspace-activity-nav .alabel { grid-column:1 / -1; }
+  .workspace-activity-link { flex-direction:column; gap:1px; align-items:flex-start; }
   .task-summary-grid { grid-template-columns:1fr; gap:12px; }
   .task-summary-view.compiled { padding:12px 0 0; border-left:0; border-top:1px solid var(--border); }
   .parity-grid { grid-template-columns:1fr !important; }
@@ -460,6 +499,9 @@
   .stat:nth-child(-n+2) { border-bottom:1px solid var(--border); }
 }
 @media (max-width:560px) {
+  .workspace-rail-summary { grid-template-columns:1fr; }
+  .workspace-rail-summary > div:nth-child(odd),
+  .workspace-rail-summary > div:nth-child(even) { padding-left:0; padding-right:0; border-left:0; }
   /* Keep touch sizing after the later workspace button resets above. */
   .bpre,.qchip { padding-top:9px; padding-bottom:9px; min-height:40px; display:inline-flex; align-items:center; }
   .bpre { align-items:flex-start; }

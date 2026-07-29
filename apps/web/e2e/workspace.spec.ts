@@ -204,10 +204,11 @@ async function compileSample(page: Page) {
   await expect(page.getByRole("heading", { name: "Compiled context" })).toBeVisible();
 }
 
-test("routes workspace steps and guards result-only routes before compile", async ({ page }) => {
+test("flag off keeps legacy workspace steps and guards result-only routes", async ({ page }) => {
   await mockWorkspace(page);
   await page.goto("/workspace");
 
+  await expect(page.locator(".workspace-rail")).toHaveCount(0);
   const liveSummary = page.getByTestId("live-task-summary");
   await expect(liveSummary).toContainText("No document");
   await expect(liveSummary).toContainText("No task");
@@ -225,6 +226,49 @@ test("routes workspace steps and guards result-only routes before compile", asyn
   await expect(page.getByRole("heading", { name: "No compile yet" })).toBeVisible();
   await page.getByRole("link", { name: "Compile a document" }).click();
   await expect(page).toHaveURL(/\/workspace$/);
+});
+
+test("@revamp flag on shows the passive task rail and route canvas", async ({ page }) => {
+  test.skip(
+    process.env.NEXT_PUBLIC_CC_WORKSPACE_REVAMP !== "1",
+    "Run with NEXT_PUBLIC_CC_WORKSPACE_REVAMP=1 and a matching web build."
+  );
+  await mockWorkspace(page);
+  await page.goto("/workspace");
+
+  const rail = page.getByRole("complementary", { name: "Live task" });
+  await expect(rail).toBeVisible();
+  await expect(page.getByRole("region", { name: "Workspace canvas" })).toBeVisible();
+  await expect(rail).toContainText("No document");
+  await expect(rail).toContainText("4,000 tokens");
+  await expect(rail).toContainText("Not compiled");
+
+  const activity = rail.getByRole("navigation", { name: "Workspace activity" });
+  await expect(activity.locator(".workspace-activity-link", { hasText: "Results" })).toHaveAttribute(
+    "aria-disabled",
+    "true"
+  );
+  await expect(activity.locator(".workspace-activity-link", { hasText: "Prove" })).toHaveAttribute(
+    "aria-disabled",
+    "true"
+  );
+  await expect(activity.locator(".workspace-activity-link", { hasText: "Agent" })).toHaveAttribute(
+    "aria-disabled",
+    "true"
+  );
+  await expect(activity.getByText("Compile", { exact: true })).toHaveCount(0);
+
+  await rail.getByRole("link", { name: "Compile", exact: true }).click();
+  await expect(page).toHaveURL(/\/workspace#workspace-compile$/);
+  await pickSample(page);
+  await page.getByRole("button", { name: "Compile", exact: true }).click();
+  await expect(page).toHaveURL(/\/workspace\/results$/);
+  await expect(activity.getByRole("link", { name: /Results/ })).toHaveAttribute("aria-current", "page");
+  await expect(rail).toContainText("Current");
+  await expect(rail.getByRole("link", { name: "Recompile", exact: true })).toHaveAttribute(
+    "href",
+    "/workspace#workspace-compile"
+  );
 });
 
 test("keeps the submitted task and budget in the compiled summary", async ({ page }) => {
