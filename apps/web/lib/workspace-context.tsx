@@ -89,6 +89,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     if (saved) {
       setTask(saved.task);
       setBudget(saved.budget);
+      setFilePicked(saved.filePicked ?? "");
       setSampleKeyState(saved.sampleKey);
       // Browser storage cannot restore a custom File. Only restore actionable
       // compile state when a sample key lets us fetch the bytes again.
@@ -174,6 +175,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     savePersistedWorkspace({
       task,
       budget,
+      filePicked,
       sampleKey,
       compile,
       compiledTask,
@@ -187,6 +189,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     hydrated,
     task,
     budget,
+    filePicked,
     sampleKey,
     compile,
     compiledTask,

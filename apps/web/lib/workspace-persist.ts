@@ -6,6 +6,7 @@ const LEGACY_KEY = "cc-demo-v1";
 export type PersistedWorkspace = {
   task: string;
   budget: number;
+  filePicked?: string;
   sampleKey: string | null;
   compile: CompileApiResult | null;
   compiledTask: string | null;

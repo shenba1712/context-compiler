@@ -208,6 +208,11 @@ test("routes workspace steps and guards result-only routes before compile", asyn
   await mockWorkspace(page);
   await page.goto("/workspace");
 
+  const liveSummary = page.getByTestId("live-task-summary");
+  await expect(liveSummary).toContainText("No document");
+  await expect(liveSummary).toContainText("No task");
+  await expect(liveSummary).toContainText("4,000 tokens");
+  await expect(page.getByTestId("compiled-task-summary")).toHaveCount(0);
   await expect(page.getByRole("link", { name: "Compile", exact: true })).toHaveAttribute(
     "aria-current",
     "step"
@@ -220,6 +225,30 @@ test("routes workspace steps and guards result-only routes before compile", asyn
   await expect(page.getByRole("heading", { name: "No compile yet" })).toBeVisible();
   await page.getByRole("link", { name: "Compile a document" }).click();
   await expect(page).toHaveURL(/\/workspace$/);
+});
+
+test("keeps the submitted task and budget in the compiled summary", async ({ page }) => {
+  await mockWorkspace(page);
+  await page.goto("/workspace");
+  await pickSample(page);
+  await page.locator("#task").fill("Exact submitted task");
+  await page.locator("#budget").fill("5000");
+  await page.getByRole("button", { name: "Compile", exact: true }).click();
+  await expect(page).toHaveURL(/\/workspace\/results$/);
+
+  const compiledSummary = page.getByTestId("compiled-task-summary");
+  await expect(compiledSummary).toContainText("Golden sample");
+  await expect(compiledSummary).toContainText("Exact submitted task");
+  await expect(compiledSummary).toContainText("5,000 tokens");
+
+  await page.getByRole("link", { name: "Compile", exact: true }).click();
+  await page.locator("#task").fill("Live edited task");
+  await page.locator("#budget").fill("6000");
+  await expect(page.getByTestId("live-task-summary")).toContainText("Live edited task");
+  await expect(page.getByTestId("live-task-summary")).toContainText("6,000 tokens");
+  await expect(compiledSummary).toContainText("Exact submitted task");
+  await expect(compiledSummary).toContainText("5,000 tokens");
+  await expect(compiledSummary).not.toContainText("Live edited task");
 });
 
 test("captures task and budget stale routing rules", async ({ page }) => {
@@ -284,6 +313,9 @@ test("does not restore a custom upload compile after reload", async ({ page }) =
   await page.goto("/workspace");
   await expect(page.locator("#task")).toHaveValue("Custom task");
   await expect(page.locator("#file")).toHaveValue("");
+  await expect(page.getByTestId("live-task-summary")).toContainText("custom.txt");
+  await expect(page.getByTestId("live-task-summary")).toContainText("Missing file bytes");
+  await expect(page.getByTestId("compiled-task-summary")).toHaveCount(0);
 });
 
 test("disables all LLM entry points when the host has no key", async ({ page }) => {
