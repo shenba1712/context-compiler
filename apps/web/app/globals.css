@@ -382,12 +382,23 @@
 .task-summary-view dl > div { min-width:0; }
 .task-summary-view dt { color:var(--faint); font-size:11px; }
 .task-summary-view dd { margin:1px 0 0; overflow-wrap:anywhere; color:var(--text); font-size:13px; font-weight:600; }
-.workspace-shell-revamp { max-width:1240px; display:grid; grid-template-columns:minmax(220px,280px) minmax(0,1fr);
+.workspace-shell-revamp { max-width:1380px; display:grid; grid-template-columns:minmax(340px,390px) minmax(0,1fr);
   gap:24px; align-items:start; }
-.workspace-rail { position:sticky; top:76px; padding:20px 18px; border-left:2px solid var(--forest); }
+.workspace-rail { position:sticky; top:76px; max-height:calc(100vh - 92px); overflow:auto; padding:20px 18px;
+  border-left:2px solid var(--forest); }
 .workspace-rail-heading { padding-bottom:12px; border-bottom:1px solid var(--border); }
 .workspace-rail-heading .alabel { margin:0 0 2px; }
 .workspace-rail-heading h2 { margin:0; font-family:"Fraunces",Georgia,serif; font-size:22px; font-weight:600; }
+.workspace-rail-editor { padding-top:16px; }
+.workspace-rail-editor label { font-size:13px; }
+.workspace-rail-editor input[type=file] { max-width:100%; }
+.workspace-rail-editor .samples { grid-template-columns:1fr; }
+.workspace-rail-editor .scard { padding:10px 11px; }
+.workspace-rail-editor .scard .mt { font-size:12px; }
+.workspace-rail-editor .formhint { font-size:12.5px; }
+.workspace-rail-editor .docsizenote { font-size:12.5px; }
+.workspace-rail-editor .budgetnum { font-size:22px; }
+.workspace-rail-editor .bpre { padding:6px 9px; }
 .workspace-rail-summary { margin:0; }
 .workspace-rail-summary > div { padding:12px 0; border-bottom:1px solid var(--border); }
 .workspace-rail-summary dt { color:var(--faint); font-family:"IBM Plex Mono",ui-monospace,monospace;
@@ -484,7 +495,7 @@
 .site-footer { padding:26px 0 42px; border-top:1px solid var(--border); color:var(--faint); text-align:center; font-size:13.5px; }
 @media (max-width:720px) {
   .workspace-shell-revamp { grid-template-columns:1fr; gap:18px; }
-  .workspace-rail { position:static; }
+  .workspace-rail { position:static; max-height:none; overflow:visible; }
   .workspace-rail-summary { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); }
   .workspace-rail-summary > div:nth-child(odd) { padding-right:12px; }
   .workspace-rail-summary > div:nth-child(even) { padding-left:12px; border-left:1px solid var(--border); }

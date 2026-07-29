@@ -3511,14 +3511,15 @@ async function testSampleLibraryStaticServing() {
     ".dockerignore must except public/samples/** so *.md samples ship in Docker"
   );
 
-  // Next workspace holds sample bytes as a File (browsers block input.files = DataTransfer).
-  const nextWorkspace = readFileSync(
-    join(process.cwd(), "apps", "web", "app", "workspace", "page.tsx"),
+  // The reusable Next task editor holds sample bytes as a File (browsers block
+  // input.files = DataTransfer).
+  const nextTaskEditor = readFileSync(
+    join(process.cwd(), "apps", "web", "components", "TaskEditor.tsx"),
     "utf-8"
   );
-  assert.ok(/res\.ok/.test(nextWorkspace), "Next sample fetch must check res.ok");
-  assert.ok(/new File\(/.test(nextWorkspace), "Next sample selection must hold a File in memory");
-  assert.ok(/fileFromSample/.test(nextWorkspace), "Next has a dedicated sample→File helper");
+  assert.ok(/response\.ok/.test(nextTaskEditor), "Next sample fetch must check response.ok");
+  assert.ok(/new File\(/.test(nextTaskEditor), "Next sample selection must hold a File in memory");
+  assert.ok(/fileFromSample/.test(nextTaskEditor), "Next has a dedicated sample→File helper");
   console.log("  sample library ok: fast catalog + static bytes + Next File hold");
 }
 

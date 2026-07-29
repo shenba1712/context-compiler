@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
+import { TaskEditor } from "@/components/TaskEditor";
 import { selectTaskSummary, type SourceAvailability } from "@/lib/task-summary";
 import { useWorkspace } from "@/lib/workspace-context";
 
@@ -125,16 +126,6 @@ function RailWorkspaceChrome({ children, path }: { children: React.ReactNode; pa
   const { compile, workspaceStatus } = workspace;
   const summary = selectTaskSummary(workspace);
   const sourceUnavailable = workspaceStatus.sourceUnavailable;
-  const compileLabel = compile ? "Recompile" : "Compile";
-  const compileStatus = workspaceStatus.compileAvailable
-    ? compile
-      ? "Ready when live inputs need a new snapshot"
-      : "Ready to compile"
-    : summary.live.sourceAvailability === "not-selected"
-      ? "Choose a source to continue"
-      : !summary.live.taskLabel
-        ? "Enter a task to continue"
-        : "Source is unavailable";
 
   const activityAvailable = (href: string) => {
     if (!compile) return false;
@@ -150,46 +141,18 @@ function RailWorkspaceChrome({ children, path }: { children: React.ReactNode; pa
           <p className="alabel">Workspace</p>
           <h2 id="workspace-rail-title">Live task</h2>
         </div>
-        <dl className="workspace-rail-summary" data-testid="live-task-summary">
-          <div>
-            <dt>Source</dt>
-            <dd>{summary.live.documentName ?? "No document"}</dd>
-            <dd className="workspace-rail-meta">{sourceLabels[summary.live.sourceAvailability]}</dd>
-          </div>
-          <div>
-            <dt>Task</dt>
-            <dd>{summary.live.taskLabel || "No task"}</dd>
-          </div>
-          <div>
-            <dt>Budget</dt>
-            <dd>{summary.live.budget.toLocaleString()} tokens</dd>
-          </div>
-          <div>
-            <dt>Compile freshness</dt>
-            <dd>
-              {summary.compileStatus === "current"
-                ? "Current"
-                : summary.compileStatus === "stale"
-                  ? "Live edits need compile"
-                  : "Not compiled"}
-            </dd>
-          </div>
-        </dl>
+        <div data-testid="live-task-summary">
+          <TaskEditor rail />
+        </div>
 
         {summary.compiled ? (
           <div className="workspace-rail-snapshot" data-testid="compiled-task-summary">
             <p className="alabel">Compiled snapshot</p>
             <p>{summary.compiled.taskLabel || "No task"}</p>
             <span>{summary.compiled.budget.toLocaleString()} tokens</span>
+            <span>{summary.compileStatus === "current" ? " · Current" : " · Live edits need compile"}</span>
           </div>
         ) : null}
-
-        <div className="workspace-rail-action">
-          <Link className="btn primary" href="/workspace#workspace-compile">
-            {compileLabel}
-          </Link>
-          <p>{compileStatus}</p>
-        </div>
 
         <nav className="workspace-activity-nav" aria-label="Workspace activity">
           <p className="alabel">Activity</p>

@@ -90,6 +90,10 @@ const compileResult = {
 type MockOptions = {
   llmAvailable?: boolean;
   compileError?: string;
+  measureError?: string;
+  measureDelayMs?: number;
+  compileDelayMs?: number;
+  sampleDelayMs?: number;
 };
 
 async function fulfillJson(route: Route, body: unknown, status = 200) {
@@ -104,6 +108,7 @@ async function mockWorkspace(page: Page, options: MockOptions = {}) {
   const requests = {
     answerBodies: [] as string[],
     agentBodies: [] as string[],
+    compileBodies: [] as string[],
   };
 
   await page.route("**/api/**", async (route) => {
@@ -121,10 +126,21 @@ async function mockWorkspace(page: Page, options: MockOptions = {}) {
       return;
     }
     if (path === "/api/measure") {
-      await fulfillJson(route, { raw_tokens: 1_250, handle: "measure-golden" });
+      if (options.measureDelayMs) {
+        await new Promise((resolve) => setTimeout(resolve, options.measureDelayMs));
+      }
+      if (options.measureError) {
+        await fulfillJson(route, { error: options.measureError }, 500);
+      } else {
+        await fulfillJson(route, { raw_tokens: 1_250, handle: "measure-golden" });
+      }
       return;
     }
     if (path === "/api/compile") {
+      requests.compileBodies.push(route.request().postData() ?? "");
+      if (options.compileDelayMs) {
+        await new Promise((resolve) => setTimeout(resolve, options.compileDelayMs));
+      }
       if (options.compileError) {
         await fulfillJson(route, { error: options.compileError }, 400);
       } else {
@@ -181,13 +197,16 @@ async function mockWorkspace(page: Page, options: MockOptions = {}) {
     await route.fallback();
   });
 
-  await page.route("**/samples/golden.txt", (route) =>
-    route.fulfill({
+  await page.route("**/samples/golden.txt", async (route) => {
+    if (options.sampleDelayMs) {
+      await new Promise((resolve) => setTimeout(resolve, options.sampleDelayMs));
+    }
+    await route.fulfill({
       status: 200,
       contentType: "text/plain",
       body: "Golden sample contents",
-    })
-  );
+    });
+  });
 
   return requests;
 }
@@ -228,7 +247,7 @@ test("flag off keeps legacy workspace steps and guards result-only routes", asyn
   await expect(page).toHaveURL(/\/workspace$/);
 });
 
-test("@revamp flag on shows the passive task rail and route canvas", async ({ page }) => {
+test("@revamp flag on makes the rail the only task editor", async ({ page }) => {
   test.skip(
     process.env.NEXT_PUBLIC_CC_WORKSPACE_REVAMP !== "1",
     "Run with NEXT_PUBLIC_CC_WORKSPACE_REVAMP=1 and a matching web build."
@@ -239,9 +258,10 @@ test("@revamp flag on shows the passive task rail and route canvas", async ({ pa
   const rail = page.getByRole("complementary", { name: "Live task" });
   await expect(rail).toBeVisible();
   await expect(page.getByRole("region", { name: "Workspace canvas" })).toBeVisible();
-  await expect(rail).toContainText("No document");
-  await expect(rail).toContainText("4,000 tokens");
-  await expect(rail).toContainText("Not compiled");
+  await expect(rail.locator("#budget")).toHaveValue("4000");
+  await expect(page.locator('input[type="file"]')).toHaveCount(1);
+  await expect(page.getByRole("button", { name: "Compile", exact: true })).toHaveCount(1);
+  await expect(page.locator(".workspace-canvas").locator('input[type="file"]')).toHaveCount(0);
 
   const activity = rail.getByRole("navigation", { name: "Workspace activity" });
   await expect(activity.locator(".workspace-activity-link", { hasText: "Results" })).toHaveAttribute(
@@ -258,17 +278,122 @@ test("@revamp flag on shows the passive task rail and route canvas", async ({ pa
   );
   await expect(activity.getByText("Compile", { exact: true })).toHaveCount(0);
 
-  await rail.getByRole("link", { name: "Compile", exact: true }).click();
-  await expect(page).toHaveURL(/\/workspace#workspace-compile$/);
   await pickSample(page);
-  await page.getByRole("button", { name: "Compile", exact: true }).click();
+  await rail.getByRole("button", { name: "Compile", exact: true }).click();
   await expect(page).toHaveURL(/\/workspace\/results$/);
   await expect(activity.getByRole("link", { name: /Results/ })).toHaveAttribute("aria-current", "page");
   await expect(rail).toContainText("Current");
-  await expect(rail.getByRole("link", { name: "Recompile", exact: true })).toHaveAttribute(
-    "href",
-    "/workspace#workspace-compile"
+  await expect(page.locator('input[type="file"]')).toHaveCount(1);
+  await expect(page.getByRole("button", { name: "Compile", exact: true })).toHaveCount(1);
+});
+
+test("@revamp rail resolves upload, sample, and measurement races", async ({ page }) => {
+  test.skip(
+    process.env.NEXT_PUBLIC_CC_WORKSPACE_REVAMP !== "1",
+    "Run with NEXT_PUBLIC_CC_WORKSPACE_REVAMP=1 and a matching web build."
   );
+  await mockWorkspace(page, { sampleDelayMs: 150, measureDelayMs: 150 });
+  await page.goto("/workspace");
+
+  await page.getByRole("button", { name: /Golden sample/ }).click();
+  await page.locator("#file").setInputFiles({
+    name: "upload-wins.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.from("Upload wins"),
+  });
+  await expect(page.getByRole("status")).toContainText("upload-wins.txt");
+  await page.waitForTimeout(200);
+  await expect(page.getByRole("status")).toContainText("upload-wins.txt");
+  await expect(page.locator("#task")).toHaveValue("");
+
+  await page.locator("#file").setInputFiles({
+    name: "measurement-loses.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.from("Measurement loses"),
+  });
+  await page.getByRole("button", { name: /Golden sample/ }).click();
+  await expect(page.getByRole("status")).toContainText("Golden sample");
+  await page.waitForTimeout(200);
+  await expect(page.getByText(/This document is about 10,000 tokens total/)).toBeVisible();
+  await expect(page.getByText(/1,250 tokens/)).toHaveCount(0);
+});
+
+test("@revamp rail keeps validation and measurement fallback", async ({ page }) => {
+  test.skip(
+    process.env.NEXT_PUBLIC_CC_WORKSPACE_REVAMP !== "1",
+    "Run with NEXT_PUBLIC_CC_WORKSPACE_REVAMP=1 and a matching web build."
+  );
+  await mockWorkspace(page, { measureError: "measurement unavailable" });
+  await page.goto("/workspace");
+
+  await page.locator("#file").setInputFiles({
+    name: "invalid.exe",
+    mimeType: "application/octet-stream",
+    buffer: Buffer.from("invalid"),
+  });
+  await expect(page.locator(".err[role=alert]")).toContainText(/file type|extension/i);
+  await expect(page.locator("#file")).toHaveValue("");
+
+  await page.locator("#file").setInputFiles({
+    name: "valid.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.from("valid"),
+  });
+  await expect(page.getByText(/Couldn't pre-measure this file: measurement unavailable/)).toBeVisible();
+  await page.locator("#task").fill("");
+  await page.getByRole("button", { name: "Compile", exact: true }).click();
+  await expect(page.locator(".err[role=alert]")).toHaveText("Enter a question / task.");
+});
+
+test("@revamp rail cancels compile from its owning editor", async ({ page }) => {
+  test.skip(
+    process.env.NEXT_PUBLIC_CC_WORKSPACE_REVAMP !== "1",
+    "Run with NEXT_PUBLIC_CC_WORKSPACE_REVAMP=1 and a matching web build."
+  );
+  await mockWorkspace(page);
+  await page.addInitScript(() => {
+    const nativeFetch = window.fetch.bind(window);
+    window.fetch = (input, init) => {
+      if (String(input).endsWith("/api/compile")) {
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => reject(new DOMException("The operation was aborted.", "AbortError")),
+            { once: true }
+          );
+        });
+      }
+      return nativeFetch(input, init);
+    };
+  });
+  await page.goto("/workspace");
+  await pickSample(page);
+  await page.getByRole("button", { name: "Compile", exact: true }).click();
+  await page.getByRole("button", { name: "Cancel" }).click();
+  await expect(page.locator(".err[role=alert]")).toHaveText("Compile cancelled.");
+});
+
+test("@revamp rail submits by keyboard once and preserves Shift+Enter", async ({ page }) => {
+  test.skip(
+    process.env.NEXT_PUBLIC_CC_WORKSPACE_REVAMP !== "1",
+    "Run with NEXT_PUBLIC_CC_WORKSPACE_REVAMP=1 and a matching web build."
+  );
+  const requests = await mockWorkspace(page, { compileDelayMs: 150 });
+  await page.goto("/workspace");
+  await pickSample(page);
+
+  const task = page.locator("#task");
+  await task.fill("First line");
+  await task.press("Shift+Enter");
+  await expect(task).toHaveValue("First line\n");
+  expect(requests.compileBodies).toHaveLength(0);
+
+  await task.press("Enter");
+  await page.evaluate(() =>
+    document.querySelector<HTMLFormElement>(".workspace-rail-editor")?.requestSubmit()
+  );
+  await expect(page).toHaveURL(/\/workspace\/results$/);
+  expect(requests.compileBodies).toHaveLength(1);
 });
 
 test("keeps the submitted task and budget in the compiled summary", async ({ page }) => {
