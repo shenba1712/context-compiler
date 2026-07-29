@@ -295,6 +295,109 @@ test("persists sample compile and Include in Prove across navigation and reload"
   await expect(page.getByRole("status")).toContainText("Sample: Golden sample");
 });
 
+test("migrates v1 persistence to v2 without deleting the rollout key", async ({ page }) => {
+  await mockWorkspace(page);
+  await page.addInitScript(
+    ({ result }) => {
+      sessionStorage.setItem(
+        "cc-workspace-v1",
+        JSON.stringify({
+          task: "Migrated task",
+          budget: 5000,
+          filePicked: "Sample: Golden sample",
+          sampleKey: "golden",
+          compile: result,
+          compiledTask: "Original compiled task",
+          compiledBudget: 4000,
+          proveExpandedIds: ["omitted-1"],
+          proveExpandedTokens: [["omitted-1", 700]],
+          sessionSavedTokens: 8000,
+          sessionSavedUsd: 0.024,
+        })
+      );
+    },
+    { result: compileResult }
+  );
+
+  await page.goto("/workspace/results");
+  await expect(page.getByRole("heading", { name: "Compiled context" })).toBeVisible();
+  await expect(page.getByLabel("Include in Prove", { exact: true })).toBeChecked();
+  await expect(page.getByText(/question changed since this compile/i)).toBeVisible();
+
+  const storage = await page.evaluate(() => ({
+    v1: sessionStorage.getItem("cc-workspace-v1"),
+    v2: JSON.parse(sessionStorage.getItem("cc-workspace-v2") ?? "null") as {
+      version?: number;
+      live?: { task?: string };
+      sessionTotals?: { savedTokens?: number };
+    } | null,
+  }));
+  expect(storage.v1).not.toBeNull();
+  expect(storage.v2?.version).toBe(2);
+  expect(storage.v2?.live?.task).toBe("Migrated task");
+  expect(storage.v2?.sessionTotals?.savedTokens).toBe(8000);
+});
+
+test("normalizes malformed, partial, and unknown-version persistence", async ({ page }) => {
+  await mockWorkspace(page);
+  await page.addInitScript(() => {
+    if (sessionStorage.getItem("persistence-test-seeded")) return;
+    sessionStorage.setItem("persistence-test-seeded", "true");
+    sessionStorage.setItem("cc-workspace-v2", "{not json");
+  });
+  await page.goto("/workspace");
+  await expect(page.locator("#task")).toHaveValue("");
+  await expect(page.locator("#budget")).toHaveValue("4000");
+
+  await page.evaluate(() => {
+    sessionStorage.setItem(
+      "cc-workspace-v2",
+      JSON.stringify({ version: 2, live: { task: "Partial record" } })
+    );
+  });
+  await page.reload();
+  await expect(page.locator("#task")).toHaveValue("Partial record");
+  await expect(page.locator("#budget")).toHaveValue("4000");
+  await expect(page.getByTestId("compiled-task-summary")).toHaveCount(0);
+
+  await page.evaluate(() => {
+    sessionStorage.setItem("cc-workspace-v2", JSON.stringify({ version: 99, live: { task: "Unsafe" } }));
+    sessionStorage.setItem(
+      "cc-workspace-v1",
+      JSON.stringify({
+        task: "Known fallback",
+        budget: 6000,
+        filePicked: "custom.txt",
+        sampleKey: null,
+        compile: null,
+        compiledTask: null,
+        compiledBudget: null,
+        proveExpandedIds: [],
+        proveExpandedTokens: [],
+      })
+    );
+  });
+  await page.reload();
+  await expect(page.locator("#task")).toHaveValue("Known fallback");
+  await expect(page.locator("#budget")).toHaveValue("6000");
+});
+
+test("restores a stale sample snapshot without making the changed task current", async ({ page }) => {
+  await mockWorkspace(page);
+  await page.goto("/workspace");
+  await compileSample(page);
+  await page.getByRole("link", { name: "Compile", exact: true }).click();
+  await page.locator("#task").fill("Changed after compile");
+  await expect(page.getByTestId("live-task-summary")).toContainText("Changed after compile");
+
+  await page.reload();
+  await page.goto("/workspace/results");
+  await expect(page.getByRole("heading", { name: "Compiled context" })).toBeVisible();
+  await expect(page.getByText(/question changed since this compile/i)).toBeVisible();
+  await expect(page.getByTestId("compiled-task-summary")).toContainText("What is covered?");
+  await expect(page.getByTestId("compiled-task-summary")).not.toContainText("Changed after compile");
+});
+
 test("does not restore a custom upload compile after reload", async ({ page }) => {
   await mockWorkspace(page);
   await page.goto("/workspace");

@@ -108,14 +108,11 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     const saved = loadPersistedWorkspace();
     // Browser storage cannot restore a custom File. Only restore actionable
     // compile state when a sample key lets us fetch the bytes again.
-    const restorableCompile = saved?.sampleKey ? saved.compile : null;
+    const restorableCompile = saved?.sampleKey ? saved.compiledSnapshot : null;
     const restoredSnapshot =
-      saved && restorableCompile && saved.compiledTask !== null && saved.compiledBudget !== null
+      saved && restorableCompile
         ? Object.freeze({
-            result: restorableCompile,
-            documentName: saved?.filePicked?.trim() || null,
-            taskLabel: saved.compiledTask,
-            budget: saved.compiledBudget,
+            ...restorableCompile,
             sourceAvailability: "restorable" as const,
           })
         : null;
@@ -131,9 +128,9 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       sessionSavedTokens: saved?.sessionSavedTokens ?? 0,
       sessionSavedUsd: saved?.sessionSavedUsd ?? 0,
       docSizeNote: restorableCompile
-        ? `Restored compile (~${restorableCompile.raw_tokens.toLocaleString()} tokens).`
+        ? `Restored compile (~${restorableCompile.result.raw_tokens.toLocaleString()} tokens).`
         : "",
-      rawTokensHint: restorableCompile?.raw_tokens ?? null,
+      rawTokensHint: restorableCompile?.result.raw_tokens ?? null,
     });
     restored.current = true;
   }, []);
@@ -200,9 +197,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       budget,
       filePicked,
       sampleKey,
-      compile,
-      compiledTask,
-      compiledBudget,
+      compiledSnapshot,
       proveExpandedIds: [...proveInclude.expandedIds],
       proveExpandedTokens: [...proveInclude.expandedTokens.entries()],
       sessionSavedTokens,
@@ -214,9 +209,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     budget,
     filePicked,
     sampleKey,
-    compile,
-    compiledTask,
-    compiledBudget,
+    compiledSnapshot,
     proveInclude,
     sessionSavedTokens,
     sessionSavedUsd,
