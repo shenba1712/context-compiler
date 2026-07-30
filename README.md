@@ -41,6 +41,8 @@ Compile itself never calls a model — BM25 only, free and offline. An LLM key i
 
 On the demo UI, **Compile once** is the default path. **Prove…** / **Prove answer parity** check answer quality for that compile (optionally including sections you marked **Include in Prove**). **Run agent** is a separate retrieval loop — not Prove.
 
+The live-task rail workspace is now the default. During the cutover, set `NEXT_PUBLIC_CC_WORKSPACE_REVAMP=0` at build time to restore the legacy step-tab chrome.
+
 Budget by question breadth, not file size: ~1k tokens for a factual lookup, ~4k for synthesis across a few sections. A pointed question at 4,000 often stops early with spare headroom — that is intentional. “Summarize everything” still needs a budget large enough to hold the sections you care about; the packer will not invent coverage it cannot score. Leaving the slider at 4,000 is almost always fine for demos.
 
 ## Install

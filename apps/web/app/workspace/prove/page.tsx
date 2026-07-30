@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 
-import { useWorkspace } from "@/lib/workspace-context";
+import { useWorkspace, type WorkspaceRunCapture } from "@/lib/workspace-context";
 import type { AnswerApiResult, ProveRunSnapshot } from "@/lib/types";
 import { apiFailureMessage, fetchWithBusyRetry, packagingGapNote } from "@/lib/ux";
 
@@ -27,8 +27,8 @@ export default function ProvePage() {
     workspaceStatus,
     proveExpandedIds,
     proveExpandedTokenSum,
-    pendingRun,
-    consumeRun,
+    runIntent,
+    claimRunIntent,
   } = useWorkspace();
   const [run, setRun] = useState<ProveRunSnapshot | null>(null);
   const [validationError, setValidationError] = useState("");
@@ -40,9 +40,9 @@ export default function ProvePage() {
   const { proveStale, sourceUnavailable } = workspaceStatus;
   const busy = run?.status === "running";
 
-  async function runProve(retrySnapshot?: ProveRunSnapshot) {
+  async function runProve(retrySnapshot?: ProveRunSnapshot, intentCapture?: WorkspaceRunCapture<File>) {
     setValidationError("");
-    if (!retrySnapshot) {
+    if (!retrySnapshot && !intentCapture) {
       if (!file) {
         setValidationError("Choose a document first.");
         return;
@@ -64,7 +64,7 @@ export default function ProvePage() {
       return;
     }
 
-    const sourceFile = retrySnapshot?.sourceFile ?? file;
+    const sourceFile = retrySnapshot?.sourceFile ?? intentCapture?.sourceFile ?? file;
     if (!sourceFile) {
       setValidationError("Choose a document first.");
       return;
@@ -75,25 +75,34 @@ export default function ProvePage() {
     const submittedAt = new Date().toISOString();
     const expandedIds = retrySnapshot
       ? retrySnapshot.expandedIds
-      : Object.freeze(compile ? [...proveExpandedIds] : []);
+      : intentCapture
+        ? intentCapture.expandedIds
+        : Object.freeze(compile ? [...proveExpandedIds] : []);
     const source = retrySnapshot
       ? retrySnapshot.source
-      : Object.freeze({
+      : (intentCapture?.source ??
+        Object.freeze({
           documentName: compiledSnapshot?.documentName ?? sourceFile.name,
           sampleKey,
           size: sourceFile.size,
           type: sourceFile.type,
           lastModified: sourceFile.lastModified,
-        });
+        }));
     const runningSnapshot: ProveRunSnapshot = Object.freeze({
       id,
       retryOf: retrySnapshot?.id ?? null,
-      task: retrySnapshot?.task ?? task.trim(),
-      budget: retrySnapshot?.budget ?? budget,
-      compileHandle: retrySnapshot ? retrySnapshot.compileHandle : (compile?.handle ?? null),
+      task: retrySnapshot?.task ?? intentCapture?.task ?? task.trim(),
+      budget: retrySnapshot?.budget ?? intentCapture?.budget ?? budget,
+      compileHandle: retrySnapshot
+        ? retrySnapshot.compileHandle
+        : intentCapture
+          ? intentCapture.compileHandle
+          : (compile?.handle ?? null),
       expandedIds,
       expandedTokenSum:
-        retrySnapshot?.expandedTokenSum ?? (compile && expandedIds.length ? proveExpandedTokenSum : 0),
+        retrySnapshot?.expandedTokenSum ??
+        intentCapture?.expandedTokenSum ??
+        (compile && expandedIds.length ? proveExpandedTokenSum : 0),
       source,
       sourceFile,
       status: "running",
@@ -180,11 +189,16 @@ export default function ProvePage() {
   );
 
   useEffect(() => {
-    if (pendingRun !== "prove" || !consumeRun("prove")) return;
-    void runProve();
-    // This is a one-shot route handoff from the compile form.
+    if (!runIntent || runIntent.kind !== "prove") return;
+    const claim = claimRunIntent(runIntent.id, "prove");
+    if (!claim.intent) {
+      if (claim.error) setValidationError(claim.error);
+      return;
+    }
+    void runProve(undefined, claim.intent.capture);
+    // The exact intent id is claimed once; history navigation cannot replay it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingRun]);
+  }, [runIntent?.id]);
 
   return (
     <section className="panel">

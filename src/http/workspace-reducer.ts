@@ -1,4 +1,29 @@
 export type WorkspaceRun = "prove" | "agent";
+export type WorkspaceRunOrigin = "rail" | "results";
+
+export type WorkspaceRunCapture<TFile> = Readonly<{
+  sourceFile: TFile;
+  source: Readonly<{
+    documentName: string;
+    sampleKey: string | null;
+    size: number;
+    type: string;
+    lastModified: number;
+  }>;
+  task: string;
+  budget: number;
+  compileHandle: string | null;
+  expandedIds: readonly string[];
+  expandedTokenSum: number;
+}>;
+
+export type WorkspaceRunIntent<TFile> = Readonly<{
+  id: string;
+  kind: WorkspaceRun;
+  origin: WorkspaceRunOrigin;
+  capturedRevision: number;
+  capture: WorkspaceRunCapture<TFile>;
+}>;
 
 export type WorkspacePresets = {
   quick: number;
@@ -40,7 +65,8 @@ export type WorkspaceReducerState<TCompile extends WorkspaceCompileArtifact, TFi
   proveInclude: ProveIncludeState;
   sessionSavedTokens: number;
   sessionSavedUsd: number;
-  pendingRun: WorkspaceRun | null;
+  runRevision: number;
+  runIntent: WorkspaceRunIntent<TFile> | null;
   hydrated: boolean;
 };
 
@@ -86,7 +112,8 @@ export type WorkspaceReducerEvent<TCompile extends WorkspaceCompileArtifact, TFi
   | { type: "COMPILE_CLEARED" | "COMPILE_FAILED" | "COMPILE_CANCELLED" }
   | { type: "PROVE_INCLUDE_CHANGED"; id: string; tokens: number; included: boolean }
   | { type: "PROVE_INCLUDE_CLEARED" }
-  | { type: "RUN_REQUESTED" | "RUN_CONSUMED"; action: WorkspaceRun };
+  | { type: "RUN_INTENT_CREATED"; intent: WorkspaceRunIntent<TFile> }
+  | { type: "RUN_INTENT_CLAIMED"; id: string; kind: WorkspaceRun };
 
 const EMPTY_PROVE_INCLUDE = (): ProveIncludeState => ({
   expandedIds: new Set(),
@@ -109,7 +136,8 @@ export function createInitialWorkspaceState<TCompile extends WorkspaceCompileArt
     proveInclude: EMPTY_PROVE_INCLUDE(),
     sessionSavedTokens: 0,
     sessionSavedUsd: 0,
-    pendingRun: null,
+    runRevision: 0,
+    runIntent: null,
     hydrated: false,
   };
 }
@@ -131,6 +159,7 @@ function clearCompile<TCompile extends WorkspaceCompileArtifact, TFile>(
     ...state,
     compiledSnapshot: null,
     proveInclude: EMPTY_PROVE_INCLUDE(),
+    runRevision: state.runRevision + 1,
   };
 }
 
@@ -157,6 +186,7 @@ export function workspaceReducer<TCompile extends WorkspaceCompileArtifact, TFil
         sessionSavedUsd: event.sessionSavedUsd,
         docSizeNote: event.docSizeNote,
         rawTokensHint: event.rawTokensHint,
+        runIntent: null,
         hydrated: true,
       };
     case "DOCUMENT_SELECTED":
@@ -172,16 +202,18 @@ export function workspaceReducer<TCompile extends WorkspaceCompileArtifact, TFil
         file: event.file,
         filePicked: event.filePicked,
         presets: event.presets ?? state.presets,
+        runRevision: state.runRevision + 1,
       };
     case "TASK_CHANGED":
-      return { ...state, task: event.task };
+      return { ...state, task: event.task, runRevision: state.runRevision + 1 };
     case "BUDGET_CHANGED":
-      return { ...state, budget: event.budget };
+      return { ...state, budget: event.budget, runRevision: state.runRevision + 1 };
     case "PRESETS_CHANGED":
       return {
         ...state,
         presets: event.presets,
         budget: event.selectTier ? event.presets[event.selectTier] : state.budget,
+        runRevision: event.selectTier ? state.runRevision + 1 : state.runRevision,
       };
     case "DOC_SIZE_NOTE_CHANGED":
       return { ...state, docSizeNote: event.note };
@@ -201,6 +233,7 @@ export function workspaceReducer<TCompile extends WorkspaceCompileArtifact, TFil
         proveInclude: EMPTY_PROVE_INCLUDE(),
         sessionSavedTokens: state.sessionSavedTokens + Math.max(0, result.tokens_saved),
         sessionSavedUsd: state.sessionSavedUsd + Math.max(0, result.cost_raw_usd - result.cost_compiled_usd),
+        runRevision: state.runRevision + 1,
       };
     }
     case "COMPILE_CLEARED":
@@ -218,13 +251,23 @@ export function workspaceReducer<TCompile extends WorkspaceCompileArtifact, TFil
         expandedIds.delete(event.id);
         expandedTokens.delete(event.id);
       }
-      return { ...state, proveInclude: { expandedIds, expandedTokens } };
+      return {
+        ...state,
+        proveInclude: { expandedIds, expandedTokens },
+        runRevision: state.runRevision + 1,
+      };
     }
     case "PROVE_INCLUDE_CLEARED":
-      return { ...state, proveInclude: EMPTY_PROVE_INCLUDE() };
-    case "RUN_REQUESTED":
-      return { ...state, pendingRun: event.action };
-    case "RUN_CONSUMED":
-      return state.pendingRun === event.action ? { ...state, pendingRun: null } : state;
+      return {
+        ...state,
+        proveInclude: EMPTY_PROVE_INCLUDE(),
+        runRevision: state.runRevision + 1,
+      };
+    case "RUN_INTENT_CREATED":
+      return { ...state, runIntent: event.intent };
+    case "RUN_INTENT_CLAIMED":
+      return state.runIntent?.id === event.id && state.runIntent.kind === event.kind
+        ? { ...state, runIntent: null }
+        : state;
   }
 }

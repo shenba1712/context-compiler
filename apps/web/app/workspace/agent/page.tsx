@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 
-import { useWorkspace } from "@/lib/workspace-context";
+import { useWorkspace, type WorkspaceRunCapture } from "@/lib/workspace-context";
 import type { AgentParityResult, AgentRunMeta, AgentRunSnapshot, AgentRunStep } from "@/lib/types";
 import { apiFailureMessage, fetchWithBusyRetry } from "@/lib/ux";
 
@@ -38,8 +38,8 @@ export default function AgentPage() {
     compiledSnapshot,
     config,
     workspaceStatus,
-    pendingRun,
-    consumeRun,
+    runIntent,
+    claimRunIntent,
   } = useWorkspace();
   const [parityBusy, setParityBusy] = useState(false);
   const [validationError, setValidationError] = useState("");
@@ -54,14 +54,14 @@ export default function AgentPage() {
   const { agentStale, sourceUnavailable } = workspaceStatus;
   const busy = run?.status === "running";
 
-  async function runAgent() {
+  async function runAgent(intentCapture?: WorkspaceRunCapture<File>) {
     setValidationError("");
     setParityErr("");
-    if (!file) {
+    if (!intentCapture && !file) {
       setValidationError("Choose a document first.");
       return;
     }
-    if (agentStale) {
+    if (!intentCapture && agentStale) {
       setValidationError("Task changed — recompile first.");
       return;
     }
@@ -70,20 +70,27 @@ export default function AgentPage() {
       return;
     }
 
+    const sourceFile = intentCapture?.sourceFile ?? file;
+    if (!sourceFile) {
+      setValidationError("Choose a document first.");
+      return;
+    }
     const id = `agent-${Date.now()}-${++attemptSeq.current}`;
     const controller = new AbortController();
     const runningSnapshot: AgentRunSnapshot = Object.freeze({
       id,
-      task: task.trim(),
-      budget,
-      source: Object.freeze({
-        documentName: compiledSnapshot?.documentName ?? file.name,
-        sampleKey,
-        size: file.size,
-        type: file.type,
-        lastModified: file.lastModified,
-      }),
-      sourceFile: file,
+      task: intentCapture?.task ?? task.trim(),
+      budget: intentCapture?.budget ?? budget,
+      source:
+        intentCapture?.source ??
+        Object.freeze({
+          documentName: compiledSnapshot?.documentName ?? sourceFile.name,
+          sampleKey,
+          size: sourceFile.size,
+          type: sourceFile.type,
+          lastModified: sourceFile.lastModified,
+        }),
+      sourceFile,
       status: "running",
       steps: Object.freeze([]),
       answer: "",
@@ -224,11 +231,16 @@ export default function AgentPage() {
   }
 
   useEffect(() => {
-    if (pendingRun !== "agent" || !consumeRun("agent")) return;
-    void runAgent();
-    // One-shot route handoff from the compile form.
+    if (!runIntent || runIntent.kind !== "agent") return;
+    const claim = claimRunIntent(runIntent.id, "agent");
+    if (!claim.intent) {
+      if (claim.error) setValidationError(claim.error);
+      return;
+    }
+    void runAgent(claim.intent.capture);
+    // The exact intent id is claimed once; history navigation cannot replay it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingRun]);
+  }, [runIntent?.id]);
 
   async function runParity() {
     setParityErr("");

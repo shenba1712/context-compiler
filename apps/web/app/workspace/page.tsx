@@ -5,7 +5,7 @@ import { useWorkspace } from "@/lib/workspace-context";
 
 export default function WorkspaceCompilePage() {
   const { config } = useWorkspace();
-  const revampEnabled = process.env.NEXT_PUBLIC_CC_WORKSPACE_REVAMP === "1";
+  const revampEnabled = process.env.NEXT_PUBLIC_CC_WORKSPACE_REVAMP !== "0";
   const pool = config?.rate_limit ?? 100;
   const windowMin = config?.rate_window_minutes ?? 5;
 

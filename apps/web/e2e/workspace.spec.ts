@@ -314,6 +314,7 @@ async function mockAgentStreamsIgnoringAbort(
 }
 
 test("flag off keeps legacy workspace steps and guards result-only routes", async ({ page }) => {
+  test.skip(process.env.NEXT_PUBLIC_CC_WORKSPACE_REVAMP !== "0", "Legacy-only rollback coverage.");
   await mockWorkspace(page);
   await page.goto("/workspace");
 
@@ -338,10 +339,7 @@ test("flag off keeps legacy workspace steps and guards result-only routes", asyn
 });
 
 test("@revamp flag on makes the rail the only task editor", async ({ page }) => {
-  test.skip(
-    process.env.NEXT_PUBLIC_CC_WORKSPACE_REVAMP !== "1",
-    "Run with NEXT_PUBLIC_CC_WORKSPACE_REVAMP=1 and a matching web build."
-  );
+  test.skip(process.env.NEXT_PUBLIC_CC_WORKSPACE_REVAMP === "0", "The revamp is disabled for this build.");
   await mockWorkspace(page);
   await page.goto("/workspace");
 
@@ -378,10 +376,7 @@ test("@revamp flag on makes the rail the only task editor", async ({ page }) => 
 });
 
 test("@revamp Results stays bound to the compiled snapshot and payload order", async ({ page }) => {
-  test.skip(
-    process.env.NEXT_PUBLIC_CC_WORKSPACE_REVAMP !== "1",
-    "Run with NEXT_PUBLIC_CC_WORKSPACE_REVAMP=1 and a matching web build."
-  );
+  test.skip(process.env.NEXT_PUBLIC_CC_WORKSPACE_REVAMP === "0", "The revamp is disabled for this build.");
   const orderedResult = {
     ...compileResult,
     raw_tokens: 12_345,
@@ -435,10 +430,7 @@ test("@revamp Results stays bound to the compiled snapshot and payload order", a
 test("@revamp Results expands by visible handle and resets peeks and includes on compile", async ({
   page,
 }) => {
-  test.skip(
-    process.env.NEXT_PUBLIC_CC_WORKSPACE_REVAMP !== "1",
-    "Run with NEXT_PUBLIC_CC_WORKSPACE_REVAMP=1 and a matching web build."
-  );
+  test.skip(process.env.NEXT_PUBLIC_CC_WORKSPACE_REVAMP === "0", "The revamp is disabled for this build.");
   const requests = await mockWorkspace(page, {
     compileResults: [
       { ...compileResult, handle: "compile-visible-a" },
@@ -467,10 +459,7 @@ test("@revamp Results expands by visible handle and resets peeks and includes on
 });
 
 test("@revamp budget drift retains Results cards but disables Prove includes", async ({ page }) => {
-  test.skip(
-    process.env.NEXT_PUBLIC_CC_WORKSPACE_REVAMP !== "1",
-    "Run with NEXT_PUBLIC_CC_WORKSPACE_REVAMP=1 and a matching web build."
-  );
+  test.skip(process.env.NEXT_PUBLIC_CC_WORKSPACE_REVAMP === "0", "The revamp is disabled for this build.");
   await mockWorkspace(page);
   await page.goto("/workspace");
   await compileSample(page);
@@ -486,16 +475,12 @@ test("@revamp budget drift retains Results cards but disables Prove includes", a
 });
 
 test("@revamp Prove keeps submitted labels and answers through live rail edits", async ({ page }) => {
-  test.skip(
-    process.env.NEXT_PUBLIC_CC_WORKSPACE_REVAMP !== "1",
-    "Run with NEXT_PUBLIC_CC_WORKSPACE_REVAMP=1 and a matching web build."
-  );
+  test.skip(process.env.NEXT_PUBLIC_CC_WORKSPACE_REVAMP === "0", "The revamp is disabled for this build.");
   const requests = await mockWorkspace(page, { answerDelayMs: 150 });
   await page.goto("/workspace");
   await compileSample(page);
   await page.getByLabel("Include in Prove", { exact: true }).check();
-  await page.getByRole("link", { name: "Prove answer parity" }).click();
-  await page.getByRole("button", { name: "Prove", exact: true }).click();
+  await page.getByRole("button", { name: "Prove answer parity" }).click();
 
   const snapshot = page.getByTestId("prove-run-snapshot");
   await expect(snapshot).toContainText("What is covered?");
@@ -514,11 +499,71 @@ test("@revamp Prove keeps submitted labels and answers through live rail edits",
   expect(requests.answerBodies.at(-1)).toContain('["omitted-1"]');
 });
 
-test("@revamp rail resolves upload, sample, and measurement races", async ({ page }) => {
-  test.skip(
-    process.env.NEXT_PUBLIC_CC_WORKSPACE_REVAMP !== "1",
-    "Run with NEXT_PUBLIC_CC_WORKSPACE_REVAMP=1 and a matching web build."
+test("@revamp rail run intent is one-shot across history and refresh", async ({ page }) => {
+  const requests = await mockWorkspace(page);
+  await page.goto("/workspace");
+  await pickSample(page);
+
+  await page
+    .getByRole("complementary", { name: "Live task" })
+    .getByRole("button", { name: "Prove", exact: true })
+    .click();
+  await expect(page).toHaveURL(/\/workspace\/prove$/);
+  await expect(page.getByText("Compiled answer", { exact: true })).toBeVisible();
+  expect(requests.answerBodies).toHaveLength(1);
+
+  await page.goBack();
+  await expect(page).toHaveURL(/\/workspace$/);
+  await page.goForward();
+  await expect(page).toHaveURL(/\/workspace\/prove$/);
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Prove answer parity" })).toBeVisible();
+  expect(requests.answerBodies).toHaveLength(1);
+});
+
+test("@revamp rapid Prove then Agent runs only the latest valid intent", async ({ page }) => {
+  const requests = await mockWorkspace(page);
+  await page.goto("/workspace");
+  await pickSample(page);
+
+  await page.locator(".workspace-rail").evaluate((rail) => {
+    const buttons = [...rail.querySelectorAll<HTMLButtonElement>("button")];
+    buttons.find((button) => button.textContent?.trim() === "Prove")?.click();
+    buttons.find((button) => button.textContent?.trim() === "Agent")?.click();
+  });
+
+  await expect(page).toHaveURL(/\/workspace\/agent$/);
+  await expect(page.getByText("Agent answer", { exact: true })).toBeVisible();
+  expect(requests.answerBodies).toHaveLength(0);
+  expect(requests.agentBodies).toHaveLength(1);
+});
+
+test("@revamp blocks a run intent invalidated before destination mount", async ({ page }) => {
+  const requests = await mockWorkspace(page);
+  await page.goto("/workspace");
+  await pickSample(page);
+
+  await page.locator(".workspace-rail").evaluate((rail) => {
+    const prove = [...rail.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "Prove"
+    );
+    const task = rail.querySelector<HTMLTextAreaElement>("#task");
+    prove?.click();
+    if (!task) return;
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+    setter?.call(task, "Changed before destination mount");
+    task.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+
+  await expect(page).toHaveURL(/\/workspace\/prove$/);
+  await expect(page.locator(".err[role=alert]")).toContainText(
+    "workspace changed before this run could start"
   );
+  expect(requests.answerBodies).toHaveLength(0);
+});
+
+test("@revamp rail resolves upload, sample, and measurement races", async ({ page }) => {
+  test.skip(process.env.NEXT_PUBLIC_CC_WORKSPACE_REVAMP === "0", "The revamp is disabled for this build.");
   await mockWorkspace(page, { sampleDelayMs: 150, measureDelayMs: 150 });
   await page.goto("/workspace");
 
@@ -546,10 +591,7 @@ test("@revamp rail resolves upload, sample, and measurement races", async ({ pag
 });
 
 test("@revamp rail keeps validation and measurement fallback", async ({ page }) => {
-  test.skip(
-    process.env.NEXT_PUBLIC_CC_WORKSPACE_REVAMP !== "1",
-    "Run with NEXT_PUBLIC_CC_WORKSPACE_REVAMP=1 and a matching web build."
-  );
+  test.skip(process.env.NEXT_PUBLIC_CC_WORKSPACE_REVAMP === "0", "The revamp is disabled for this build.");
   await mockWorkspace(page, { measureError: "measurement unavailable" });
   await page.goto("/workspace");
 
@@ -573,10 +615,7 @@ test("@revamp rail keeps validation and measurement fallback", async ({ page }) 
 });
 
 test("@revamp rail cancels compile from its owning editor", async ({ page }) => {
-  test.skip(
-    process.env.NEXT_PUBLIC_CC_WORKSPACE_REVAMP !== "1",
-    "Run with NEXT_PUBLIC_CC_WORKSPACE_REVAMP=1 and a matching web build."
-  );
+  test.skip(process.env.NEXT_PUBLIC_CC_WORKSPACE_REVAMP === "0", "The revamp is disabled for this build.");
   await mockWorkspace(page);
   await page.addInitScript(() => {
     const nativeFetch = window.fetch.bind(window);
@@ -601,10 +640,7 @@ test("@revamp rail cancels compile from its owning editor", async ({ page }) => 
 });
 
 test("@revamp rail submits by keyboard once and preserves Shift+Enter", async ({ page }) => {
-  test.skip(
-    process.env.NEXT_PUBLIC_CC_WORKSPACE_REVAMP !== "1",
-    "Run with NEXT_PUBLIC_CC_WORKSPACE_REVAMP=1 and a matching web build."
-  );
+  test.skip(process.env.NEXT_PUBLIC_CC_WORKSPACE_REVAMP === "0", "The revamp is disabled for this build.");
   const requests = await mockWorkspace(page, { compileDelayMs: 150 });
   await page.goto("/workspace");
   await pickSample(page);
@@ -633,11 +669,9 @@ test("keeps the submitted task and budget in the compiled summary", async ({ pag
   await expect(page).toHaveURL(/\/workspace\/results$/);
 
   const compiledSummary = page.getByTestId("compiled-task-summary");
-  await expect(compiledSummary).toContainText("Golden sample");
   await expect(compiledSummary).toContainText("Exact submitted task");
   await expect(compiledSummary).toContainText("5,000 tokens");
 
-  await page.getByRole("link", { name: "Compile", exact: true }).click();
   await page.locator("#task").fill("Live edited task");
   await page.locator("#budget").fill("6000");
   await expect(page.getByTestId("live-task-summary")).toContainText("Live edited task");
@@ -652,25 +686,15 @@ test("captures task and budget stale routing rules", async ({ page }) => {
   await page.goto("/workspace");
   await compileSample(page);
 
-  await page.getByRole("link", { name: "Compile", exact: true }).click();
   await page.locator("#budget").fill("5000");
-  await page.getByRole("link", { name: "Results" }).click();
   await expect(page.getByText(/budget changed since this compile/i)).toBeVisible();
-  await expect(page.getByRole("link", { name: "Prove answer parity" })).toHaveAttribute("href", "/workspace");
-  await expect(page.getByRole("link", { name: "Run agent", exact: true })).toHaveAttribute(
-    "href",
-    "/workspace/agent"
-  );
+  await expect(page.getByRole("button", { name: "Prove answer parity" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Run agent", exact: true })).toBeEnabled();
 
-  await page.getByRole("link", { name: "Compile", exact: true }).click();
   await page.locator("#task").fill("A changed task");
-  await page.getByRole("link", { name: "Results" }).click();
   await expect(page.getByText(/question changed since this compile/i)).toBeVisible();
-  await expect(page.getByRole("link", { name: "Prove answer parity" })).toHaveAttribute("href", "/workspace");
-  await expect(page.getByRole("link", { name: "Run agent", exact: true })).toHaveAttribute(
-    "href",
-    "/workspace"
-  );
+  await expect(page.getByRole("button", { name: "Prove answer parity" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Run agent", exact: true })).toBeDisabled();
 });
 
 test("persists sample compile and Include in Prove across navigation and reload", async ({ page }) => {
@@ -680,15 +704,15 @@ test("persists sample compile and Include in Prove across navigation and reload"
 
   const include = page.getByLabel("Include in Prove", { exact: true });
   await include.check();
-  await page.getByRole("link", { name: "Agent", exact: true }).click();
-  await page.getByRole("link", { name: "Results", exact: true }).click();
+  const activity = page.getByRole("navigation", { name: "Workspace activity" });
+  await activity.getByRole("link", { name: /Agent/ }).click();
+  await activity.getByRole("link", { name: /Results/ }).click();
   await expect(include).toBeChecked();
 
   await page.reload();
   await expect(page.getByRole("heading", { name: "Compiled context" })).toBeVisible();
   await expect(page.getByLabel("Include in Prove", { exact: true })).toBeChecked();
-  await page.getByRole("link", { name: "Compile", exact: true }).click();
-  await expect(page.getByRole("status")).toContainText("Sample: Golden sample");
+  await expect(page.getByText("Sample: Golden sample", { exact: true })).toBeVisible();
 });
 
 test("migrates v1 persistence to v2 without deleting the rollout key", async ({ page }) => {
@@ -782,7 +806,6 @@ test("restores a stale sample snapshot without making the changed task current",
   await mockWorkspace(page);
   await page.goto("/workspace");
   await compileSample(page);
-  await page.getByRole("link", { name: "Compile", exact: true }).click();
   await page.locator("#task").fill("Changed after compile");
   await expect(page.getByTestId("live-task-summary")).toContainText("Changed after compile");
 
@@ -813,7 +836,6 @@ test("does not restore a custom upload compile after reload", async ({ page }) =
   await expect(page.locator("#task")).toHaveValue("Custom task");
   await expect(page.locator("#file")).toHaveValue("");
   await expect(page.getByTestId("live-task-summary")).toContainText("custom.txt");
-  await expect(page.getByTestId("live-task-summary")).toContainText("Missing file bytes");
   await expect(page.getByTestId("compiled-task-summary")).toHaveCount(0);
 });
 
@@ -821,13 +843,18 @@ test("disables all LLM entry points when the host has no key", async ({ page }) 
   await mockWorkspace(page, { llmAvailable: false });
   await page.goto("/workspace");
   await pickSample(page);
-  await expect(page.getByRole("button", { name: "Prove…" })).toBeDisabled();
-  await expect(page.getByRole("button", { name: "Run agent ▸" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Prove", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Agent", exact: true })).toBeDisabled();
 
   await page.getByRole("button", { name: "Compile", exact: true }).click();
   await page.goto("/workspace/prove");
   await expect(page.getByText(/Prove disabled: test host has no key/)).toBeVisible();
-  await expect(page.getByRole("button", { name: "Prove", exact: true })).toBeDisabled();
+  await expect(
+    page.getByRole("region", { name: "Workspace canvas" }).getByRole("button", {
+      name: "Prove",
+      exact: true,
+    })
+  ).toBeDisabled();
   await page.goto("/workspace/agent");
   await expect(page.getByText(/Agent disabled: test host has no key/)).toBeVisible();
   await expect(page.getByRole("button", { name: "Run agent", exact: true })).toBeDisabled();
@@ -871,8 +898,7 @@ test("cancelled Prove snapshot cannot be overwritten by a late response", async 
   ]);
   await page.goto("/workspace");
   await compileSample(page);
-  await page.getByRole("link", { name: "Prove answer parity" }).click();
-  await page.getByRole("button", { name: "Prove", exact: true }).click();
+  await page.getByRole("button", { name: "Prove answer parity" }).click();
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
 
   await expect(page.locator(".err[role=alert]")).toHaveText("Prove cancelled.");
@@ -889,8 +915,7 @@ test("newer Prove retry wins when two attempts finish out of order", async ({ pa
   ]);
   await page.goto("/workspace");
   await compileSample(page);
-  await page.getByRole("link", { name: "Prove answer parity" }).click();
-  await page.getByRole("button", { name: "Prove", exact: true }).click();
+  await page.getByRole("button", { name: "Prove answer parity" }).click();
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
   await page.getByRole("button", { name: "Retry submitted snapshot" }).click();
 
@@ -1069,8 +1094,7 @@ test("mocks expand, answer, and agent flows with stable golden output", async ({
 
   await expect(page.getByText("Expanded exclusion text")).toBeVisible();
   await page.getByLabel("Include in Prove", { exact: true }).check();
-  await page.getByRole("link", { name: "Prove answer parity" }).click();
-  await page.getByRole("button", { name: "Prove", exact: true }).click();
+  await page.getByRole("button", { name: "Prove answer parity" }).click();
   await expect(page.getByText("Full-file answer")).toBeVisible();
   await expect(page.getByText("Compiled answer")).toBeVisible();
   expect(requests.answerBodies.at(-1)).toContain('["omitted-1"]');

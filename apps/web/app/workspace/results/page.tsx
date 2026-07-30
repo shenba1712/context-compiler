@@ -34,6 +34,7 @@ export default function ResultsPage() {
     setProveInclude,
     sessionSavedTokens,
     sessionSavedUsd,
+    launchRun,
   } = useWorkspace();
   const { proveStale, agentStale, questionStale, sourceUnavailable } = workspaceStatus;
   const compile = compiledSnapshot?.result ?? null;
@@ -54,7 +55,7 @@ export default function ResultsPage() {
   const reduceMotion = useReducedMotion();
   const peek = peekState.handle === compileHandle ? peekState.entries : {};
   const pending = pendingState.handle === compileHandle ? pendingState.ids : new Set<string>();
-  const revampEnabled = process.env.NEXT_PUBLIC_CC_WORKSPACE_REVAMP === "1";
+  const revampEnabled = process.env.NEXT_PUBLIC_CC_WORKSPACE_REVAMP !== "0";
 
   useEffect(() => {
     const first = compile?.budget_omitted_sections?.[0];
@@ -136,6 +137,12 @@ export default function ResultsPage() {
       delete next[id];
       return { handle: compileHandle, entries: next };
     });
+  }
+
+  function launch(kind: "prove" | "agent") {
+    setErr("");
+    const launchError = launchRun(kind, "results");
+    if (launchError) setErr(launchError);
   }
 
   return (
@@ -295,18 +302,22 @@ export default function ResultsPage() {
         ) : null}
 
         <div className="row" style={{ marginBottom: 16 }}>
-          <Link
+          <button
+            type="button"
             className="btn ghost"
-            href={proveStale || sourceUnavailable ? "/workspace" : "/workspace/prove"}
+            disabled={proveStale || sourceUnavailable}
+            onClick={() => launch("prove")}
           >
             Prove answer parity
-          </Link>
-          <Link
+          </button>
+          <button
+            type="button"
             className="btn quiet"
-            href={agentStale || sourceUnavailable ? "/workspace" : "/workspace/agent"}
+            disabled={agentStale || sourceUnavailable}
+            onClick={() => launch("agent")}
           >
             Run agent
-          </Link>
+          </button>
         </div>
 
         <p className="alabel">Included</p>

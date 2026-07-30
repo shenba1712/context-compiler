@@ -52,7 +52,8 @@ export function TaskEditor({ rail = false }: { rail?: boolean }) {
     setRawTokensHint,
     setCompile,
     clearCompile,
-    requestRun,
+    launchRun,
+    workspaceStatus: runStatus,
   } = useWorkspace();
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
@@ -215,12 +216,8 @@ export function TaskEditor({ rail = false }: { rail?: boolean }) {
 
   function launch(action: "prove" | "agent") {
     setErr("");
-    if (!workspaceStatus.compileAvailable) {
-      showValidationError();
-      return;
-    }
-    requestRun(action);
-    router.push(`/workspace/${action}`);
+    const launchError = launchRun(action, "rail");
+    if (launchError) setErr(launchError);
   }
 
   const sliderMin = config?.web_budget_min ?? SLIDER_MIN;
@@ -419,27 +416,23 @@ export function TaskEditor({ rail = false }: { rail?: boolean }) {
             Cancel
           </button>
         ) : null}
-        {!rail ? (
-          <>
-            <button
-              className="btn quiet"
-              type="button"
-              disabled={busy || !config?.llm_available}
-              onClick={() => launch("prove")}
-              title="Skip compile results and compare full-file vs budgeted answers"
-            >
-              Prove…
-            </button>
-            <button
-              className="btn quiet"
-              type="button"
-              disabled={busy || !config?.llm_available}
-              onClick={() => launch("agent")}
-            >
-              Run agent ▸
-            </button>
-          </>
-        ) : null}
+        <button
+          className="btn quiet"
+          type="button"
+          disabled={busy || !config?.llm_available || !file || !task.trim() || runStatus.proveStale}
+          onClick={() => launch("prove")}
+          title="Compare full-file and budgeted answers from this live-task snapshot"
+        >
+          {rail ? "Prove" : "Prove…"}
+        </button>
+        <button
+          className="btn quiet"
+          type="button"
+          disabled={busy || !config?.llm_available || !file || !task.trim() || runStatus.agentStale}
+          onClick={() => launch("agent")}
+        >
+          {rail ? "Agent" : "Run agent ▸"}
+        </button>
       </div>
     </form>
   );

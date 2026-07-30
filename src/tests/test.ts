@@ -2234,13 +2234,37 @@ function testWorkspaceReducerTransitions() {
   assert.equal(state.proveInclude.expandedIds.size, 0, "document replacement clears Prove includes");
   assert.equal(state.sessionSavedTokens, 600, "document replacement keeps session savings");
 
-  state = workspaceReducer(state, { type: "RUN_REQUESTED", action: "prove" });
-  assert.equal(state.pendingRun, "prove", "run handoff remains pending");
-  state = workspaceReducer(state, { type: "RUN_CONSUMED", action: "agent" });
-  assert.equal(state.pendingRun, "prove", "another route cannot consume the handoff");
-  state = workspaceReducer(state, { type: "RUN_CONSUMED", action: "prove" });
-  assert.equal(state.pendingRun, null, "matching route consumes the handoff once");
-  console.log("  workspace reducer ok: atomic compile, document, stale, run transitions");
+  const capturedRevision = state.runRevision;
+  const intent = Object.freeze({
+    id: "intent-prove",
+    kind: "prove" as const,
+    origin: "rail" as const,
+    capturedRevision,
+    capture: Object.freeze({
+      sourceFile: { name: "replacement.md" },
+      source: Object.freeze({
+        documentName: "replacement.md",
+        sampleKey: null,
+        size: 1,
+        type: "text/markdown",
+        lastModified: 1,
+      }),
+      task: "Question one",
+      budget: 8000,
+      compileHandle: null,
+      expandedIds: Object.freeze([] as string[]),
+      expandedTokenSum: 0,
+    }),
+  });
+  state = workspaceReducer(state, { type: "RUN_INTENT_CREATED", intent });
+  assert.equal(state.runIntent?.id, intent.id, "run intent remains pending by id");
+  state = workspaceReducer(state, { type: "RUN_INTENT_CLAIMED", id: intent.id, kind: "agent" });
+  assert.equal(state.runIntent?.id, intent.id, "another destination cannot claim the intent");
+  state = workspaceReducer(state, { type: "TASK_CHANGED", task: "Changed before mount" });
+  assert.ok(state.runRevision > capturedRevision, "runnable input changes advance the revision");
+  state = workspaceReducer(state, { type: "RUN_INTENT_CLAIMED", id: intent.id, kind: "prove" });
+  assert.equal(state.runIntent, null, "matching destination claims the exact intent once");
+  console.log("  workspace reducer ok: atomic compile, document, stale, run-intent transitions");
 }
 
 async function testExpandQueryAwareTruncation() {

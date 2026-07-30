@@ -11,6 +11,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { useRouter } from "next/navigation";
 
 import {
   createInitialWorkspaceState,
@@ -18,6 +19,9 @@ import {
   type WorkspaceCompiledSnapshot,
   type WorkspaceReducerEvent,
   type WorkspaceReducerState,
+  type WorkspaceRun,
+  type WorkspaceRunIntent,
+  type WorkspaceRunOrigin,
 } from "../../../src/http/workspace-reducer";
 import { loadPersistedWorkspace, savePersistedWorkspace } from "./workspace-persist";
 import type { CompileApiResult, Sample, ServerConfig } from "./types";
@@ -49,7 +53,7 @@ type WorkspaceState = {
   proveExpandedTokenSum: number;
   sessionSavedTokens: number;
   sessionSavedUsd: number;
-  pendingRun: "prove" | "agent" | null;
+  runIntent: WorkspaceRunIntent<File> | null;
   hydrated: boolean;
   setFile: (f: File | null) => void;
   setSampleKey: (k: string | null) => void;
@@ -62,8 +66,11 @@ type WorkspaceState = {
   clearCompile: () => void;
   setProveInclude: (id: string, tokens: number, included: boolean) => void;
   clearProveIncludes: () => void;
-  requestRun: (action: "prove" | "agent") => void;
-  consumeRun: (action: "prove" | "agent") => boolean;
+  launchRun: (kind: WorkspaceRun, origin: WorkspaceRunOrigin) => string | null;
+  claimRunIntent: (
+    id: string,
+    kind: WorkspaceRun
+  ) => { intent: WorkspaceRunIntent<File>; error: null } | { intent: null; error: string };
   workspaceStatus: WorkspaceStatus;
 };
 
@@ -73,7 +80,9 @@ type ReducerState = WorkspaceReducerState<CompileApiResult, File>;
 type ReducerEvent = WorkspaceReducerEvent<CompileApiResult, File>;
 
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
+  const router = useRouter();
   const restored = useRef(false);
+  const claimedIntentIds = useRef(new Set<string>());
   const [config, setConfig] = useState<ServerConfig | null>(null);
   const [samples, setSamples] = useState<Sample[]>([]);
   const [loadError, setLoadError] = useState("");
@@ -94,9 +103,13 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     proveInclude,
     sessionSavedTokens,
     sessionSavedUsd,
-    pendingRun,
+    runIntent,
     hydrated,
   } = workspace;
+  const workspaceRef = useRef(workspace);
+  const configRef = useRef(config);
+  workspaceRef.current = workspace;
+  configRef.current = config;
   const compile = compiledSnapshot?.result ?? null;
   const compiledTask = compiledSnapshot?.taskLabel ?? null;
   const compiledBudget = compiledSnapshot?.budget ?? null;
@@ -258,17 +271,108 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     dispatch({ type: "PROVE_INCLUDE_CHANGED", id, tokens, included });
   }, []);
 
-  const requestRun = useCallback(
-    (action: "prove" | "agent") => dispatch({ type: "RUN_REQUESTED", action }),
-    []
-  );
-  const consumeRun = useCallback(
-    (action: "prove" | "agent") => {
-      if (pendingRun !== action) return false;
-      dispatch({ type: "RUN_CONSUMED", action });
-      return true;
+  const launchRun = useCallback(
+    (kind: WorkspaceRun, origin: WorkspaceRunOrigin): string | null => {
+      const current = workspaceRef.current;
+      const currentCompile = current.compiledSnapshot?.result ?? null;
+      const status = deriveWorkspaceStatus({
+        hasCompiledOnce: Boolean(currentCompile),
+        lastCompiledTask: current.compiledSnapshot?.taskLabel ?? null,
+        currentTask: current.task,
+        lastCompiledBudget: current.compiledSnapshot?.budget ?? null,
+        currentBudget: current.budget,
+        sourceAvailable: Boolean(current.file),
+        taskValid: Boolean(current.task.trim()),
+        sourceValid: Boolean(current.file),
+        busy: false,
+      });
+      if (!current.file) return "Choose a document first.";
+      if (!current.task.trim()) return "Enter a question first.";
+      if (kind === "prove" && status.proveStale) {
+        return "Task or budget changed — recompile first.";
+      }
+      if (kind === "agent" && status.agentStale) return "Task changed — recompile first.";
+      if (!configRef.current?.llm_available) {
+        return `This host has no LLM API key. ${kind === "prove" ? "Prove" : "Agent"} is disabled.`;
+      }
+
+      const sourceFile = current.file;
+      const expandedIds = kind === "prove" && currentCompile ? [...current.proveInclude.expandedIds] : [];
+      let expandedTokenSum = 0;
+      for (const id of expandedIds) expandedTokenSum += current.proveInclude.expandedTokens.get(id) ?? 0;
+      const intent: WorkspaceRunIntent<File> = Object.freeze({
+        id:
+          typeof crypto !== "undefined" && "randomUUID" in crypto
+            ? crypto.randomUUID()
+            : `run-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        kind,
+        origin,
+        capturedRevision: current.runRevision,
+        capture: Object.freeze({
+          sourceFile,
+          source: Object.freeze({
+            documentName: current.compiledSnapshot?.documentName ?? sourceFile.name,
+            sampleKey: current.sampleKey,
+            size: sourceFile.size,
+            type: sourceFile.type,
+            lastModified: sourceFile.lastModified,
+          }),
+          task: current.task.trim(),
+          budget: current.budget,
+          compileHandle: currentCompile?.handle ?? null,
+          expandedIds: Object.freeze(expandedIds),
+          expandedTokenSum,
+        }),
+      });
+      dispatch({ type: "RUN_INTENT_CREATED", intent });
+      router.push(`/workspace/${kind}`);
+      return null;
     },
-    [pendingRun]
+    [router]
+  );
+
+  const claimRunIntent = useCallback(
+    (
+      id: string,
+      kind: WorkspaceRun
+    ): { intent: WorkspaceRunIntent<File>; error: null } | { intent: null; error: string } => {
+      const current = workspaceRef.current;
+      const intent = current.runIntent;
+      if (!intent || intent.id !== id || intent.kind !== kind || claimedIntentIds.current.has(id)) {
+        return { intent: null, error: "" };
+      }
+      claimedIntentIds.current.add(id);
+      dispatch({ type: "RUN_INTENT_CLAIMED", id, kind });
+
+      if (intent.capturedRevision !== current.runRevision) {
+        return {
+          intent: null,
+          error: "The workspace changed before this run could start. Review it and try again.",
+        };
+      }
+      const status = deriveWorkspaceStatus({
+        hasCompiledOnce: Boolean(current.compiledSnapshot),
+        lastCompiledTask: current.compiledSnapshot?.taskLabel ?? null,
+        currentTask: current.task,
+        lastCompiledBudget: current.compiledSnapshot?.budget ?? null,
+        currentBudget: current.budget,
+        sourceAvailable: Boolean(current.file),
+        taskValid: Boolean(current.task.trim()),
+        sourceValid: Boolean(current.file),
+        busy: false,
+      });
+      if (!current.file || !current.task.trim()) {
+        return { intent: null, error: "Run prerequisites are no longer available. Review the live task." };
+      }
+      if ((kind === "prove" && status.proveStale) || (kind === "agent" && status.agentStale)) {
+        return { intent: null, error: "The compiled result became stale before this run could start." };
+      }
+      if (!configRef.current?.llm_available) {
+        return { intent: null, error: `This host has no LLM API key. ${kind} is disabled.` };
+      }
+      return { intent, error: null };
+    },
+    []
   );
 
   const workspaceStatus = deriveWorkspaceStatus({
@@ -311,7 +415,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       proveExpandedTokenSum,
       sessionSavedTokens,
       sessionSavedUsd,
-      pendingRun,
+      runIntent,
       hydrated,
       setFile,
       setSampleKey,
@@ -324,8 +428,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       clearCompile,
       setProveInclude,
       clearProveIncludes,
-      requestRun,
-      consumeRun,
+      launchRun,
+      claimRunIntent,
       workspaceStatus,
     }),
     [
@@ -348,7 +452,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       proveExpandedTokenSum,
       sessionSavedTokens,
       sessionSavedUsd,
-      pendingRun,
+      runIntent,
       hydrated,
       setFile,
       setSampleKey,
@@ -357,7 +461,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       setProveInclude,
       clearProveIncludes,
       setPresets,
-      consumeRun,
+      launchRun,
+      claimRunIntent,
       workspaceStatus,
     ]
   );
@@ -372,3 +477,4 @@ export function useWorkspace() {
 }
 
 export { computePresets, DEFAULT_PRESETS };
+export type { WorkspaceRunCapture } from "../../../src/http/workspace-reducer";
