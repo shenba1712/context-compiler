@@ -1,11 +1,9 @@
 "use client";
 
-import { TaskEditor } from "@/components/TaskEditor";
 import { useWorkspace } from "@/lib/workspace-context";
 
 export default function WorkspaceCompilePage() {
   const { config } = useWorkspace();
-  const revampEnabled = process.env.NEXT_PUBLIC_CC_WORKSPACE_REVAMP !== "0";
   const pool = config?.rate_limit ?? 100;
   const windowMin = config?.rate_window_minutes ?? 5;
 
@@ -13,16 +11,10 @@ export default function WorkspaceCompilePage() {
     <section id="workspace-compile" tabIndex={-1}>
       <div className="panel">
         <h2 className="sec">Compile a document</h2>
-        <p className="sub">
-          {revampEnabled
-            ? "Edit the live document, task, and budget in the workspace rail."
-            : "Upload your own file, or pick a sample. Then ask a question and set a budget."}
-        </p>
+        <p className="sub">Edit the live document, task, and budget in the workspace rail.</p>
         <p className="hostnote" role="note">
           Free-tier hosts may sleep when idle — first load can take <strong>30–60 seconds</strong>.
         </p>
-
-        {revampEnabled ? null : <TaskEditor />}
 
         <details className="expectbox">
           <summary>What to expect on this host</summary>

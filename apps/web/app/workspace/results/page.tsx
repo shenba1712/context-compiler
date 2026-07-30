@@ -55,8 +55,6 @@ export default function ResultsPage() {
   const reduceMotion = useReducedMotion();
   const peek = peekState.handle === compileHandle ? peekState.entries : {};
   const pending = pendingState.handle === compileHandle ? pendingState.ids : new Set<string>();
-  const revampEnabled = process.env.NEXT_PUBLIC_CC_WORKSPACE_REVAMP !== "0";
-
   useEffect(() => {
     const first = compile?.budget_omitted_sections?.[0];
     if (!compile || !first || autoPeekedHandle.current === compile.handle) return;
@@ -283,13 +281,7 @@ export default function ResultsPage() {
               : questionStale
                 ? "The question changed since this compile. Expands for Prove were cleared. "
                 : "The budget changed since this compile. Prove requires matching results; Agent can use the live budget. "}
-            {revampEnabled ? (
-              <>
-                Use <strong>Compile</strong> in the live task rail
-              </>
-            ) : (
-              <Link href="/workspace">Recompile</Link>
-            )}
+            Use <strong>Compile</strong> in the live task rail
             {agentStale || sourceUnavailable ? " before Prove / Agent." : " before Prove."}
           </p>
         ) : null}

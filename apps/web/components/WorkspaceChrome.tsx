@@ -4,124 +4,16 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 import { TaskEditor } from "@/components/TaskEditor";
-import { selectTaskSummary, type SourceAvailability } from "@/lib/task-summary";
+import { selectTaskSummary } from "@/lib/task-summary";
 import { useWorkspace } from "@/lib/workspace-context";
 
-const steps = [
-  { href: "/workspace", label: "Compile", need: false },
-  { href: "/workspace/results", label: "Results", need: true },
-  { href: "/workspace/prove", label: "Prove", need: true },
-  { href: "/workspace/agent", label: "Agent", need: true },
+const activities = [
+  { href: "/workspace/results", label: "Results" },
+  { href: "/workspace/prove", label: "Prove" },
+  { href: "/workspace/agent", label: "Agent" },
 ];
 
-const activities = steps.slice(1);
-
-const sourceLabels: Record<SourceAvailability, string> = {
-  available: "Available",
-  restorable: "Restoring sample",
-  missing: "Missing file bytes",
-  "not-selected": "Not selected",
-};
-
-function LegacyWorkspaceChrome({ children, path }: { children: React.ReactNode; path: string }) {
-  const workspace = useWorkspace();
-  const { compile } = workspace;
-  const summary = selectTaskSummary(workspace);
-  return (
-    <div className="wrap workspace-shell">
-      <nav className="workspace-steps" aria-label="Workspace steps">
-        {steps.map((s) => {
-          const disabled = s.need && !compile;
-          const active = path === s.href;
-          if (disabled) {
-            return (
-              <span key={s.href} className="workspace-step disabled" aria-disabled="true">
-                {s.label}
-              </span>
-            );
-          }
-          return (
-            <Link
-              key={s.href}
-              href={s.href}
-              className={`workspace-step${active ? " active" : ""}`}
-              aria-current={active ? "step" : undefined}
-            >
-              {s.label}
-            </Link>
-          );
-        })}
-      </nav>
-      <TaskSummary summary={summary} />
-      {children}
-    </div>
-  );
-}
-
-function TaskSummary({ summary }: { summary: ReturnType<typeof selectTaskSummary> }) {
-  return (
-    <aside className="task-summary" aria-labelledby="task-summary-title">
-      <div className="task-summary-heading">
-        <h2 id="task-summary-title">Task summary</h2>
-        <span className={`task-summary-status ${summary.compileStatus}`}>
-          {summary.compileStatus === "current"
-            ? "Compiled"
-            : summary.compileStatus === "stale"
-              ? "Compiled · live edits"
-              : "Not compiled"}
-        </span>
-      </div>
-      <div className="task-summary-grid">
-        <section className="task-summary-view" data-testid="live-task-summary">
-          <h3>Live task</h3>
-          <dl>
-            <div>
-              <dt>Document</dt>
-              <dd>{summary.live.documentName ?? "No document"}</dd>
-            </div>
-            <div>
-              <dt>Task</dt>
-              <dd>{summary.live.taskLabel || "No task"}</dd>
-            </div>
-            <div>
-              <dt>Budget</dt>
-              <dd>{summary.live.budget.toLocaleString()} tokens</dd>
-            </div>
-            <div>
-              <dt>Source</dt>
-              <dd>{sourceLabels[summary.live.sourceAvailability]}</dd>
-            </div>
-          </dl>
-        </section>
-        {summary.compiled ? (
-          <section className="task-summary-view compiled" data-testid="compiled-task-summary">
-            <h3>Compiled snapshot</h3>
-            <dl>
-              <div>
-                <dt>Document</dt>
-                <dd>{summary.compiled.documentName ?? "No document"}</dd>
-              </div>
-              <div>
-                <dt>Task</dt>
-                <dd>{summary.compiled.taskLabel || "No task"}</dd>
-              </div>
-              <div>
-                <dt>Budget</dt>
-                <dd>{summary.compiled.budget.toLocaleString()} tokens</dd>
-              </div>
-              <div>
-                <dt>Source</dt>
-                <dd>{sourceLabels[summary.compiled.sourceAvailability]}</dd>
-              </div>
-            </dl>
-          </section>
-        ) : null}
-      </div>
-    </aside>
-  );
-}
-
-function RailWorkspaceChrome({ children, path }: { children: React.ReactNode; path: string }) {
+function WorkspaceRail({ children, path }: { children: React.ReactNode; path: string }) {
   const workspace = useWorkspace();
   const { compile, workspaceStatus } = workspace;
   const summary = selectTaskSummary(workspace);
@@ -187,17 +79,7 @@ function RailWorkspaceChrome({ children, path }: { children: React.ReactNode; pa
   );
 }
 
-export function WorkspaceChrome({
-  children,
-  revampEnabled = false,
-}: {
-  children: React.ReactNode;
-  revampEnabled?: boolean;
-}) {
+export function WorkspaceChrome({ children }: { children: React.ReactNode }) {
   const path = usePathname();
-  return revampEnabled ? (
-    <RailWorkspaceChrome path={path}>{children}</RailWorkspaceChrome>
-  ) : (
-    <LegacyWorkspaceChrome path={path}>{children}</LegacyWorkspaceChrome>
-  );
+  return <WorkspaceRail path={path}>{children}</WorkspaceRail>;
 }

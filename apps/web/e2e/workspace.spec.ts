@@ -313,33 +313,7 @@ async function mockAgentStreamsIgnoringAbort(
   }, attempts);
 }
 
-test("flag off keeps legacy workspace steps and guards result-only routes", async ({ page }) => {
-  test.skip(process.env.NEXT_PUBLIC_CC_WORKSPACE_REVAMP !== "0", "Legacy-only rollback coverage.");
-  await mockWorkspace(page);
-  await page.goto("/workspace");
-
-  await expect(page.locator(".workspace-rail")).toHaveCount(0);
-  const liveSummary = page.getByTestId("live-task-summary");
-  await expect(liveSummary).toContainText("No document");
-  await expect(liveSummary).toContainText("No task");
-  await expect(liveSummary).toContainText("4,000 tokens");
-  await expect(page.getByTestId("compiled-task-summary")).toHaveCount(0);
-  await expect(page.getByRole("link", { name: "Compile", exact: true })).toHaveAttribute(
-    "aria-current",
-    "step"
-  );
-  for (const label of ["Results", "Prove", "Agent"]) {
-    await expect(page.getByText(label, { exact: true })).toHaveAttribute("aria-disabled", "true");
-  }
-
-  await page.goto("/workspace/results");
-  await expect(page.getByRole("heading", { name: "No compile yet" })).toBeVisible();
-  await page.getByRole("link", { name: "Compile a document" }).click();
-  await expect(page).toHaveURL(/\/workspace$/);
-});
-
 test("@revamp flag on makes the rail the only task editor", async ({ page }) => {
-  test.skip(process.env.NEXT_PUBLIC_CC_WORKSPACE_REVAMP === "0", "The revamp is disabled for this build.");
   await mockWorkspace(page);
   await page.goto("/workspace");
 
@@ -376,7 +350,6 @@ test("@revamp flag on makes the rail the only task editor", async ({ page }) => 
 });
 
 test("@revamp Results stays bound to the compiled snapshot and payload order", async ({ page }) => {
-  test.skip(process.env.NEXT_PUBLIC_CC_WORKSPACE_REVAMP === "0", "The revamp is disabled for this build.");
   const orderedResult = {
     ...compileResult,
     raw_tokens: 12_345,
@@ -430,7 +403,6 @@ test("@revamp Results stays bound to the compiled snapshot and payload order", a
 test("@revamp Results expands by visible handle and resets peeks and includes on compile", async ({
   page,
 }) => {
-  test.skip(process.env.NEXT_PUBLIC_CC_WORKSPACE_REVAMP === "0", "The revamp is disabled for this build.");
   const requests = await mockWorkspace(page, {
     compileResults: [
       { ...compileResult, handle: "compile-visible-a" },
@@ -459,7 +431,6 @@ test("@revamp Results expands by visible handle and resets peeks and includes on
 });
 
 test("@revamp budget drift retains Results cards but disables Prove includes", async ({ page }) => {
-  test.skip(process.env.NEXT_PUBLIC_CC_WORKSPACE_REVAMP === "0", "The revamp is disabled for this build.");
   await mockWorkspace(page);
   await page.goto("/workspace");
   await compileSample(page);
@@ -475,7 +446,6 @@ test("@revamp budget drift retains Results cards but disables Prove includes", a
 });
 
 test("@revamp Prove keeps submitted labels and answers through live rail edits", async ({ page }) => {
-  test.skip(process.env.NEXT_PUBLIC_CC_WORKSPACE_REVAMP === "0", "The revamp is disabled for this build.");
   const requests = await mockWorkspace(page, { answerDelayMs: 150 });
   await page.goto("/workspace");
   await compileSample(page);
@@ -563,7 +533,6 @@ test("@revamp blocks a run intent invalidated before destination mount", async (
 });
 
 test("@revamp rail resolves upload, sample, and measurement races", async ({ page }) => {
-  test.skip(process.env.NEXT_PUBLIC_CC_WORKSPACE_REVAMP === "0", "The revamp is disabled for this build.");
   await mockWorkspace(page, { sampleDelayMs: 150, measureDelayMs: 150 });
   await page.goto("/workspace");
 
@@ -591,7 +560,6 @@ test("@revamp rail resolves upload, sample, and measurement races", async ({ pag
 });
 
 test("@revamp rail keeps validation and measurement fallback", async ({ page }) => {
-  test.skip(process.env.NEXT_PUBLIC_CC_WORKSPACE_REVAMP === "0", "The revamp is disabled for this build.");
   await mockWorkspace(page, { measureError: "measurement unavailable" });
   await page.goto("/workspace");
 
@@ -615,7 +583,6 @@ test("@revamp rail keeps validation and measurement fallback", async ({ page }) 
 });
 
 test("@revamp rail cancels compile from its owning editor", async ({ page }) => {
-  test.skip(process.env.NEXT_PUBLIC_CC_WORKSPACE_REVAMP === "0", "The revamp is disabled for this build.");
   await mockWorkspace(page);
   await page.addInitScript(() => {
     const nativeFetch = window.fetch.bind(window);
@@ -640,7 +607,6 @@ test("@revamp rail cancels compile from its owning editor", async ({ page }) => 
 });
 
 test("@revamp rail submits by keyboard once and preserves Shift+Enter", async ({ page }) => {
-  test.skip(process.env.NEXT_PUBLIC_CC_WORKSPACE_REVAMP === "0", "The revamp is disabled for this build.");
   const requests = await mockWorkspace(page, { compileDelayMs: 150 });
   await page.goto("/workspace");
   await pickSample(page);
@@ -703,6 +669,7 @@ test("persists sample compile and Include in Prove across navigation and reload"
   await compileSample(page);
 
   const include = page.getByLabel("Include in Prove", { exact: true });
+  await expect(page.getByText("Expanded exclusion text")).toBeVisible();
   await include.check();
   const activity = page.getByRole("navigation", { name: "Workspace activity" });
   await activity.getByRole("link", { name: /Agent/ }).click();
@@ -894,7 +861,7 @@ test("cancels an in-flight compile and exposes API errors", async ({ page }) => 
 test("cancelled Prove snapshot cannot be overwritten by a late response", async ({ page }) => {
   await mockWorkspace(page);
   await mockAnswersIgnoringAbort(page, [
-    { delayMs: 150, fullAnswer: "Late full answer", compiledAnswer: "Late compiled answer" },
+    { delayMs: 1000, fullAnswer: "Late full answer", compiledAnswer: "Late compiled answer" },
   ]);
   await page.goto("/workspace");
   await compileSample(page);
@@ -902,7 +869,7 @@ test("cancelled Prove snapshot cannot be overwritten by a late response", async 
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
 
   await expect(page.locator(".err[role=alert]")).toHaveText("Prove cancelled.");
-  await page.waitForTimeout(200);
+  await page.waitForTimeout(1100);
   await expect(page.locator(".err[role=alert]")).toHaveText("Prove cancelled.");
   await expect(page.getByText("Late compiled answer", { exact: true })).toHaveCount(0);
 });
@@ -993,7 +960,7 @@ test("cancelled Agent keeps partial steps and ignores late completion", async ({
           'event: step\ndata: {"title":"Preserved partial","detail":"Arrived before cancel","tokens_added":500}\n\n',
       },
       {
-        delayMs: 150,
+        delayMs: 1000,
         chunk:
           'event: done\ndata: {"answer":"Late cancelled answer","tokens_read":500,"parity_handle":"late-cancelled"}\n\n',
       },
@@ -1008,7 +975,7 @@ test("cancelled Agent keeps partial steps and ignores late completion", async ({
 
   await expect(page.locator(".err[role=alert]")).toHaveText("Agent cancelled.");
   await expect(page.getByText("Arrived before cancel", { exact: true })).toBeVisible();
-  await page.waitForTimeout(220);
+  await page.waitForTimeout(1100);
   await expect(page.getByText("Late cancelled answer", { exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Compare to full file" })).toBeDisabled();
 });
