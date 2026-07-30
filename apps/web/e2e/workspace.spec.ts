@@ -110,6 +110,7 @@ async function mockWorkspace(page: Page, options: MockOptions = {}) {
   const requests = {
     answerBodies: [] as string[],
     agentBodies: [] as string[],
+    agentParityBodies: [] as string[],
     compileBodies: [] as string[],
     expandBodies: [] as string[],
   };
@@ -198,6 +199,7 @@ async function mockWorkspace(page: Page, options: MockOptions = {}) {
       return;
     }
     if (path === "/api/agent-parity") {
+      requests.agentParityBodies.push(route.request().postData() ?? "");
       await fulfillJson(route, {
         model: "golden-model",
         full: { answer: "Full-file answer", context_tokens: 10_000 },
@@ -265,6 +267,48 @@ async function mockAnswersIgnoringAbort(
           );
         }, attempt.delayMs);
       });
+    };
+  }, attempts);
+}
+
+async function mockAgentResponse(page: Page, body: string, contentType = "text/event-stream", status = 200) {
+  await page.route("**/api/agent", (route) =>
+    route.fulfill({ status, headers: { "content-type": contentType }, body })
+  );
+}
+
+async function mockAgentStreamsIgnoringAbort(
+  page: Page,
+  attempts: Array<Array<{ delayMs: number; chunk: string }>>
+) {
+  await page.addInitScript((agentAttempts) => {
+    const nativeFetch = window.fetch.bind(window);
+    let agentIndex = 0;
+    window.fetch = (input, init) => {
+      if (!String(input).endsWith("/api/agent")) return nativeFetch(input, init);
+      const chunks = agentAttempts[Math.min(agentIndex++, agentAttempts.length - 1)];
+      const encoder = new TextEncoder();
+      let cancelled = false;
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          let elapsed = 0;
+          for (const item of chunks) {
+            elapsed += item.delayMs;
+            window.setTimeout(() => {
+              if (!cancelled) controller.enqueue(encoder.encode(item.chunk));
+            }, elapsed);
+          }
+          window.setTimeout(() => {
+            if (!cancelled) controller.close();
+          }, elapsed + 5);
+        },
+        cancel() {
+          cancelled = true;
+        },
+      });
+      return Promise.resolve(
+        new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } })
+      );
     };
   }, attempts);
 }
@@ -858,6 +902,166 @@ test("newer Prove retry wins when two attempts finish out of order", async ({ pa
   await expect(page.getByTestId("prove-run-snapshot")).toContainText("4,000 token budget");
 });
 
+test("Agent snapshots ordered SSE steps, meter, and stop metadata", async ({ page }) => {
+  await mockWorkspace(page);
+  await mockAgentResponse(
+    page,
+    'event: step\ndata: {"title":"First retrieval","tokens_added":2000}\n\n' +
+      'event: step\ndata: {"title":"Second retrieval","tokens_added":2100,"truncated":true}\n\n' +
+      'event: done\ndata: {"answer":"Ordered answer","tokens_read":4100,"raw_tokens":10000,"final_context_tokens":4050,"stopped_reason":"token_ceiling","unread_remaining":true,"parity_handle":"ordered-parity"}\n\n'
+  );
+  await page.goto("/workspace");
+  await compileSample(page);
+  await page.goto("/workspace/agent");
+  await page.getByRole("button", { name: "Run agent", exact: true }).click();
+
+  await expect(page.locator(".atitle")).toHaveText(["First retrieval", "Second retrieval"]);
+  await expect(page.getByText("Ordered answer", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("agent-run-snapshot")).toContainText("What is covered?");
+  await expect(page.getByTestId("agent-run-snapshot")).toContainText("4,000 token budget");
+  await expect(page.getByLabel("Agent tokens read")).toContainText("4,100 tokens read");
+  await expect(page.getByText(/soft ceiling may overshoot.*100 tokens/i)).toBeVisible();
+  await expect(page.getByText(/Unread sections remain/)).toBeVisible();
+});
+
+test("Agent rejects malformed and non-SSE responses", async ({ page }) => {
+  await mockWorkspace(page);
+  await mockAgentResponse(page, "event: step\ndata: {not-json}\n\n");
+  await page.goto("/workspace");
+  await compileSample(page);
+  await page.goto("/workspace/agent");
+  await page.getByRole("button", { name: "Run agent", exact: true }).click();
+  await expect(page.locator(".err[role=alert]")).toHaveText("Malformed agent event.");
+
+  const nonSsePage = await page.context().newPage();
+  await mockWorkspace(nonSsePage);
+  await mockAgentResponse(nonSsePage, "upstream returned HTML", "text/html");
+  await nonSsePage.goto("/workspace");
+  await compileSample(nonSsePage);
+  await nonSsePage.goto("/workspace/agent");
+  await nonSsePage.getByRole("button", { name: "Run agent", exact: true }).click();
+  await expect(nonSsePage.locator(".err[role=alert]")).toHaveText("Agent returned a non-SSE response.");
+});
+
+test("Agent treats an incomplete stream as failed while preserving steps", async ({ page }) => {
+  await mockWorkspace(page);
+  await mockAgentResponse(
+    page,
+    'event: step\ndata: {"title":"Partial retrieval","detail":"Keep this trace","tokens_added":700}\n\n'
+  );
+  await page.goto("/workspace");
+  await compileSample(page);
+  await page.goto("/workspace/agent");
+  await page.getByRole("button", { name: "Run agent", exact: true }).click();
+
+  await expect(page.getByText("Keep this trace", { exact: true })).toBeVisible();
+  await expect(page.locator(".err[role=alert]")).toHaveText("Connection ended before the agent finished.");
+});
+
+test("cancelled Agent keeps partial steps and ignores late completion", async ({ page }) => {
+  await mockWorkspace(page);
+  await mockAgentStreamsIgnoringAbort(page, [
+    [
+      {
+        delayMs: 0,
+        chunk:
+          'event: step\ndata: {"title":"Preserved partial","detail":"Arrived before cancel","tokens_added":500}\n\n',
+      },
+      {
+        delayMs: 150,
+        chunk:
+          'event: done\ndata: {"answer":"Late cancelled answer","tokens_read":500,"parity_handle":"late-cancelled"}\n\n',
+      },
+    ],
+  ]);
+  await page.goto("/workspace");
+  await compileSample(page);
+  await page.goto("/workspace/agent");
+  await page.getByRole("button", { name: "Run agent", exact: true }).click();
+  await expect(page.getByText("Arrived before cancel", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+
+  await expect(page.locator(".err[role=alert]")).toHaveText("Agent cancelled.");
+  await expect(page.getByText("Arrived before cancel", { exact: true })).toBeVisible();
+  await page.waitForTimeout(220);
+  await expect(page.getByText("Late cancelled answer", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Compare to full file" })).toBeDisabled();
+});
+
+test("newer Agent run wins and ignores superseded late events", async ({ page }) => {
+  await mockWorkspace(page);
+  await mockAgentStreamsIgnoringAbort(page, [
+    [
+      {
+        delayMs: 0,
+        chunk: 'event: step\ndata: {"title":"Older partial","tokens_added":300}\n\n',
+      },
+      {
+        delayMs: 180,
+        chunk:
+          'event: done\ndata: {"answer":"Older late answer","tokens_read":300,"parity_handle":"older-handle"}\n\n',
+      },
+    ],
+    [
+      {
+        delayMs: 10,
+        chunk: 'event: step\ndata: {"title":"Newer step","tokens_added":900}\n\n',
+      },
+      {
+        delayMs: 10,
+        chunk:
+          'event: done\ndata: {"answer":"Newer answer","tokens_read":900,"raw_tokens":10000,"final_context_tokens":900,"stopped_reason":"answered","parity_handle":"newer-handle"}\n\n',
+      },
+    ],
+  ]);
+  await page.goto("/workspace");
+  await compileSample(page);
+  await page.goto("/workspace/agent");
+  await page.getByRole("button", { name: "Run agent", exact: true }).click();
+  await expect(page.getByText("Older partial", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Restart agent", exact: true }).click();
+
+  await expect(page.getByText("Newer answer", { exact: true })).toBeVisible();
+  await page.waitForTimeout(240);
+  await expect(page.getByText("Older late answer", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Older partial", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Newer step", { exact: true })).toBeVisible();
+});
+
+test("Agent parity handle is one-shot and belongs to its run", async ({ page }) => {
+  const requests = await mockWorkspace(page);
+  await page.goto("/workspace");
+  await compileSample(page);
+  await page.goto("/workspace/agent");
+  await page.getByRole("button", { name: "Run agent", exact: true }).click();
+  await page.getByRole("button", { name: "Compare to full file" }).click();
+
+  await expect(page.getByText("Agent context · 1,900 tok")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Compare to full file" })).toBeDisabled();
+  expect(requests.agentParityBodies).toHaveLength(1);
+  expect(requests.agentParityBodies[0]).toContain('"parity_handle":"parity-golden"');
+});
+
+test("Agent allows budget-only drift and snapshots the submitted budget", async ({ page }) => {
+  const requests = await mockWorkspace(page);
+  await page.goto("/workspace");
+  await compileSample(page);
+  if (await page.locator(".workspace-rail").count()) {
+    await page.locator("#budget").fill("5000");
+  } else {
+    await page.getByRole("link", { name: "Compile", exact: true }).click();
+    await page.locator("#budget").fill("5000");
+    await page.getByRole("link", { name: "Results" }).click();
+  }
+  await page.goto("/workspace/agent");
+  await page.getByRole("button", { name: "Run agent", exact: true }).click();
+
+  await expect(page.getByText("Agent answer", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("agent-run-snapshot")).toContainText("5,000 token budget");
+  expect(requests.agentBodies.at(-1)).toContain('name="token_budget"');
+  expect(requests.agentBodies.at(-1)).toContain("5000");
+});
+
 test("mocks expand, answer, and agent flows with stable golden output", async ({ page }) => {
   const requests = await mockWorkspace(page);
   await page.goto("/workspace");
@@ -871,7 +1075,7 @@ test("mocks expand, answer, and agent flows with stable golden output", async ({
   await expect(page.getByText("Compiled answer")).toBeVisible();
   expect(requests.answerBodies.at(-1)).toContain('["omitted-1"]');
 
-  await page.getByRole("link", { name: "Agent", exact: true }).click();
+  await page.goto("/workspace/agent");
   await page.getByRole("button", { name: "Run agent", exact: true }).click();
   await expect(page.getByText("Ranked sections")).toBeVisible();
   await expect(page.getByText("Agent answer", { exact: true })).toBeVisible();

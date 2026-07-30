@@ -49,7 +49,6 @@ type WorkspaceState = {
   proveExpandedTokenSum: number;
   sessionSavedTokens: number;
   sessionSavedUsd: number;
-  agentParityHandle: string | null;
   pendingRun: "prove" | "agent" | null;
   hydrated: boolean;
   setFile: (f: File | null) => void;
@@ -63,7 +62,6 @@ type WorkspaceState = {
   clearCompile: () => void;
   setProveInclude: (id: string, tokens: number, included: boolean) => void;
   clearProveIncludes: () => void;
-  setAgentParityHandle: (h: string | null) => void;
   requestRun: (action: "prove" | "agent") => void;
   consumeRun: (action: "prove" | "agent") => boolean;
   workspaceStatus: WorkspaceStatus;
@@ -96,7 +94,6 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     proveInclude,
     sessionSavedTokens,
     sessionSavedUsd,
-    agentParityHandle,
     pendingRun,
     hydrated,
   } = workspace;
@@ -261,13 +258,6 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     dispatch({ type: "PROVE_INCLUDE_CHANGED", id, tokens, included });
   }, []);
 
-  const setAgentParityHandle = useCallback((h: string | null) => {
-    dispatch(
-      h
-        ? { type: "RUN_COMPLETED", action: "agent", parityHandle: h }
-        : { type: "RUN_STARTED", action: "agent" }
-    );
-  }, []);
   const requestRun = useCallback(
     (action: "prove" | "agent") => dispatch({ type: "RUN_REQUESTED", action }),
     []
@@ -321,7 +311,6 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       proveExpandedTokenSum,
       sessionSavedTokens,
       sessionSavedUsd,
-      agentParityHandle,
       pendingRun,
       hydrated,
       setFile,
@@ -335,7 +324,6 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       clearCompile,
       setProveInclude,
       clearProveIncludes,
-      setAgentParityHandle,
       requestRun,
       consumeRun,
       workspaceStatus,
@@ -360,7 +348,6 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       proveExpandedTokenSum,
       sessionSavedTokens,
       sessionSavedUsd,
-      agentParityHandle,
       pendingRun,
       hydrated,
       setFile,

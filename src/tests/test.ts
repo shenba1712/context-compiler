@@ -2154,11 +2154,6 @@ function testWorkspaceReducerTransitions() {
     included: true,
   });
   state = workspaceReducer(state, {
-    type: "RUN_COMPLETED",
-    action: "agent",
-    parityHandle: "old-parity",
-  });
-  state = workspaceReducer(state, {
     type: "COMPILE_SUCCEEDED",
     result,
     task: "Question one",
@@ -2171,7 +2166,6 @@ function testWorkspaceReducerTransitions() {
   assert.ok(Object.isFrozen(state.compiledSnapshot?.result), "compiled result is immutable");
   assert.ok(Object.isFrozen(state.compiledSnapshot?.result.selected), "compiled nested data is immutable");
   assert.equal(state.proveInclude.expandedIds.size, 0, "compile success clears prior Prove includes");
-  assert.equal(state.agentParityHandle, null, "compile success clears prior parity handles");
   assert.equal(state.sessionSavedTokens, 600, "compile success accumulates saved tokens atomically");
   assert.equal(state.sessionSavedUsd, 1, "compile success accumulates saved cost atomically");
 
@@ -2181,11 +2175,6 @@ function testWorkspaceReducerTransitions() {
     id: "s2",
     tokens: 120,
     included: true,
-  });
-  state = workspaceReducer(state, {
-    type: "RUN_COMPLETED",
-    action: "agent",
-    parityHandle: "parity-1",
   });
   state = workspaceReducer(state, { type: "TASK_CHANGED", task: "Question two" });
   assert.equal(state.compiledSnapshot, compiled, "task edits keep prior results");
@@ -2243,7 +2232,6 @@ function testWorkspaceReducerTransitions() {
   });
   assert.equal(state.compiledSnapshot, null, "document replacement clears compile");
   assert.equal(state.proveInclude.expandedIds.size, 0, "document replacement clears Prove includes");
-  assert.equal(state.agentParityHandle, null, "document replacement clears parity handles");
   assert.equal(state.sessionSavedTokens, 600, "document replacement keeps session savings");
 
   state = workspaceReducer(state, { type: "RUN_REQUESTED", action: "prove" });

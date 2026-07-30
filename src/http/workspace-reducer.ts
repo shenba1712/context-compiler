@@ -40,7 +40,6 @@ export type WorkspaceReducerState<TCompile extends WorkspaceCompileArtifact, TFi
   proveInclude: ProveIncludeState;
   sessionSavedTokens: number;
   sessionSavedUsd: number;
-  agentParityHandle: string | null;
   pendingRun: WorkspaceRun | null;
   hydrated: boolean;
 };
@@ -87,10 +86,7 @@ export type WorkspaceReducerEvent<TCompile extends WorkspaceCompileArtifact, TFi
   | { type: "COMPILE_CLEARED" | "COMPILE_FAILED" | "COMPILE_CANCELLED" }
   | { type: "PROVE_INCLUDE_CHANGED"; id: string; tokens: number; included: boolean }
   | { type: "PROVE_INCLUDE_CLEARED" }
-  | { type: "RUN_REQUESTED" | "RUN_CONSUMED"; action: WorkspaceRun }
-  | { type: "RUN_STARTED"; action: WorkspaceRun }
-  | { type: "RUN_COMPLETED"; action: WorkspaceRun; parityHandle?: string | null }
-  | { type: "RUN_FAILED" | "RUN_CANCELLED"; action: WorkspaceRun };
+  | { type: "RUN_REQUESTED" | "RUN_CONSUMED"; action: WorkspaceRun };
 
 const EMPTY_PROVE_INCLUDE = (): ProveIncludeState => ({
   expandedIds: new Set(),
@@ -113,7 +109,6 @@ export function createInitialWorkspaceState<TCompile extends WorkspaceCompileArt
     proveInclude: EMPTY_PROVE_INCLUDE(),
     sessionSavedTokens: 0,
     sessionSavedUsd: 0,
-    agentParityHandle: null,
     pendingRun: null,
     hydrated: false,
   };
@@ -136,7 +131,6 @@ function clearCompile<TCompile extends WorkspaceCompileArtifact, TFile>(
     ...state,
     compiledSnapshot: null,
     proveInclude: EMPTY_PROVE_INCLUDE(),
-    agentParityHandle: null,
   };
 }
 
@@ -207,7 +201,6 @@ export function workspaceReducer<TCompile extends WorkspaceCompileArtifact, TFil
         proveInclude: EMPTY_PROVE_INCLUDE(),
         sessionSavedTokens: state.sessionSavedTokens + Math.max(0, result.tokens_saved),
         sessionSavedUsd: state.sessionSavedUsd + Math.max(0, result.cost_raw_usd - result.cost_compiled_usd),
-        agentParityHandle: null,
       };
     }
     case "COMPILE_CLEARED":
@@ -233,12 +226,5 @@ export function workspaceReducer<TCompile extends WorkspaceCompileArtifact, TFil
       return { ...state, pendingRun: event.action };
     case "RUN_CONSUMED":
       return state.pendingRun === event.action ? { ...state, pendingRun: null } : state;
-    case "RUN_STARTED":
-      return event.action === "agent" ? { ...state, agentParityHandle: null } : state;
-    case "RUN_COMPLETED":
-      return event.action === "agent" ? { ...state, agentParityHandle: event.parityHandle ?? null } : state;
-    case "RUN_FAILED":
-    case "RUN_CANCELLED":
-      return state;
   }
 }

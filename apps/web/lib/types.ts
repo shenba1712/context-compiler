@@ -94,6 +94,53 @@ export type AgentParityResult = {
   error?: string;
 };
 
+export type AgentRunStatus = "running" | "succeeded" | "failed" | "cancelled";
+
+export type AgentRunSourceIdentity = Readonly<{
+  documentName: string;
+  sampleKey: string | null;
+  size: number;
+  type: string;
+  lastModified: number;
+}>;
+
+export type AgentRunStep = Readonly<{
+  kind?: string;
+  title?: string;
+  detail?: string;
+  action?: string;
+  n?: number;
+  section_id?: string;
+  tokens_added?: number;
+  truncated?: boolean;
+  [key: string]: unknown;
+}>;
+
+export type AgentRunMeta = Readonly<{
+  tokensRead: number;
+  rawTokens: number;
+  finalTokens: number;
+  stoppedReason: string;
+  unreadRemaining: boolean;
+}>;
+
+export type AgentRunSnapshot = Readonly<{
+  id: string;
+  task: string;
+  budget: number;
+  source: AgentRunSourceIdentity;
+  sourceFile: File;
+  status: AgentRunStatus;
+  steps: readonly AgentRunStep[];
+  answer: string;
+  meta: AgentRunMeta | null;
+  parityHandle: string | null;
+  parityResult: AgentParityResult | null;
+  error: string | null;
+  submittedAt: string;
+  completedAt: string | null;
+}>;
+
 export type AnswerApiResult = {
   model: string;
   full: { answer: string; context_tokens: number };
