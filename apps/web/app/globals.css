@@ -45,19 +45,19 @@
 
   /* ---------- hero (Forest map / H) ---------- */
   .hero {
-    min-height:min(760px, calc(100svh - 72px));
+    min-height:min(600px, calc(100svh - 96px));
     display:grid;
     grid-template-columns:minmax(0,1fr) minmax(0,1fr);
   }
   .hero .copy {
     display:flex; flex-direction:column; justify-content:center;
-    padding:clamp(56px,7vw,84px) clamp(28px,5vw,64px) clamp(40px,5vw,56px);
+    padding:clamp(32px,4.5vw,52px) clamp(28px,5vw,64px);
     max-width:560px;
   }
   .brand {
     font-family:"Fraunces",Georgia,serif;
     font-weight:700;
-    font-size:clamp(38px,5vw,56px);
+    font-size:clamp(36px,4.2vw,48px);
     line-height:1.02;
     letter-spacing:-.02em;
     margin:0 0 8px;
@@ -67,18 +67,18 @@
     font-family:"IBM Plex Mono",ui-monospace,monospace;
     font-size:11px; font-weight:500;
     color:var(--forest); letter-spacing:.06em;
-    margin:0 0 18px;
+    margin:0 0 12px;
   }
   h1.title {
     font-family:"DM Sans",system-ui,sans-serif;
     font-weight:600;
-    font-size:clamp(24px,2.8vw,32px);
-    line-height:1.28;
+    font-size:clamp(23px,2.4vw,29px);
+    line-height:1.24;
     letter-spacing:-.015em;
-    margin:0 0 14px;
+    margin:0 0 10px;
     max-width:22ch;
   }
-  .lede { font-size:16.5px; color:var(--muted); max-width:40ch; margin:0 0 24px; line-height:1.5; }
+  .lede { font-size:15.5px; color:var(--muted); max-width:42ch; margin:0 0 18px; line-height:1.45; }
   .cta { display:flex; flex-wrap:wrap; gap:10px; }
   /* Hero copy enter — short staggered fade+rise (~0.8s total). */
   .hero .brand, .hero .coords, .hero .title, .hero .lede, .hero .cta {
@@ -97,7 +97,7 @@
     background:linear-gradient(155deg, #1f5c42 0%, #174a35 45%, #0f3224 100%);
     color:#e8f0eb;
     display:flex; flex-direction:column; justify-content:center;
-    padding:clamp(40px,5vw,64px) clamp(28px,4.5vw,64px);
+    padding:clamp(28px,4vw,48px) clamp(28px,4.5vw,64px);
     overflow:hidden;
     clip-path:polygon(4% 0, 100% 0, 100% 100%, 0 100%);
   }
@@ -124,9 +124,9 @@
   .plane .cap {
     font-family:"IBM Plex Mono",ui-monospace,monospace;
     font-size:11px; font-weight:500; letter-spacing:.04em;
-    color:rgba(232,240,235,.65); margin:0 0 26px;
+    color:rgba(232,240,235,.65); margin:0 0 18px;
   }
-  .bar-block { margin-bottom:20px; }
+  .bar-block { margin-bottom:14px; }
   .bar-label {
     display:flex; justify-content:space-between; align-items:baseline;
     gap:12px; margin-bottom:8px;
@@ -146,7 +146,7 @@
   .hbar.small { background:var(--compiled); animation-delay:.28s; }
   @keyframes grow { from{transform:scaleX(0); opacity:.4;} to{transform:scaleX(1); opacity:1;} }
   .plane .verdict {
-    margin-top:6px; padding-top:20px;
+    margin-top:4px; padding-top:14px;
     border-top:1px solid rgba(232,240,235,.18);
     font-size:15px; font-weight:500;
     color:rgba(232,240,235,.85);
@@ -154,15 +154,15 @@
   .plane .verdict strong {
     display:block;
     font-family:"IBM Plex Mono",ui-monospace,monospace;
-    font-size:clamp(26px,3.2vw,34px);
+    font-size:clamp(24px,2.8vw,30px);
     font-weight:600;
     color:#fff;
-    margin-bottom:6px;
+    margin-bottom:3px;
     letter-spacing:-.02em;
   }
 
   /* ---------- pipeline strip (below fold) ---------- */
-  .pipeline { padding:22px 0 32px; border-top:1px solid var(--border);
+  .pipeline { padding:14px 0 16px; border-top:1px solid var(--border);
     background:transparent; }
   .pipe { display:grid; grid-template-columns:repeat(3,1fr); gap:0; margin:0; }
   .pipe .c { background:transparent; border:0; border-radius:0;
@@ -181,16 +181,16 @@
     font-family:"IBM Plex Mono",ui-monospace,monospace;
     font-size:11px; color:var(--forest); font-weight:500; letter-spacing:.06em;
   }
-  .pipe .h { font-weight:600; margin:4px 0 2px; font-size:15px; }
-  .pipe .d { font-size:14px; color:var(--muted); line-height:1.5; }
-  .keynote { font-size:14.5px; color:var(--muted); background:transparent;
+  .pipe .h { font-weight:600; margin:2px 0 1px; font-size:14px; }
+  .pipe .d { font-size:13px; color:var(--muted); line-height:1.35; }
+  .keynote { font-size:13.5px; color:var(--muted); background:transparent;
     border:0; border-left:2px solid var(--forest); border-radius:0;
-    padding:8px 0 8px 14px; margin-top:18px; line-height:1.55; }
+    padding:5px 0 5px 12px; margin-top:10px; line-height:1.4; }
 
   /* ---------- panels (instrument wells — soft surface + 1px border) ---------- */
   section { padding:40px 0; }
   section.hero { padding:0; }
-  section.pipeline { padding:22px 0 32px; }
+  section.pipeline { padding:14px 0 16px; }
   .panel { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius);
     padding:26px 22px; box-shadow:none; }
   h2.sec { font-family:"Fraunces",Georgia,serif; font-weight:600; font-size:clamp(24px,2.7vw,30px);
@@ -313,6 +313,15 @@
     white-space:pre-wrap; word-break:break-word; max-height:300px; overflow:auto; font-size:14px;
     font-family:"IBM Plex Mono",ui-monospace,monospace; }
   .err { color:var(--red); margin-top:12px; font-size:13.5px; }
+
+  /* The desktop landing is one composition: nav, content, and footer share the viewport. */
+  @media (min-width:861px) {
+    body:has(.home-page) { min-height:100svh; display:flex; flex-direction:column; }
+    body:has(.home-page) .page-main { min-height:0; flex:1 1 auto; display:flex; }
+    .home-page { min-height:0; flex:1 1 auto; display:flex; flex-direction:column; }
+    .home-page .hero { min-height:0; flex:1 1 auto; }
+    .home-page .pipeline { flex:0 0 auto; }
+  }
 
   /* tablet / mobile: stack hero like H (plane below copy, no clip-path) */
   @media (max-width:860px){
@@ -483,7 +492,7 @@
 .config-heading small { margin-left:8px; color:var(--faint); font-family:"IBM Plex Mono",ui-monospace,monospace; }
 .copybtn { border:1px solid var(--border2); background:var(--surface); color:var(--accent); padding:5px 11px; cursor:pointer; font:inherit; font-size:12px; }
 .copybtn:hover { border-color:var(--accent); background:var(--accent-soft); }
-.site-footer { padding:26px 0 42px; border-top:1px solid var(--border); color:var(--faint); text-align:center; font-size:13.5px; }
+.site-footer { padding:12px 0 14px; border-top:1px solid var(--border); color:var(--faint); text-align:center; font-size:13px; }
 @media (max-width:720px) {
   .workspace-shell-revamp { grid-template-columns:1fr; gap:18px; }
   .workspace-rail { position:static; max-height:none; overflow:visible; }

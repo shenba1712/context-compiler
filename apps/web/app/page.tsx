@@ -6,7 +6,7 @@ import { motion, useReducedMotion } from "framer-motion";
 export default function HomePage() {
   const reduceMotion = useReducedMotion();
   return (
-    <>
+    <div className="home-page">
       <section className="hero" aria-label="Hero composition">
         <div className="copy">
           <p className="brand">
@@ -115,6 +115,6 @@ export default function HomePage() {
           </div>
         </div>
       </section>
-    </>
+    </div>
   );
 }
