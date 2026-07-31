@@ -877,7 +877,7 @@ test("cancelled Prove snapshot cannot be overwritten by a late response", async 
 test("newer Prove retry wins when two attempts finish out of order", async ({ page }) => {
   await mockWorkspace(page);
   await mockAnswersIgnoringAbort(page, [
-    { delayMs: 250, fullAnswer: "Older full answer", compiledAnswer: "Older compiled answer" },
+    { delayMs: 1000, fullAnswer: "Older full answer", compiledAnswer: "Older compiled answer" },
     { delayMs: 20, fullAnswer: "Newer full answer", compiledAnswer: "Newer compiled answer" },
   ]);
   await page.goto("/workspace");
@@ -887,7 +887,7 @@ test("newer Prove retry wins when two attempts finish out of order", async ({ pa
   await page.getByRole("button", { name: "Retry submitted snapshot" }).click();
 
   await expect(page.getByText("Newer compiled answer", { exact: true })).toBeVisible();
-  await page.waitForTimeout(300);
+  await page.waitForTimeout(1100);
   await expect(page.getByText("Newer compiled answer", { exact: true })).toBeVisible();
   await expect(page.getByText("Older compiled answer", { exact: true })).toHaveCount(0);
   await expect(page.getByTestId("prove-run-snapshot")).toContainText("What is covered?");
