@@ -15,9 +15,10 @@ const activities = [
 
 function WorkspaceRail({ children, path }: { children: React.ReactNode; path: string }) {
   const workspace = useWorkspace();
-  const { compile, workspaceStatus } = workspace;
+  const { budget, compile, file, filePicked, task, workspaceStatus } = workspace;
   const summary = selectTaskSummary(workspace);
   const sourceUnavailable = workspaceStatus.sourceUnavailable;
+  const isCreate = path === "/workspace";
 
   const activityAvailable = (href: string) => {
     if (!compile) return false;
@@ -34,7 +35,35 @@ function WorkspaceRail({ children, path }: { children: React.ReactNode; path: st
           <h2 id="workspace-rail-title">Live task</h2>
         </div>
         <div data-testid="live-task-summary">
-          <TaskEditor rail />
+          {isCreate ? (
+            <div className="workspace-create-summary">
+              <div>
+                <span className="alabel">Source</span>
+                <strong>{filePicked || "Choose a document"}</strong>
+              </div>
+              <div>
+                <span className="alabel">Question</span>
+                <strong>{task.trim() || "Describe what you need"}</strong>
+              </div>
+              <div>
+                <span className="alabel">Budget</span>
+                <strong>{budget.toLocaleString()} tokens</strong>
+              </div>
+              <button
+                className="btn primary"
+                type="submit"
+                form="workspace-task-form"
+                disabled={!file || !task.trim()}
+              >
+                Compile task
+              </button>
+              <a className="workspace-edit-link" href="#workspace-task-form">
+                Edit task in canvas
+              </a>
+            </div>
+          ) : (
+            <TaskEditor compact />
+          )}
         </div>
 
         {summary.compiled ? (

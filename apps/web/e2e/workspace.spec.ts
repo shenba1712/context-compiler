@@ -313,17 +313,19 @@ async function mockAgentStreamsIgnoringAbort(
   }, attempts);
 }
 
-test("@revamp flag on makes the rail the only task editor", async ({ page }) => {
+test("@revamp puts create controls on canvas and keeps a compact rail", async ({ page }) => {
   await mockWorkspace(page);
   await page.goto("/workspace");
 
   const rail = page.getByRole("complementary", { name: "Live task" });
   await expect(rail).toBeVisible();
   await expect(page.getByRole("region", { name: "Workspace canvas" })).toBeVisible();
-  await expect(rail.locator("#budget")).toHaveValue("4000");
+  await expect(rail.locator("#budget")).toHaveCount(0);
+  await expect(page.locator(".workspace-canvas").locator("#budget")).toHaveValue("4000");
   await expect(page.locator('input[type="file"]')).toHaveCount(1);
   await expect(page.getByRole("button", { name: "Compile", exact: true })).toHaveCount(1);
-  await expect(page.locator(".workspace-canvas").locator('input[type="file"]')).toHaveCount(0);
+  await expect(page.locator(".workspace-canvas").locator('input[type="file"]')).toHaveCount(1);
+  await expect(rail.getByRole("button", { name: "Compile task" })).toBeVisible();
 
   const activity = rail.getByRole("navigation", { name: "Workspace activity" });
   await expect(activity.locator(".workspace-activity-link", { hasText: "Results" })).toHaveAttribute(
@@ -341,11 +343,11 @@ test("@revamp flag on makes the rail the only task editor", async ({ page }) => 
   await expect(activity.getByText("Compile", { exact: true })).toHaveCount(0);
 
   await pickSample(page);
-  await rail.getByRole("button", { name: "Compile", exact: true }).click();
+  await page.getByRole("button", { name: "Compile", exact: true }).click();
   await expect(page).toHaveURL(/\/workspace\/results$/);
   await expect(activity.getByRole("link", { name: /Results/ })).toHaveAttribute("aria-current", "page");
   await expect(rail).toContainText("Current");
-  await expect(page.locator('input[type="file"]')).toHaveCount(1);
+  await expect(page.locator('input[type="file"]')).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Compile", exact: true })).toHaveCount(1);
 });
 
@@ -475,8 +477,8 @@ test("@revamp rail run intent is one-shot across history and refresh", async ({ 
   await pickSample(page);
 
   await page
-    .getByRole("complementary", { name: "Live task" })
-    .getByRole("button", { name: "Prove", exact: true })
+    .getByRole("region", { name: "Workspace canvas" })
+    .getByRole("button", { name: "Prove…", exact: true })
     .click();
   await expect(page).toHaveURL(/\/workspace\/prove$/);
   await expect(page.getByText("Compiled answer", { exact: true })).toBeVisible();
@@ -496,10 +498,10 @@ test("@revamp rapid Prove then Agent runs only the latest valid intent", async (
   await page.goto("/workspace");
   await pickSample(page);
 
-  await page.locator(".workspace-rail").evaluate((rail) => {
-    const buttons = [...rail.querySelectorAll<HTMLButtonElement>("button")];
-    buttons.find((button) => button.textContent?.trim() === "Prove")?.click();
-    buttons.find((button) => button.textContent?.trim() === "Agent")?.click();
+  await page.locator(".workspace-canvas").evaluate((canvas) => {
+    const buttons = [...canvas.querySelectorAll<HTMLButtonElement>("button")];
+    buttons.find((button) => button.textContent?.trim() === "Prove…")?.click();
+    buttons.find((button) => button.textContent?.trim() === "Run agent ▸")?.click();
   });
 
   await expect(page).toHaveURL(/\/workspace\/agent$/);
@@ -513,11 +515,11 @@ test("@revamp blocks a run intent invalidated before destination mount", async (
   await page.goto("/workspace");
   await pickSample(page);
 
-  await page.locator(".workspace-rail").evaluate((rail) => {
-    const prove = [...rail.querySelectorAll<HTMLButtonElement>("button")].find(
-      (button) => button.textContent?.trim() === "Prove"
+  await page.locator(".workspace-canvas").evaluate((canvas) => {
+    const prove = [...canvas.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "Prove…"
     );
-    const task = rail.querySelector<HTMLTextAreaElement>("#task");
+    const task = canvas.querySelector<HTMLTextAreaElement>("#task");
     prove?.click();
     if (!task) return;
     const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
@@ -619,7 +621,7 @@ test("@revamp rail submits by keyboard once and preserves Shift+Enter", async ({
 
   await task.press("Enter");
   await page.evaluate(() =>
-    document.querySelector<HTMLFormElement>(".workspace-rail-editor")?.requestSubmit()
+    document.querySelector<HTMLFormElement>(".workspace-canvas-editor")?.requestSubmit()
   );
   await expect(page).toHaveURL(/\/workspace\/results$/);
   expect(requests.compileBodies).toHaveLength(1);
@@ -810,8 +812,8 @@ test("disables all LLM entry points when the host has no key", async ({ page }) 
   await mockWorkspace(page, { llmAvailable: false });
   await page.goto("/workspace");
   await pickSample(page);
-  await expect(page.getByRole("button", { name: "Prove", exact: true })).toBeDisabled();
-  await expect(page.getByRole("button", { name: "Agent", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Prove…", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Run agent ▸", exact: true })).toBeDisabled();
 
   await page.getByRole("button", { name: "Compile", exact: true }).click();
   await page.goto("/workspace/prove");

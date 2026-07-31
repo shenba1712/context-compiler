@@ -25,7 +25,7 @@ async function fileFromSample(sample: Sample, signal: AbortSignal): Promise<File
   });
 }
 
-export function TaskEditor({ rail = false }: { rail?: boolean }) {
+export function TaskEditor({ compact = false }: { compact?: boolean }) {
   const router = useRouter();
   const fileInput = useRef<HTMLInputElement | null>(null);
   const measureSeq = useRef(0);
@@ -229,76 +229,93 @@ export function TaskEditor({ rail = false }: { rail?: boolean }) {
     : filePicked;
 
   return (
-    <form className={rail ? "workspace-rail-editor" : undefined} onSubmit={onCompile}>
-      <label htmlFor="file">Upload (pdf, docx, xlsx, pptx, html, csv, txt, md). Max {maxFileLabel} MB</label>
-      <input
-        ref={fileInput}
-        id="file"
-        type="file"
-        accept=".pdf,.docx,.xlsx,.pptx,.html,.htm,.csv,.txt,.md,.markdown"
-        onChange={(event) => {
-          sampleAbort.current?.abort();
-          ++measureSeq.current;
-          const nextFile = event.target.files?.[0] ?? null;
-          const validationError = nextFile ? validateUploadFile(nextFile, maxFileBytes) : null;
-          if (validationError) {
-            event.target.value = "";
-            setErr(validationError);
-            setFile(null);
-            return;
-          }
-          setErr("");
-          clearCompile();
-          setSampleKey(null);
-          setFile(nextFile);
-          if (nextFile) {
-            void measureUpload(nextFile);
-          } else {
-            setDocSizeNote("");
-            setRawTokensHint(null);
-            setPresets(DEFAULT_PRESETS, null);
-          }
-        }}
-      />
-      {selectedFileLabel ? (
+    <form
+      id={compact ? undefined : "workspace-task-form"}
+      className={compact ? "workspace-rail-editor" : "workspace-canvas-editor"}
+      onSubmit={onCompile}
+    >
+      {compact ? (
+        <div className="workspace-rail-source">
+          <span className="alabel">Source</span>
+          <strong>{selectedFileLabel || "No document selected"}</strong>
+        </div>
+      ) : (
+        <>
+          <label htmlFor="file">
+            Upload (pdf, docx, xlsx, pptx, html, csv, txt, md). Max {maxFileLabel} MB
+          </label>
+          <input
+            ref={fileInput}
+            id="file"
+            type="file"
+            accept=".pdf,.docx,.xlsx,.pptx,.html,.htm,.csv,.txt,.md,.markdown"
+            onChange={(event) => {
+              sampleAbort.current?.abort();
+              ++measureSeq.current;
+              const nextFile = event.target.files?.[0] ?? null;
+              const validationError = nextFile ? validateUploadFile(nextFile, maxFileBytes) : null;
+              if (validationError) {
+                event.target.value = "";
+                setErr(validationError);
+                setFile(null);
+                return;
+              }
+              setErr("");
+              clearCompile();
+              setSampleKey(null);
+              setFile(nextFile);
+              if (nextFile) {
+                void measureUpload(nextFile);
+              } else {
+                setDocSizeNote("");
+                setRawTokensHint(null);
+                setPresets(DEFAULT_PRESETS, null);
+              }
+            }}
+          />
+        </>
+      )}
+      {!compact && selectedFileLabel ? (
         <p className="filepicked" role="status">
           {selectedFileLabel}
         </p>
       ) : null}
 
-      <details className="samplesbox" open>
-        <summary>
-          <span>
-            No file handy? <span className="cap">Try a sample</span>
-          </span>
-        </summary>
-        <div className="samples" role="group" aria-label="Sample documents">
-          {samples.length === 0 ? (
-            <p className="bucket-help">
-              {loadError
-                ? "The sample library is unavailable right now. You can still upload your own document."
-                : config
-                  ? "No sample documents are configured on this host. Upload your own document."
-                  : "Loading the sample library…"}
-            </p>
-          ) : null}
-          {samples.map((sample) => (
-            <button
-              key={sample.key}
-              type="button"
-              className={`scard${sampleKey === sample.key ? " active" : ""}`}
-              aria-pressed={sampleKey === sample.key}
-              onClick={() => void pickSample(sample)}
-            >
-              <div className="nm">
-                {sample.nm}
-                <span className={`fmt ${sample.fmt}`}>{sample.fmt}</span>
-              </div>
-              <div className="mt">{sample.mt}</div>
-            </button>
-          ))}
-        </div>
-      </details>
+      {!compact ? (
+        <details className="samplesbox" open>
+          <summary>
+            <span>
+              No file handy? <span className="cap">Try a sample</span>
+            </span>
+          </summary>
+          <div className="samples" role="group" aria-label="Sample documents">
+            {samples.length === 0 ? (
+              <p className="bucket-help">
+                {loadError
+                  ? "The sample library is unavailable right now. You can still upload your own document."
+                  : config
+                    ? "No sample documents are configured on this host. Upload your own document."
+                    : "Loading the sample library…"}
+              </p>
+            ) : null}
+            {samples.map((sample) => (
+              <button
+                key={sample.key}
+                type="button"
+                className={`scard${sampleKey === sample.key ? " active" : ""}`}
+                aria-pressed={sampleKey === sample.key}
+                onClick={() => void pickSample(sample)}
+              >
+                <div className="nm">
+                  {sample.nm}
+                  <span className={`fmt ${sample.fmt}`}>{sample.fmt}</span>
+                </div>
+                <div className="mt">{sample.mt}</div>
+              </button>
+            ))}
+          </div>
+        </details>
+      ) : null}
 
       <label htmlFor="task" style={{ marginTop: 20 }}>
         Question / task
@@ -320,7 +337,7 @@ export function TaskEditor({ rail = false }: { rail?: boolean }) {
         }}
         placeholder="e.g. What does the warranty not cover?"
       />
-      {sampleKey ? (
+      {!compact && sampleKey ? (
         <div className="qchips" role="group" aria-label="Suggested questions">
           {(samples.find((sample) => sample.key === sampleKey)?.q ?? []).map((question) => (
             <button
@@ -335,43 +352,47 @@ export function TaskEditor({ rail = false }: { rail?: boolean }) {
           ))}
         </div>
       ) : null}
-      <details className="formhint">
-        <summary>Tips for questions</summary>
-        <p>
-          Asking several things at once? Separate them with <strong>?</strong> or new lines. Each question is
-          ranked on its own, then the best sections are merged. Press <kbd>Enter</kbd> to compile or{" "}
-          <kbd>Shift+Enter</kbd> for a new line.
-        </p>
-      </details>
+      {!compact ? (
+        <details className="formhint">
+          <summary>Tips for questions</summary>
+          <p>
+            Asking several things at once? Separate them with <strong>?</strong> or new lines. Each question
+            is ranked on its own, then the best sections are merged. Press <kbd>Enter</kbd> to compile or{" "}
+            <kbd>Shift+Enter</kbd> for a new line.
+          </p>
+        </details>
+      ) : null}
 
       <label htmlFor="budget">
         Token budget <span className="label-note">(ceiling for Compile and Agent)</span>
       </label>
-      {docSizeNote ? <div className="docsizenote">{docSizeNote}</div> : null}
+      {!compact && docSizeNote ? <div className="docsizenote">{docSizeNote}</div> : null}
       <div className="budgetbar">
         <div className="budgetnum">
           <span>{budget.toLocaleString()}</span> <span className="u">tokens</span>
         </div>
-        <div className="bpre-group">
-          {(
-            [
-              ["quick", "Quick"],
-              ["standard", "Standard"],
-              ["deep", "Deep"],
-            ] as const
-          ).map(([tier, label]) => (
-            <button
-              key={tier}
-              type="button"
-              className={`bpre${budget === presets[tier] ? " active" : ""}`}
-              aria-pressed={budget === presets[tier]}
-              onClick={() => setBudget(presets[tier])}
-            >
-              {label}
-              <small>~{presets[tier].toLocaleString()}</small>
-            </button>
-          ))}
-        </div>
+        {!compact ? (
+          <div className="bpre-group">
+            {(
+              [
+                ["quick", "Quick"],
+                ["standard", "Standard"],
+                ["deep", "Deep"],
+              ] as const
+            ).map(([tier, label]) => (
+              <button
+                key={tier}
+                type="button"
+                className={`bpre${budget === presets[tier] ? " active" : ""}`}
+                aria-pressed={budget === presets[tier]}
+                onClick={() => setBudget(presets[tier])}
+              >
+                {label}
+                <small>~{presets[tier].toLocaleString()}</small>
+              </button>
+            ))}
+          </div>
+        ) : null}
       </div>
       <input
         id="budget"
@@ -407,7 +428,7 @@ export function TaskEditor({ rail = false }: { rail?: boolean }) {
         </div>
       ) : null}
 
-      <div className={rail ? "workspace-rail-action" : "row"}>
+      <div className={compact ? "workspace-rail-action" : "row"}>
         <button className="btn primary" type="submit" disabled={busy}>
           {busy ? "Compiling…" : "Compile"}
         </button>
@@ -423,7 +444,7 @@ export function TaskEditor({ rail = false }: { rail?: boolean }) {
           onClick={() => launch("prove")}
           title="Compare full-file and budgeted answers from this live-task snapshot"
         >
-          {rail ? "Prove" : "Prove…"}
+          {compact ? "Prove" : "Prove…"}
         </button>
         <button
           className="btn quiet"
@@ -431,7 +452,7 @@ export function TaskEditor({ rail = false }: { rail?: boolean }) {
           disabled={busy || !config?.llm_available || !file || !task.trim() || runStatus.agentStale}
           onClick={() => launch("agent")}
         >
-          {rail ? "Agent" : "Run agent ▸"}
+          {compact ? "Agent" : "Run agent ▸"}
         </button>
       </div>
     </form>
